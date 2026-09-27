@@ -38,7 +38,7 @@
 # 1. 手机侧一次性准备（Termux 里执行）
 pkg install git python termux-api
 git clone <本仓库地址> && cd termux-agent
-bash termux/install.sh          # 装 Python 依赖 + 数据目录（2-5 分钟，无需编译）
+bash termux/install.sh          # 装 Python/编译工具链 + 依赖 + 数据目录（pydantic-core 首次需用 Rust 现场编译，约 3-8 分钟）
 
 # 2. 启动服务
 bash termux/start.sh            # 默认 http://127.0.0.1:8787
@@ -70,7 +70,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/` | **唯一服务端**：FastAPI（`main.py`）+ Agent 循环（`agent.py`）+ 工具（`tools/`）+ 存储/调度 |
 | `agentd/web/` | React 前端（Vite+TS），构建产物 `dist/` 由 agentd 直接托管 |
 | `termux/` | 手机端：`install.sh` 一键装依赖 / `start.sh` 启动 / `boot.sh` 开机自启 |
-| `config/` | LLM 厂商预设（OpenAI 兼容端点） |
+| `config/` | 预设配方 `recipes.json`（定时任务模板）；LLM 厂商预设见 `agentd/config.py` 的 `PRESETS` |
 | `tests/` | 回归测试（排队 / 定时任务 / 安全加固） |
 
 ---
@@ -102,7 +102,7 @@ Plan 模式下 SSE 会发 `{"type": "plan", "plan": "...", "tool_calls": [...]}`
 
 ## 配方（Recipe）一键创建定时任务
 
-预设任务配方定义在 `config/recipes.json`，目前内置：低电量提醒、每日总结、每日天气、定时巡检。
+预设任务配方定义在 `config/recipes.json`，目前内置：低电量提醒、每日总结、每日天气、午饭提醒。
 
 - **查看配方**：`GET /api/recipes` 返回配方列表及每个配方是否已应用（`applied`）。
 - **一键创建**：`POST /api/recipes/{id}/apply` 根据配方实例化为定时任务（幂等，重复调用返回同一 job）。
@@ -142,7 +142,7 @@ Plan 模式下 SSE 会发 `{"type": "plan", "plan": "...", "tool_calls": [...]}`
 
 **启动（独立模式，不启 FastAPI）**：
 ```bash
-python3 -m agentd.mcp-server        # 等价：python3 -m agentd.main --mcp-server
+python3 -m agentd.mcp_server        # 等价：python3 -m agentd.main --mcp-server
 ```
 传输为 stdio（MCP 默认），通常不需要你手动跑——由桌面端作为子进程拉起。
 

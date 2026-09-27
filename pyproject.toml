@@ -19,3 +19,16 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+# mypy 渐进式基线：
+#   - 目标 Python 3.11（与 CI / Termux 对齐）；
+#   - ignore_missing_imports：三方库（mcp / python-telegram-bot）未提供完整类型；
+#   - 当前剩余告警多为「模块级 store: Store|None 在 lifespan 后才赋值」的架构性收窄，
+#     以及 mcp SDK 泛型 ClientSession 的已知不兼容，均非运行期 bug（P0/P1 已修）。
+#   跑法：python -m mypy agentd/ --ignore-missing-imports
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = true
+check_untyped_defs = false
