@@ -24,13 +24,16 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r agentd/requirements.txt
-          pip install ruff pytest pytest-asyncio
+          pip install ruff
 
       - name: Compile check
         run: python -m compileall agentd/ -q
 
       - name: Ruff lint
         run: ruff check agentd/ tests/ --exit-zero
+
+      - name: P0 单元回归（不需启动服务）
+        run: python tests/p0_regression_test.py
 
       - name: Set up faketermux stubs
         run: bash tests/setup_faketermux.sh
@@ -39,18 +42,30 @@ jobs:
         run: |
           export PATH="/tmp/faketermux:$PATH"
           export AGENT_HOME="/tmp/agent-ci-test"
-          python -m agentd.main --mock --port 8799 &
-          sleep 3
+          rm -rf /tmp/agent-ci-test
+          nohup python -m agentd.main --mock --port 8799 > /tmp/agentd-ci.log 2>&1 &
+          echo $! > /tmp/agentd-ci.pid
+          for i in $(seq 1 15); do
+            if curl -sf http://127.0.0.1:8799/api/health >/dev/null 2>&1; then
+              echo "server ready"
+              break
+            fi
+            sleep 1
+          done
           curl -sf http://127.0.0.1:8799/api/health
 
-      - name: Run regression tests
+      - name: Run end-to-end regression tests
         run: |
           python tests/m5_regression.py
           python tests/p0_queue_test.py
           python tests/p1_jobs_test.py
 
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/agentd-ci.log
+
   frontend:
-    name: Frontend (typecheck + build)
+    name: Frontend (typecheck + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,6 +85,9 @@ jobs:
 
       - name: Type check
         run: npx tsc -b --noEmit
+
+      - name: Unit tests (Vitest)
+        run: npm run test
 
       - name: Build
         run: npm run build

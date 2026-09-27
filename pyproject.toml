@@ -1,0 +1,20 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["agentd/web", "tests/setup_faketermux.sh"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]
+ignore = [
+    "E501",  # 行宽由 formatter 控制，长 URL/JSON 不强制折行
+    "B008",  # FastAPI 依赖注入中函数调用作为默认值是正常用法
+    "UP007",  # 3.9 兼容期保留 X | Y 写法不强制
+]
+
+[tool.ruff.lint.per-file-ignores]
+"agentd/mock_llm.py" = ["F821"]  # mock 中动态构造的命名空间
+"tests/*.py" = ["E402", "F401"]  # 测试脚本允许 sys.path 操作和未使用导入
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
