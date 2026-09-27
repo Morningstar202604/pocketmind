@@ -90,6 +90,64 @@ bash termux/start.sh --lan      # 局域网访问（需先配访问令牌）
 - 权限模式默认「逐次审批」：危险操作需界面确认，超时（默认 120s，可调）自动拒绝；
 - 写文件 / 删文件执行前自动备份，对话里可一键撤销（`/api/undo`）。
 
+## Telegram 远程控制
+
+在电脑或其它设备上，用 Telegram 直接给手机里的 agent 发消息、批审批。
+
+**1. 创建 bot 拿 token**：找 Telegram 里的 `@BotFather` → `/newbot` → 拿到 bot token（形如 `123456:ABC-xxx`）。再向你自己的 bot 发任意一条消息，然后访问
+`https://api.telegram.org/bot<TOKEN>/getUpdates`，从 `chat.id` 里拿到你自己的 chat_id。
+
+**2. 配置（二选一）**：
+- 命令行启动：
+  ```bash
+  python3 -m agentd.main --tg-token 123456:ABC-xxx --tg-chat-id 你的chat_id
+  ```
+- 或写进配置文件 `$AGENT_HOME/config.json` 的 `server` 段：
+  ```json
+  { "server": { "tg_token": "123456:ABC-xxx", "tg_chat_id": "你的chat_id" } }
+  ```
+
+**3. 使用**：直接给 bot 发文字（如「看下现在电量」「读一下最近五条短信」），agent 跑完会把结果发回 Telegram。
+
+**审批流程**：遇到写 / 危险操作（发短信、拨号、写文件、shell…），bot 会弹一张带
+**✅ 允许 / ❌ 拒绝** 按钮的卡片，点按钮即完成审批；120s 不点自动拒绝。只有配置的
+`chat_id` 白名单能驱动 agent，其它人发消息一律忽略。
+
+> 未装 `python-telegram-bot` 或未配 token 时，主服务照常启动，只是不启用这个入口。
+> 安装：`pip install "python-telegram-bot>=20.0"`（可选依赖）。
+
+## MCP Server（远程控制手机）
+
+把手机上的工具（电量 / 短信 / 定位 / 文件 / shell 等 31 个）暴露成标准 MCP tools，
+让桌面端的 **Claude Desktop / Cline / Codex** 通过 stdio 直接调用，等于用桌面大模型远程操控这台手机。
+
+**启动（独立模式，不启 FastAPI）**：
+```bash
+python3 -m agentd.mcp-server        # 等价：python3 -m agentd.main --mcp-server
+```
+传输为 stdio（MCP 默认），通常不需要你手动跑——由桌面端作为子进程拉起。
+
+**在 Claude Desktop 里接入**：编辑配置文件
+（macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`，
+Windows: `%APPDATA%\Claude\claude_desktop_config.json`），加入：
+```json
+{
+  "mcpServers": {
+    "pocket-agent": {
+      "command": "python3",
+      "args": ["-m", "agentd.mcp_server"],
+      "cwd": "/path/to/termux-agent"
+    }
+  }
+}
+```
+Cline / Codex 同理：在它们的 MCP 配置里加一条 stdio server，command=`python3`、
+args=`["-m", "agentd.mcp_server"]`、cwd 指向本仓库根目录。
+
+**工具说明**：动态读取 `agentd/tools/` 注册表，工具名与网页端一致（`get_battery`、
+`read_sms`、`run_shell` 等）；每个工具的 description 带风险前缀——
+`[safe]` 只读直跑，`[write]` / `[danger]` 桌面端模型应谨慎、高危操作需确认。
+
 ## License
 
 Apache-2.0（本仓库实现见 [LICENSE](LICENSE)）

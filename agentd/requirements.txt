@@ -10,3 +10,6 @@ aiosqlite>=0.19
 
 # 可选：离线语音（不装不影响主功能，见 termux/voice.md）
 # sherpa-onnx
+
+# 可选：Telegram 远程控制（不装不影响主功能；配置 tg_token 后才会启用 gateway）
+# python-telegram-bot>=20.0
