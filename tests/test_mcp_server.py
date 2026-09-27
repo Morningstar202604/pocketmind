@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""MCP server 验证：把手机工具注册表暴露成 MCP tools。
+
+不依赖真实 MCP 客户端 / stdio，直接在内存里 build_server 后：
+  1. 工具列表非空且 ≥ 20 个（当前内置 31 个）；
+  2. 每个工具都带合法 inputSchema（type=object，有 properties）；
+  3. 每个工具的 description 带 [safe]/[write]/[danger] 风险前缀；
+  4. 调用工具时确实转发到 agentd.tools.call_tool（mock 后断言入参正确）。
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ.setdefault("AGENT_HOME", "/tmp/pa-test")
+
+passed, failed = [], []
+
+
+def check(name: str, cond: bool, detail: str = ""):
+    (passed if cond else failed).append(name)
+    print(("  ✅ " if cond else "  ❌ ") + name + (f" — {detail}" if detail and not cond else ""))
+
+
+async def run():
+    print("== MCP server 验证 ==")
+    from agentd.mcp_server import build_server
+
+    mcp = build_server("pocket-agent")
+    tools = await mcp.list_tools()
+
+    # 1. 工具数量
+    check("工具列表非空", len(tools) > 0, f"count={len(tools)}")
+    check("至少 20 个工具（内置 31 个）", len(tools) >= 20, f"count={len(tools)}")
+
+    # 2. 每个工具有合法 inputSchema
+    bad_schema = [t.name for t in tools if (t.input_schema or {}).get("type") != "object"]
+    check("每个工具 inputSchema 均为 object", not bad_schema, str(bad_schema))
+    no_props = [t.name for t in tools if "properties" not in (t.input_schema or {})]
+    check("每个工具 inputSchema 都有 properties 字段", not no_props, str(no_props))
+
+    # 3. 风险前缀
+    no_tag = [t.name for t in tools if not (t.description or "").startswith(("[safe]", "[write]", "[danger]"))]
+    check("每个工具 description 带风险前缀", not no_tag, str(no_tag))
+    danger = [t.name for t in tools if (t.description or "").startswith("[danger]")]
+    check("高危工具被正确标注", "run_shell" in danger and "make_call" in danger, str(danger))
+
+    # 4. call_tool 转发：mock 掉 agentd.mcp_server.call_tool，断言入参被正确转发
+    captured = {}
+
+    async def fake_call_tool(name, args):
+        captured["name"] = name
+        captured["args"] = args
+        return {"ok": True, "echo": args}
+
+    with mock.patch("agentd.mcp_server.call_tool", side_effect=fake_call_tool):
+        result = await mcp.call_tool("get_battery", {})
+    check("调用工具转发到 call_tool", captured.get("name") == "get_battery", str(captured))
+    check("无参工具入参为空 dict", captured.get("args") == {}, str(captured))
+
+    # 带参工具：验证参数被原样转发（get_battery 无参，换 send_sms）
+    captured.clear()
+    with mock.patch("agentd.mcp_server.call_tool", side_effect=fake_call_tool):
+        await mcp.call_tool("send_sms", {"numbers": ["10086"], "text": "hi"})
+    check("send_sms 参数被正确转发",
+          captured.get("args") == {"numbers": ["10086"], "text": "hi"}, str(captured))
+
+    # 5. schema 正确性抽查：send_sms 必填字段在 required 里
+    sms = next(t for t in tools if t.name == "send_sms")
+    check("send_sms 把 numbers/text 标为必填",
+          set(sms.input_schema.get("required", [])) >= {"numbers", "text"},
+          str(sms.input_schema.get("required")))
+
+    print(f"\n工具总数：{len(tools)}")
+    print(f"通过 {len(passed)} / {len(passed) + len(failed)}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(run()))
