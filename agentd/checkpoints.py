@@ -23,6 +23,20 @@ def home_dir() -> Path:
     return Path(os.environ.get("AGENT_HOME") or Path.home() / ".agent" / "termux-agent")
 
 
+# 进程内共享的 CheckpointStore 单例：避免每次文件工具落 checkpoint / 每次 undo /
+# 每次删会话都新建一条 aiosqlite 连接（CREATE TABLE + commit + dispose 很贵）。
+_shared: CheckpointStore | None = None
+
+
+def set_shared(cs: CheckpointStore | None) -> None:
+    global _shared
+    _shared = cs
+
+
+def get_shared() -> CheckpointStore | None:
+    return _shared
+
+
 def backup_file(src: Path) -> str | None:
     """把 src 备份到 checkpoints 目录，返回备份相对路径；失败返回 None。"""
     try:

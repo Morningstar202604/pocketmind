@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from . import Tool, register
@@ -33,7 +34,7 @@ def _resolve(raw: str) -> Path:
     raise ValueError(f"路径不在允许范围内（仅限主目录与存储目录）：{p}")
 
 
-async def list_dir(path: str = ".") -> dict:
+def _list_dir_sync(path: str) -> dict:
     try:
         p = _resolve(path)
     except ValueError as e:
@@ -59,7 +60,12 @@ async def list_dir(path: str = ".") -> dict:
         return {"error": f"读取目录失败：{e}"}
 
 
-async def read_file(path: str) -> dict:
+async def list_dir(path: str = ".") -> dict:
+    # iterdir/stat 是阻塞磁盘 IO，丢线程池，避免卡住事件循环
+    return await asyncio.to_thread(_list_dir_sync, path)
+
+
+def _read_file_sync(path: str) -> dict:
     try:
         p = _resolve(path)
     except ValueError as e:
@@ -76,7 +82,11 @@ async def read_file(path: str) -> dict:
         return {"error": f"读取失败：{e}"}
 
 
-async def write_file(path: str, content: str) -> dict:
+async def read_file(path: str) -> dict:
+    return await asyncio.to_thread(_read_file_sync, path)
+
+
+def _write_file_sync(path: str, content: str) -> dict:
     try:
         p = _resolve(path)
     except ValueError as e:
@@ -103,7 +113,11 @@ async def write_file(path: str, content: str) -> dict:
         return {"error": f"写入失败：{e}"}
 
 
-async def delete_file(path: str) -> dict:
+async def write_file(path: str, content: str) -> dict:
+    return await asyncio.to_thread(_write_file_sync, path, content)
+
+
+def _delete_file_sync(path: str) -> dict:
     try:
         p = _resolve(path)
     except ValueError as e:
@@ -129,6 +143,10 @@ async def delete_file(path: str) -> dict:
         return out
     except OSError as e:
         return {"error": f"删除失败：{e}"}
+
+
+async def delete_file(path: str) -> dict:
+    return await asyncio.to_thread(_delete_file_sync, path)
 
 
 register(Tool(

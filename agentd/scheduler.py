@@ -13,6 +13,7 @@
 4. 「停用」用 APScheduler 的 pause_job/resume_job 表达：停用即 next_run_time=None，
    持久化后重启仍保持停用状态。
 """
+
 from __future__ import annotations
 
 import time
@@ -86,23 +87,25 @@ async def _fire_job(
     从 kwargs 解包。真正执行 agent 的是 main.py 顶层函数 ``run_agent_for_job``，此处
     延迟导入以解开 main ↔ scheduler 的循环依赖。
     """
-    from .notify import notify
+    from .notify import notify_async
 
     # 条件触发：不满足则跳过本轮（仍发一条通知留痕）
     parsed = parse_condition(condition)
     if parsed:
         ok = await _check_condition(parsed)
         if not ok:
-            notify("口袋 Agent · 条件未满足", f"{name}：{condition}，本次跳过", persistent=False)
+            await notify_async(
+                "口袋 Agent · 条件未满足", f"{name}：{condition}，本次跳过", persistent=False
+            )
             return
 
-    notify("口袋 Agent · 定时任务", f"正在执行：{name}", persistent=False)
+    await notify_async("口袋 Agent · 定时任务", f"正在执行：{name}", persistent=False)
     try:
         from .main import run_agent_for_job  # 延迟导入：避免与 main.py 循环依赖
 
         await run_agent_for_job(session_id, message)
     except Exception:  # noqa: BLE001 —— 定时任务异常不能影响调度器
-        notify("口袋 Agent · 定时任务出错", name, persistent=False)
+        await notify_async("口袋 Agent · 定时任务出错", name, persistent=False)
 
 
 class SchedulerService:
@@ -128,8 +131,15 @@ class SchedulerService:
             return CronTrigger.from_crontab(job["expr"])
         if tt == "interval":
             return IntervalTrigger(seconds=max(int(float(job["expr"])), 5))
-        # date：一次性，格式 "YYYY-MM-DD HH:MM"
-        return DateTrigger(run_date=job["expr"])
+        # date：一次性。路由层已用 "%Y-%m-%d %H:%M" 校验过格式，这里必须把字符串
+        # 解析成 datetime 对象——直接把字符串丢给 DateTrigger 会抛 "Invalid date string"
+        # （APScheduler 只接受 ISO 格式或 datetime 实例）。
+        from datetime import datetime
+
+        run_date = job["expr"]
+        if isinstance(run_date, str):
+            run_date = datetime.strptime(run_date, "%Y-%m-%d %H:%M")
+        return DateTrigger(run_date=run_date)
 
     # ---------- job ↔ dict 转换 ----------
     @staticmethod

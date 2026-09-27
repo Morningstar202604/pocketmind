@@ -399,7 +399,7 @@ async def wifi_info() -> dict:
         ip=data.get("ip"),
         bssid=data.get("bssid"),
         rssi=data.get("rssi"),
-        link_speed_mbps=data.get("link_speed_mbps"),
+        link_speed_mbps=data.get("link_speed_mbps") or data.get("link_speed"),
     )
 
 

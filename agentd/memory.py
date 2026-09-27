@@ -38,6 +38,12 @@ class Store:
         """建立异步连接、开启 WAL、建表/回填（在 FastAPI startup 中调用）。"""
         self._conn = await self.engine.connect()
         await self._conn.execute(text("PRAGMA journal_mode=WAL"))
+        # WAL 下 NORMAL 已足够安全（单进程 + aiosqlite 串行写），比 FULL 少一次 fsync；
+        # wal_autocheckpoint 显式设回默认 1000 页，防止被外层配置覆盖后 WAL 无限增长；
+        # temp_store=MEMORY 避免大排序落临时文件。
+        await self._conn.execute(text("PRAGMA synchronous=NORMAL"))
+        await self._conn.execute(text("PRAGMA wal_autocheckpoint=1000"))
+        await self._conn.execute(text("PRAGMA temp_store=MEMORY"))
         await self._migrate()
         self._secure_files()
 
@@ -92,6 +98,8 @@ class Store:
             """
         ))
         await c.execute(text("CREATE INDEX IF NOT EXISTS idx_mem_sid ON memory(session_id, kind)"))
+        # messages 按 session_id 高频点查/排序/删除；缺索引时每次 list/get/delete 全表扫描
+        await c.execute(text("CREATE INDEX IF NOT EXISTS idx_msg_sid ON messages(session_id, id)"))
         await c.commit()
         await self._init_fts()
 
@@ -150,18 +158,21 @@ class Store:
 
     async def list_sessions(self, limit: int = 50) -> list[dict]:
         assert self._conn is not None
+        # 单条 LEFT JOIN + GROUP BY 一次性带出每个会话的消息数，避免 N+1
+        # （旧实现：1 条会话列表 + N 条 COUNT(*)，50 个会话要跑 51 条 SQL）。
         rows = (await self._conn.execute(text(
-            "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT :l"
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at,
+                   COUNT(m.id) AS message_count
+            FROM sessions s
+            LEFT JOIN messages m
+              ON m.session_id = s.id AND m.role IN ('user','assistant')
+            GROUP BY s.id, s.title, s.created_at, s.updated_at
+            ORDER BY s.updated_at DESC
+            LIMIT :l
+            """
         ), {"l": limit})).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r._mapping)
-            cnt = (await self._conn.execute(text(
-                "SELECT COUNT(*) FROM messages WHERE session_id=:s AND role IN ('user','assistant')"
-            ), {"s": d["id"]})).fetchone()
-            d["message_count"] = cnt[0] if cnt else 0
-            out.append(d)
-        return out
+        return [dict(r._mapping) for r in rows]
 
     async def get_session(self, sid: str) -> dict | None:
         assert self._conn is not None

@@ -5,10 +5,17 @@
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import shutil
 import subprocess
 
 _NOTIFY_ID = "pocket-agent"
+
+
+def _tap_url() -> str:
+    """通知点击后要打开的本机 Web UI 地址。默认 127.0.0.1:8787，可用环境变量覆盖。"""
+    return os.environ.get("AGENT_WEB_URL", "http://127.0.0.1:8787/")
 
 
 def notify(title: str, content: str, persistent: bool = False) -> bool:
@@ -18,13 +25,22 @@ def notify(title: str, content: str, persistent: bool = False) -> bool:
         return False
     cmd = [exe, "--id", _NOTIFY_ID, "--title", title[:40], "--content", content[:200]]
     if persistent:
-        # 点击打开本机 Agent 页面（PWA/WebView 场景）
-        cmd += ["--action", "android.intent.action.VIEW", "--action-data", "http://127.0.0.1:8787/"]
+        # termux-notification 的 --action 是「点击通知时执行的 shell 命令」，不是
+        # Android intent action 字符串；--action-data 根本不是有效选项（会导致整条
+        # 通知被 termux-notification 拒绝）。正确做法：点击时用 termux-open-url 打开本机页面。
+        # --ongoing 把通知钉住（不可滑动清除），配合 termux-wake-lock 维持后台存活。
+        cmd += ["--ongoing", "--action", f"termux-open-url {_tap_url()}"]
     try:
         subprocess.run(cmd, capture_output=True, timeout=4)
         return True
     except Exception:  # noqa: BLE001 —— 通知失败不影响主流程
         return False
+
+
+async def notify_async(title: str, content: str, persistent: bool = False) -> bool:
+    """notify() 的异步版：subprocess.run 是阻塞系统调用，不能直接在事件循环里跑，
+    否则最长会卡住 loop 4s。丢到线程池执行，调用方 await 即可。"""
+    return await asyncio.to_thread(notify, title, content, persistent)
 
 
 def clear() -> bool:
