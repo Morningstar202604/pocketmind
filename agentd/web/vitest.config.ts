@@ -1,0 +1,15 @@
+/// <reference types="vitest" />
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+// Vitest 配置：复用 Vite 的 react 插件，使用 jsdom 模拟浏览器环境。
+// 测试入口在 src/**/*.test.ts(x)，setup 文件引入 @testing-library/jest-dom 匹配器。
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.ts"],
+    css: false,
+  },
+});

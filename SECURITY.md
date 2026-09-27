@@ -15,4 +15,4 @@
 
 ## 已知的安全边界
 
-- 请勿将任何 API Key、token 等凭据提交进仓库（仓库的 `.gitignore` 已排除 `backend/.env` 等敏感文件）
+- 请勿将任何 API Key、token 等凭据提交进仓库（仓库的 `.gitignore` 已排除 `.env` 等敏感文件）

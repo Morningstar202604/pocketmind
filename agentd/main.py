@@ -18,8 +18,9 @@ import json
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from .agent import Agent
 from .config import PRESETS, Settings, mask_key
@@ -27,6 +28,16 @@ from .mcp import MCPClient
 from .memory import Store
 from .notify import notify
 from .tools import Tool, register
+
+
+def _sse_event(ev: dict) -> ServerSentEvent:
+    """把事件 dict 编码成与原手写 SSE 逐字节一致的帧：``data: <json>\\n\\n``。
+
+    sse-starlette 若直接 yield dict 会把键当作 SSE 字段名（event/id/retry…），
+    无法把整条事件 dict 放进 data 字段，因此这里统一显式构造 ServerSentEvent。
+    sep 固定为 "\\n"，与原手写 ``f"data: {...}\\n\\n"`` 完全一致。
+    """
+    return ServerSentEvent(data=json.dumps(ev, ensure_ascii=False), sep="\n")
 
 VERSION = "0.2.0"
 APP_NAME = "口袋 Agent"
@@ -218,15 +229,6 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _heartbeat(queue: asyncio.Queue) -> None:
-        """SSE 保活：每 15s 发一条注释帧（前端会自动忽略）。"""
-        try:
-            while True:
-                await asyncio.sleep(15)
-                queue.put_nowait({"_hb": True})
-        except asyncio.CancelledError:
-            pass
-
     # ---------- 鉴权（局域网开启后强制） ----------
     def check_token(request: Request) -> None:
         import hmac
@@ -279,18 +281,18 @@ def create_app() -> FastAPI:
             sid = session_id
 
             async def queued_sse():
-                yield f"data: {json.dumps({'type': 'session', 'session_id': sid}, ensure_ascii=False)}\n\n"
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {"type": "queued", "message": "上一轮回复还在进行中，这条已排队，完成后自动执行"},
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
+                # 事件字段与原手写 SSE 完全一致，仅改用 sse-starlette 编码
+                yield _sse_event({"type": "session", "session_id": sid})
+                yield _sse_event(
+                    {"type": "queued", "message": "上一轮回复还在进行中，这条已排队，完成后自动执行"}
                 )
-                yield f"data: {json.dumps({'type': 'done', 'stop_reason': 'queued'}, ensure_ascii=False)}\n\n"
+                yield _sse_event({"type": "done", "stop_reason": "queued"})
 
-            return StreamingResponse(queued_sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+            return EventSourceResponse(
+                queued_sse(),
+                sep="\n",
+                headers={"Cache-Control": "no-cache"},
+            )
 
         queue: asyncio.Queue = asyncio.Queue()
         # 先注册再启动任务，避免 run_agent 首帧 emit 时 runs 尚未就绪的竞态
@@ -300,32 +302,26 @@ def create_app() -> FastAPI:
 
         async def sse():
             # 首帧告知会话 ID（新建会话时前端需要）
-            yield f"data: {json.dumps({'type': 'session', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+            yield _sse_event({"type": "session", "session_id": session_id})
             try:
-                # 心跳：审批等待可能长达 120s，移动网络/代理需要保活
-                hb = asyncio.get_running_loop().create_task(_heartbeat(queue))
-                try:
-                    while True:
-                        ev = await queue.get()
-                        if ev.get("_hb"):
-                            yield ": ping\n\n"  # SSE 注释帧，保活且不产生数据事件
-                            continue
-                        yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-                        if ev.get("type") in ("done", "error"):
-                            break
-                finally:
-                    hb.cancel()
+                while True:
+                    ev = await queue.get()
+                    # 心跳保活改由 EventSourceResponse(ping=15) 内置发送注释帧，
+                    # 这里只转发业务事件；审批等待长达 120s 也不会断连。
+                    yield _sse_event(ev)
+                    if ev.get("type") in ("done", "error"):
+                        break
             except asyncio.CancelledError:
+                # 客户端断开（SSE 连接关闭）→ 取消正在跑的 agent 任务
                 cancel_run(session_id)
                 raise
 
-        return StreamingResponse(
+        return EventSourceResponse(
             sse(),
-            media_type="text/event-stream",
+            sep="\n",
+            ping=15,  # 每 15s 自动发注释帧保活（替代原手写 _heartbeat）
             headers={
                 "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
             },
         )
 

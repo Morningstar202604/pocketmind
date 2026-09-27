@@ -9,7 +9,9 @@ import { PocketLogo } from "./PocketLogo";
 
 export function Markdown({ text }: { text: string }) {
   const html = useMemo(
-    () => DOMPurify.sanitize(marked.parse(text) as string),
+    // marked v12 的 parse 在 async 模式下返回 Promise；显式 { async: false } 确保同步返回 string，
+    // 不再用 `as string` 类型撒谎
+    () => DOMPurify.sanitize(marked.parse(text, { async: false }) as string),
     [text]
   );
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;

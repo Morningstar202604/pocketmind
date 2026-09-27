@@ -1,5 +1,7 @@
 // agentd API 客户端：REST + SSE 流式。
 
+import { fetchEventSource } from "@microsoft/fetch-event-source";
+
 const TOKEN_KEY = "pa-token";
 
 /** 局域网令牌：设置面板保存 server.token 时同步写入；请求统一携带。 */
@@ -158,48 +160,47 @@ export const api = {
     return parse<T>(await fetch(path, { method: "DELETE", headers: headers() }));
   },
 
-  /** POST /api/chat 并逐行消费 SSE，事件交给 onEvent。 */
+  /** POST /api/chat 并消费 SSE（@microsoft/fetch-event-source），事件交给 onEvent。 */
   async sseChat(
     sessionId: string,
     message: string,
     onEvent: (ev: ChatEvent) => void,
     signal?: AbortSignal
   ): Promise<void> {
-    const res = await fetch("/api/chat", {
+    // 注意：聊天是一次性 POST，网络错误时不能自动重连（否则会重复发送用户消息）。
+    // 因此 onerror 一律抛错终止重连；正常流结束由 onclose 收尾。
+    await fetchEventSource("/api/chat", {
       method: "POST",
       headers: headers({ "Content-Type": "application/json" }),
       body: JSON.stringify({ session_id: sessionId, message }),
       signal,
-    });
-    if (!res.ok || !res.body) {
-      let msg = `HTTP ${res.status}`;
-      try {
-        const j = await res.json();
-        msg = j?.detail || j?.error || msg;
-      } catch {
-        /* keep */
-      }
-      throw new Error(msg);
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        const t = line.trim();
-        if (t.startsWith("data: ")) {
+      async onopen(res) {
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`;
           try {
-            onEvent(JSON.parse(t.slice(6)) as ChatEvent);
+            const j = await res.json();
+            msg = j?.detail || j?.error || msg;
           } catch {
-            /* 忽略坏帧 */
+            /* keep */
           }
+          throw new Error(msg);
         }
-      }
-    }
+      },
+      onmessage(ev) {
+        // ev.data 即 SSE data: 后的原文，逐帧 JSON 解析后分发
+        try {
+          onEvent(JSON.parse(ev.data) as ChatEvent);
+        } catch {
+          /* 忽略坏帧 */
+        }
+      },
+      onerror(err) {
+        // 抛错 = 终止 fetch-event-source 的默认重连，让外层 catch 统一处理
+        throw err instanceof Error ? err : new Error("SSE 连接异常");
+      },
+      onclose() {
+        // 服务端正常关闭流：无需额外动作，外层 finally 兜底标记消息完成
+      },
+    });
   },
 };

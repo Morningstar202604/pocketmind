@@ -1,7 +1,7 @@
 # 口袋 Agent · 快速开始（新版）
 
 > 本仓库已按《审查报告与重构方案》完成 M1+M2+M3 重构：**Python agentd + FastAPI + 一套 Web UI**。
-> 旧实现（goose/Node/Flutter）保留在 `termux/install.legacy.sh`、旧 `web/`、旧 `app/` 中备查，不再使用。
+> 旧实现（goose/Node/Flutter）已全部清理，本仓库仅保留新架构。
 
 ## 30 秒看懂新版结构
 
@@ -67,6 +67,3 @@ npm run build                                  # 构建 dist（agentd 直接托�
 | P1 进阶能力（定时/条件触发 APScheduler+自管持久化、跨会话相关记忆检索、通知栏持久进度、工具参数 pydantic 校验、MCP 最小客户端可选接入、sherpa-onnx 离线语音可选） | ✅ 已完成（本轮） |
 | P2 基础设施（危险操作 checkpoint/undo 自动备份可撤销、工具按分组展示、会话重命名、Termux 开机自启 boot.sh + 安装脚本完善、数据导出备份 JSON） | ✅ 已完成（本轮） |
 | P2 模型/国外（llama.cpp 离线降级、Telegram 远程入口、Plan-and-Act） | ⬜ 按用户要求暂缓 |
-
-遗留说明：旧 `web/`（React+assistant-ui+goose 桥）、旧 `app/`（Flutter）、
-`watchdog.sh`、`termux/install.legacy.sh` 为 AI 生成的旧实现，仅作参考，勿在新系统使用。

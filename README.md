@@ -73,17 +73,6 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `config/` | LLM 厂商预设（OpenAI 兼容端点） |
 | `tests/` | 回归测试（排队 / 定时任务 / 安全加固） |
 
-### 遗留（旧版 goose 架构，勿再使用）
-
-以下为重构前的 goose (Rust) + Node + Flutter 旧实现，与新架构不兼容，仅作参考：
-
-| 路径 | 说明 |
-|------|------|
-| `web/`（旧） | goose ACP 桥（`server.mjs`、`start.sh` 旧版）——goose 二进制路径为沙箱残留，真机不可用 |
-| `app/`（旧） | Flutter APK——连接旧 goose ACP（`ws://127.0.0.1:3284/acp`），新版后端无 ACP 服务 |
-| `watchdog.sh` | 旧 goose 看门狗（硬编码 `/workspace/...` 路径） |
-| `termux/termux.env`、`termux/termux-bridge`、`.env.example`、`termux/install.legacy.sh` | 旧 goose 环境/桥接残留 |
-
 ---
 
 ## 日常使用
