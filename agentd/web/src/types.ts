@@ -11,10 +11,18 @@ export interface ToolPart {
   undoable?: boolean; // 文件类危险操作已自动备份，可一键撤销
 }
 
+/** 计划中预告的一次工具调用（plan 事件里的 tool_calls，仅展示用，尚未执行） */
+export interface PlannedToolCall {
+  name: string;
+  arguments: unknown;
+}
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; tool: ToolPart };
+  | { type: "tool"; tool: ToolPart }
+  // Plan 模式产出的执行计划卡片（不是普通消息气泡）
+  | { type: "plan"; plan: string; tool_calls: PlannedToolCall[]; approved?: boolean };
 
 export interface Msg {
   id: string;

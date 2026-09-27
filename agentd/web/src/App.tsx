@@ -37,6 +37,9 @@ export default function App() {
   const onUndo = useAgentStore((s) => s.onUndo);
   const onExport = useAgentStore((s) => s.onExport);
   const onRenameSession = useAgentStore((s) => s.onRenameSession);
+  const approvePlan = useAgentStore((s) => s.approvePlan);
+  const editPlan = useAgentStore((s) => s.editPlan);
+  const agentMode = useAgentStore((s) => s.agentMode);
   const setShowSessions = useAgentStore((s) => s.setShowSessions);
   const setShowSettings = useAgentStore((s) => s.setShowSettings);
   const setShowTimers = useAgentStore((s) => s.setShowTimers);
@@ -101,13 +104,22 @@ export default function App() {
                 onApproval={onApproval}
                 onUndo={onUndo}
                 undoingId={undoingId}
+                onApprovePlan={(aid) => void approvePlan(aid)}
+                onEditPlan={editPlan}
               />
             ))}
           </div>
         )}
       </main>
 
-      <Composer busy={busy} ready={ready} onSend={(t) => void send(t)} onStop={stop} error={error} />
+      <Composer
+        busy={busy}
+        ready={ready}
+        agentMode={agentMode}
+        onSend={(t) => void send(t)}
+        onStop={stop}
+        error={error}
+      />
 
       {showSessions && (
         <SessionList

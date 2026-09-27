@@ -64,6 +64,15 @@ export function applyEvent(msg: Msg, ev: ChatEvent): Msg {
       };
     case "queued":
       return { ...msg, done: true, queued: true };
+    case "plan":
+      // Plan 事件：追加一张执行计划卡片（纯展示，等待用户批准后才真正执行）
+      return {
+        ...msg,
+        parts: [
+          ...msg.parts,
+          { type: "plan" as const, plan: ev.plan, tool_calls: ev.tool_calls ?? [] },
+        ],
+      };
     case "done":
       return { ...msg, done: true };
     case "error":
@@ -143,6 +152,8 @@ export interface AgentStore {
   // 主题与撤销
   theme: ThemePref;
   undoingId: string | null;
+  // 智能体工作模式：plan = 先出计划待批准；act = 直接执行
+  agentMode: "plan" | "act";
 
   // 生命周期
   init: () => Promise<void>;
@@ -152,6 +163,13 @@ export interface AgentStore {
   // 发送/停止
   send: (text: string) => Promise<void>;
   stop: () => void;
+
+  // Plan/Act 模式
+  setAgentMode: (m: "plan" | "act") => void;
+  /** 批准某条计划卡片：切到 act 模式，把触发该计划的用户原话重发一轮。 */
+  approvePlan: (assistantMsgId: string) => Promise<void>;
+  /** 修改计划：切回输入框聚焦，让用户补充/调整后重发。 */
+  editPlan: (assistantMsgId: string) => void;
 
   // 会话操作
   onNewSession: () => Promise<void>;
@@ -182,8 +200,8 @@ export const useAgentStore = create<AgentStore>((set, get) => {
         if (ev.type === "session" && ev.session_id !== get().sessionId) {
           set({ sessionId: ev.session_id });
         }
-        // 开始产出时清除「排队中」标记
-        if (ev.type === "text" || ev.type === "tool_start" || ev.type === "thinking") {
+        // 开始产出时清除「排队中」标记（plan 事件也算正式开始产出）
+        if (ev.type === "text" || ev.type === "tool_start" || ev.type === "thinking" || ev.type === "plan") {
           set((s) => ({ messages: s.messages.map((m) => (m.id === aid ? { ...m, queued: false } : m)) }));
         }
         set((s) => ({ messages: s.messages.map((m) => (m.id === aid ? applyEvent(m, ev) : m)) }));
@@ -222,6 +240,8 @@ export const useAgentStore = create<AgentStore>((set, get) => {
     showTimers: false,
     theme: getThemePref(),
     undoingId: null,
+    // 默认 act（直接执行）；init 时若后端保存过 plan 模式会再纠正
+    agentMode: "act",
 
     // ---------- 生命周期 ----------
     async init() {
@@ -230,6 +250,13 @@ export const useAgentStore = create<AgentStore>((set, get) => {
         set({ ready: h.ready, mock: h.mock });
       } catch {
         set({ ready: false });
+      }
+      // 读取后端持久化的智能体模式（plan/act），失败则保持默认 act
+      try {
+        const s = await api.get<{ agent_mode?: "plan" | "act" }>("/api/settings");
+        if (s.agent_mode === "plan" || s.agent_mode === "act") set({ agentMode: s.agent_mode });
+      } catch {
+        /* 后端尚未支持该字段时静默忽略 */
       }
       const list = await get().refreshSessions();
       if (list.length === 0) {
@@ -402,6 +429,51 @@ export const useAgentStore = create<AgentStore>((set, get) => {
     setTheme: (t) => {
       set({ theme: t });
       setThemePref(t);
+    },
+
+    // ---------- Plan/Act 模式 ----------
+    setAgentMode: (m) => {
+      // 乐观更新本地状态；后端 settings.save 是合并写入，局部 PUT 不会冲掉其他配置
+      set({ agentMode: m });
+      void api.put("/api/settings", { agent_mode: m }).catch(() => {});
+    },
+
+    async approvePlan(assistantMsgId: string) {
+      const list = get().messages;
+      const idx = list.findIndex((m) => m.id === assistantMsgId);
+      // 向上找到触发该计划的最近一条用户消息，批准后原样重发一轮
+      let userText = "";
+      for (let i = idx - 1; i >= 0; i--) {
+        const m = list[i];
+        if (m.role === "user") {
+          userText = m.parts
+            .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
+            .map((p) => p.text)
+            .join("\n");
+          break;
+        }
+      }
+      if (!userText) return;
+      // 卡片置为「已批准」态：按钮变展示态，防止重复点击
+      set((st) => ({
+        messages: st.messages.map((m) =>
+          m.id === assistantMsgId
+            ? {
+                ...m,
+                parts: m.parts.map((p) => (p.type === "plan" ? { ...p, approved: true } : p)),
+              }
+            : m
+        ),
+      }));
+      // 切到 act 模式（同步持久化），再把用户原话发出去真正执行
+      get().setAgentMode("act");
+      await get().send(userText);
+    },
+
+    editPlan: (assistantMsgId: string) => {
+      // 仅把输入框聚焦回来，让用户补充/修改后重发；卡片保留在历史里
+      void assistantMsgId; // 预留：未来可针对该计划做上下文回填
+      window.dispatchEvent(new CustomEvent("agent:focus-composer"));
     },
   };
 });

@@ -52,6 +52,8 @@ export interface LlmSettings {
 export interface AppSettings {
   llm: LlmSettings;
   permission_mode: "auto" | "approve" | "chat";
+  // 智能体工作模式：plan = 先出计划待批准；act = 直接执行（默认）
+  agent_mode?: "plan" | "act";
   server: {
     allow_lan?: boolean;
     token?: string;
@@ -60,6 +62,21 @@ export interface AppSettings {
   };
   user_prefs?: string;
 }
+
+/** 配方：预置的一键定时任务模板（后端 /api/recipes）。 */
+export interface Recipe {
+  id: string;
+  name: string;
+  description: string;
+  trigger_type: "interval" | "cron" | "date";
+  expr: string;
+  applied: boolean;
+}
+
+/** 拉取全部配方及其应用状态。 */
+export const getRecipes = () => api.get<Recipe[]>("/api/recipes");
+/** 一键应用配方，后端创建对应定时任务并返回 job。 */
+export const applyRecipe = (id: string) => api.post<Job>(`/api/recipes/${id}/apply`);
 
 export interface Job {
   id: string;
@@ -102,6 +119,8 @@ export type ChatEvent =
       undoable?: boolean;
     }
   | { type: "queued"; message: string }
+  // Plan 模式：模型给出执行计划，等待用户批准（随后 done 的 stop_reason="plan" 表示本轮就此停住）
+  | { type: "plan"; plan: string; tool_calls: Array<{ name: string; arguments: unknown }> }
   | { type: "done"; stop_reason: string }
   | { type: "error"; message: string };
 

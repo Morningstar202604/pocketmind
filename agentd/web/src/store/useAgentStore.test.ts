@@ -45,6 +45,26 @@ describe("applyEvent：SSE 事件折叠进 assistant 消息", () => {
     expect(m.done).toBe(true);
   });
 
+  it("plan 事件追加执行计划卡片 part（含预告工具）", () => {
+    const m = applyEvent(base, {
+      type: "plan",
+      plan: "1. 查电量\n2. 发通知",
+      tool_calls: [{ name: "get_battery", arguments: {} }],
+    });
+    expect(m.parts).toHaveLength(1);
+    expect(m.parts[0]).toMatchObject({
+      type: "plan",
+      plan: "1. 查电量\n2. 发通知",
+      tool_calls: [{ name: "get_battery", arguments: {} }],
+    });
+  });
+
+  it("plan 模式结束：done 的 stop_reason=plan 同样标记完成", () => {
+    let m = applyEvent(base, { type: "plan", plan: "先备份再删", tool_calls: [] });
+    m = applyEvent(m, { type: "done", stop_reason: "plan" });
+    expect(m.done).toBe(true);
+  });
+
   it("error 事件写入错误并标记完成", () => {
     const m = applyEvent(base, { type: "error", message: "连接断开" });
     expect(m.done).toBe(true);

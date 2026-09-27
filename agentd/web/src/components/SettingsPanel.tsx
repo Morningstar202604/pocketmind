@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, setToken, type AppSettings, type Provider, type ToolInfo } from "../api";
+import { useAgentStore } from "../store/useAgentStore";
 import type { ThemePref } from "../theme";
 import { IconClose } from "./icons";
 
@@ -7,6 +8,13 @@ const MODES: Array<{ v: "auto" | "approve" | "chat"; label: string; hint: string
   { v: "auto", label: "全自动", hint: "所有工具直接执行（不推荐）" },
   { v: "approve", label: "逐次审批", hint: "写文件/危险操作需你确认（推荐）" },
   { v: "chat", label: "纯聊天", hint: "不调用任何工具" },
+];
+
+// 智能体工作模式（Cline 式 Plan/Act）：
+// plan = 先输出执行计划待你批准；act = 收到任务直接执行
+const AGENT_MODES: Array<{ v: "plan" | "act"; label: string; hint: string }> = [
+  { v: "plan", label: "先计划", hint: "先给出执行计划，你批准后再动手" },
+  { v: "act", label: "直接执行", hint: "收到任务即开始调用工具" },
 ];
 
 const RISK_LABEL: Record<string, string> = {
@@ -88,6 +96,10 @@ export function SettingsPanel({
   const [msg, setMsg] = useState("");
   const [showKey, setShowKey] = useState(false);
 
+  // Plan/Act 模式直接走 store：切换即持久化（局部 PUT，不随「保存」按钮走）
+  const agentMode = useAgentStore((s) => s.agentMode);
+  const setAgentMode = useAgentStore((s) => s.setAgentMode);
+
   useEffect(() => {
     void api.get<{ providers: Provider[] }>("/api/providers").then((d) => setProviders(d.providers)).catch(() => {});
     void api.get<AppSettings>("/api/settings").then(setForm).catch(() => {});
@@ -165,6 +177,29 @@ export function SettingsPanel({
                 </label>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* 智能体工作模式：Plan 先出计划待批准 / Act 直接执行 */}
+        <div className="group">
+          <p className="group-title">智能体模式</p>
+          <div className="field">
+            <label>工作方式</label>
+            <div className="mode-row">
+              {AGENT_MODES.map((m) => (
+                <label key={m.v} className={`mode ${agentMode === m.v ? "on" : ""}`}>
+                  <input
+                    type="radio"
+                    name="agent_mode"
+                    checked={agentMode === m.v}
+                    onChange={() => setAgentMode(m.v)}
+                  />
+                  <b>{m.label}</b>
+                  <span>{m.hint}</span>
+                </label>
+              ))}
+            </div>
+            <p className="hint">「先计划」下，复杂任务会先给你一张计划卡片，批准后才真正执行。</p>
           </div>
         </div>
 

@@ -3,6 +3,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { Msg, Part, ToolPart } from "../types";
 import { IconChevron } from "./icons";
+import { PlanCard } from "./PlanCard";
 import { PocketLogo } from "./PocketLogo";
 
 /* ---------- Markdown（含代码块/表格，DOMPurify 消毒） ---------- */
@@ -111,12 +112,16 @@ export function MessageItem({
   onApproval,
   onUndo,
   undoingId,
+  onApprovePlan,
+  onEditPlan,
 }: {
   msg: Msg;
   parts: Part[];
   onApproval: (id: string, d: "allow_once" | "allow_always" | "deny") => void;
   onUndo?: (id: string) => void;
   undoingId?: string | null;
+  onApprovePlan: (assistantMsgId: string) => void;
+  onEditPlan: (assistantMsgId: string) => void;
 }) {
   if (msg.role === "user") {
     const text = parts
@@ -152,6 +157,15 @@ export function MessageItem({
             onApproval={onApproval}
             onUndo={onUndo}
             undoing={undoingId === p.tool.id}
+          />
+        ) : p.type === "plan" ? (
+          <PlanCard
+            key={i}
+            plan={p.plan}
+            toolCalls={p.tool_calls}
+            approved={p.approved}
+            onApprove={() => onApprovePlan(msg.id)}
+            onEdit={() => onEditPlan(msg.id)}
           />
         ) : p.text.trim() ? (
           <div className="bubble agent" key={i}>
