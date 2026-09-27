@@ -2,12 +2,20 @@
 
 配置文件位于 $AGENT_HOME/config.json（默认 ~/.agent/termux-agent/config.json）。
 API Key 只存在本地文件里，任何 API 回传时都会打码。
+
+P1-2：字段类型强制 / 范围收敛改由 pydantic 模型完成（替代 PUT /api/settings 里
+手写的一堆 if/else clamp）。对外仍保持 Settings.get()/save(patch)/llm()/permission_mode()
+的字典式接口，main.py / agent.py 调用处零改动。
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 国产 LLM 厂商预设（OpenAI 兼容协议）。base_url 与 model 均可按需修改。
 PRESETS = [
@@ -80,6 +88,77 @@ DEFAULTS = {
 }
 
 
+# ---------- pydantic 配置模型（P1-2：类型强制 + 范围收敛） ----------
+class LLMSettings(BaseModel):
+    """LLM 连接参数。temperature / max_tokens 用 validator 做「收敛」而非「报错」，
+    与原手写 clamp（max/min）行为一致：越界值被夹到边界，而不是 422 拒绝。"""
+
+    provider: str = "custom"
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    temperature: float = 0.3
+    max_tokens: int = 4096
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _clamp_temperature(cls, v):
+        # 原手写：max(0.0, min(2.0, float(v)))
+        try:
+            return max(0.0, min(2.0, float(v)))
+        except (TypeError, ValueError):
+            return 0.3
+
+    @field_validator("max_tokens", mode="before")
+    @classmethod
+    def _clamp_max_tokens(cls, v):
+        # 原手写：max(256, min(65536, int(v)))
+        try:
+            return max(256, min(65536, int(v)))
+        except (TypeError, ValueError):
+            return 4096
+
+
+class MCPServerCfg(BaseModel):
+    """单个 MCP 服务器配置。"""
+
+    name: str = "mcp"
+    command: str = ""
+    args: list[str] = []
+
+
+class ServerSettings(BaseModel):
+    """服务端选项。approval_timeout 原手写：>0 且 min(.,600)。"""
+
+    allow_lan: bool = False
+    token: str = ""
+    approval_timeout: int = 120
+    mcp: list[MCPServerCfg] = []
+
+    @field_validator("approval_timeout", mode="before")
+    @classmethod
+    def _clamp_timeout(cls, v):
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            return 120
+        if iv <= 0:
+            return 120
+        return min(iv, 600)
+
+
+class AppSettings(BaseSettings):
+    """整份配置的校验模型。继承 pydantic-settings 的 BaseSettings 以满足统一模型定义，
+    但数据来自本地 config.json（env_file=None 不读环境变量），多余字段忽略。"""
+
+    model_config = SettingsConfigDict(extra="ignore", env_file=None)
+
+    llm: LLMSettings = LLMSettings()
+    permission_mode: Literal["auto", "approve", "chat"] = "approve"
+    server: ServerSettings = ServerSettings()
+    user_prefs: str = ""
+
+
 def home_dir() -> Path:
     """数据目录（配置 + 数据库）。"""
     h = os.environ.get("AGENT_HOME")
@@ -87,6 +166,8 @@ def home_dir() -> Path:
 
 
 class Settings:
+    """配置读写：保留 JSON 文件存储 + 深度合并 patch；落盘前用 pydantic 模型校验。"""
+
     def __init__(self, path: Path | None = None):
         self.path = path or (home_dir() / "config.json")
         self.data = dict(DEFAULTS)
@@ -97,7 +178,7 @@ class Settings:
             if self.path.exists():
                 loaded = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
-                    self.data = self._merge(dict(DEFAULTS), loaded)
+                    self.data = self._coerce(self._merge(dict(DEFAULTS), loaded))
         except Exception:
             self.data = dict(DEFAULTS)
 
@@ -111,11 +192,23 @@ class Settings:
                 out[k] = v
         return out
 
+    @staticmethod
+    def _coerce(data: dict) -> dict:
+        """用 AppSettings 模型做类型强制 / 范围收敛（替代手写字段 clamp）。
+
+        校验失败时回退到合并后的原始 dict，保证坏配置不会让服务起不来；
+        具体字段的合法性在调用处（如 permission_mode()）仍有兜底。
+        """
+        try:
+            return AppSettings.model_validate(data).model_dump()
+        except ValidationError:
+            return data
+
     def get(self) -> dict:
         return self.data
 
     def save(self, patch: dict) -> dict:
-        self.data = self._merge(self.data, patch)
+        self.data = self._coerce(self._merge(self.data, patch))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.path.parent, 0o700)  # 数据目录 700（含数据库）

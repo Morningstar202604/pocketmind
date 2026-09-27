@@ -531,45 +531,33 @@ def create_app() -> FastAPI:
     async def put_settings(payload: dict):
         llm = payload.get("llm")
         if isinstance(llm, dict):
-            clean = {
-                "provider": str(llm.get("provider", "custom"))[:64],
-                "base_url": str(llm.get("base_url", "")).strip()[:512],
-                "model": str(llm.get("model", "")).strip()[:128],
-                "temperature": max(0.0, min(2.0, float(llm.get("temperature", 0.3)))),
-                "max_tokens": max(256, min(65536, int(llm.get("max_tokens", 4096)))),
-            }
-            # api_key 为空时不覆盖旧值；非空才写入
+            # api_key 打码占位符：前端回传的是 GET 时打码后的值（或空串），
+            # 原样写回会污染真实 key，因此剔除——仅当用户输入了「新的、非占位」的 key 才写入。
+            masked = mask_key(settings_mgr.llm().get("api_key", ""))
             key = llm.get("api_key")
-            if isinstance(key, str) and key.strip() and key != mask_key(settings_mgr.llm().get("api_key", "")):
-                clean["api_key"] = key.strip()[:512]
-            settings_mgr.save({"llm": clean})
-        mode = payload.get("permission_mode")
-        if isinstance(mode, str) and mode in ("auto", "approve", "chat"):
-            settings_mgr.save({"permission_mode": mode})
+            if isinstance(key, str) and (not key.strip() or key == masked):
+                llm.pop("api_key", None)
         server = payload.get("server")
-        if isinstance(server, dict):
-            if isinstance(server.get("token"), str):
-                settings_mgr.save({"server": {"token": server["token"].strip()[:128]}})
-            at = server.get("approval_timeout")
-            if isinstance(at, (int, float)) and at > 0:
-                settings_mgr.save({"server": {"approval_timeout": min(int(at), 600)}})
-            mcp = server.get("mcp")
-            if isinstance(mcp, list):
-                clean = []
-                for c in mcp:
-                    if not isinstance(c, dict) or not str(c.get("command", "")).strip():
-                        continue
-                    clean.append(
+        if isinstance(server, dict) and isinstance(server.get("mcp"), list):
+            # mcp 条目清洗：只保留带 command 的服务器（与原逻辑一致），结构校验交给 pydantic
+            cleaned_mcp = []
+            for c in server["mcp"]:
+                if isinstance(c, dict) and str(c.get("command", "")).strip():
+                    cleaned_mcp.append(
                         {
-                            "name": str(c.get("name", "")).strip()[:40] or "mcp",
-                            "command": str(c["command"]).strip()[:200],
-                            "args": [str(a)[:200] for a in c.get("args", []) or []][:10],
+                            "name": c.get("name", "mcp"),
+                            "command": c["command"],
+                            "args": c.get("args", []),
                         }
                     )
-                settings_mgr.save({"server": {"mcp": clean}})
-        prefs = payload.get("user_prefs")
-        if isinstance(prefs, str):
-            settings_mgr.save({"user_prefs": prefs.strip()[:4000]})
+            server["mcp"] = cleaned_mcp
+        # permission_mode 非法值不写入（pydantic Literal 也会拒绝，这里显式兜底）
+        mode = payload.get("permission_mode")
+        if mode is not None and mode not in ("auto", "approve", "chat"):
+            payload.pop("permission_mode", None)
+        # 类型强制 / 范围收敛（temperature、max_tokens、approval_timeout、字符串截断等）
+        # 全部由 pydantic 模型在 Settings.save() 内完成，不再手写 if/else clamp。
+        settings_mgr.save(payload)
         s = settings_mgr.get()
         llm_out = dict(s.get("llm", {}))
         llm_out["api_key"] = mask_key(llm_out.get("api_key", ""))
