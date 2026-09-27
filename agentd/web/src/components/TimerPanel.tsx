@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { createJob, deleteJob, getJobs, updateJob, type Job } from "../api";
+import {
+  applyRecipe,
+  createJob,
+  deleteJob,
+  getJobs,
+  getRecipes,
+  updateJob,
+  type Job,
+  type Recipe,
+} from "../api";
 import { IconClose, IconTimer } from "./icons";
 
 const TRIGGERS: Array<{ v: Job["trigger_type"]; label: string; hint: string; ph: string }> = [
@@ -14,8 +23,34 @@ const TRIGGER_LABEL: Record<string, string> = {
   date: "到点 ",
 };
 
+/**
+ * 把配方/任务的触发表达式翻成人类可读文案。
+ * 纯函数，便于单测：interval 秒数 → 每 N 分钟/小时；简单 cron → 每天 HH:MM。
+ */
+export function humanizeTrigger(t: { trigger_type: string; expr: string }): string {
+  if (t.trigger_type === "interval") {
+    const sec = Number(t.expr) || 0;
+    if (sec >= 3600 && sec % 3600 === 0) return `每 ${sec / 3600} 小时`;
+    if (sec >= 60 && sec % 60 === 0) return `每 ${sec / 60} 分钟`;
+    return `每 ${sec} 秒`;
+  }
+  if (t.trigger_type === "cron") {
+    const parts = t.expr.trim().split(/\s+/);
+    // 形如「分 时 * * *」= 每天定点，直接翻译成每天 HH:MM
+    if (parts.length === 5 && parts[2] === "*" && parts[3] === "*" && parts[4] === "*") {
+      const hh = parts[1].padStart(2, "0");
+      const mm = parts[0].padStart(2, "0");
+      return `每天 ${hh}:${mm}`;
+    }
+    return `cron ${t.expr}`;
+  }
+  return `到点 ${t.expr}`;
+}
+
 export function TimerPanel({ onClose }: { onClose: () => void }) {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [applyingId, setApplyingId] = useState("");
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState({
     name: "",
@@ -33,9 +68,35 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // 拉取配方列表：页面打开即获取；接口尚未就绪（后端并行开发）时静默降级为空
+  const loadRecipes = async () => {
+    try {
+      setRecipes(await getRecipes());
+    } catch {
+      setRecipes([]);
+    }
+  };
+
   useEffect(() => {
     void load();
+    void loadRecipes();
   }, []);
+
+  // 一键应用配方：创建定时任务后刷新任务列表与配方状态
+  const apply = async (r: Recipe) => {
+    setMsg("");
+    setApplyingId(r.id);
+    try {
+      await applyRecipe(r.id);
+      setRecipes((rs) => rs.map((x) => (x.id === r.id ? { ...x, applied: true } : x)));
+      setMsg("已创建定时任务");
+      await load();
+    } catch (e) {
+      setMsg((e as Error).message || "创建失败");
+    } finally {
+      setApplyingId("");
+    }
+  };
 
   const submit = async () => {
     setMsg("");
@@ -87,6 +148,46 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
           <button className="icon-btn" onClick={onClose} aria-label="关闭">
             <IconClose />
           </button>
+        </div>
+
+        <div className="group">
+          <p className="group-title">配方（一键创建）</p>
+          {recipes.length === 0 ? (
+            <p className="hint">暂无预置配方。</p>
+          ) : (
+            <ul className="tools-list">
+              {recipes.map((r) => (
+                <li key={r.id} className="tool-item safe">
+                  <code>
+                    {r.name}
+                    {r.applied ? "（已启用）" : ""}
+                  </code>
+                  <span className={`tool-risk ${r.applied ? "safe" : ""}`}>
+                    {r.applied ? "运行中" : "未应用"}
+                  </span>
+                  <div className="recipe-desc">
+                    <p>{r.description}</p>
+                    <p className="hint">触发：{humanizeTrigger(r)}</p>
+                    <div className="job-actions">
+                      {r.applied ? (
+                        <button className="btn sm" disabled title="对应任务已在下方列表">
+                          已启用 · 查看任务
+                        </button>
+                      ) : (
+                        <button
+                          className="btn sm primary"
+                          disabled={applyingId === r.id}
+                          onClick={() => void apply(r)}
+                        >
+                          {applyingId === r.id ? "创建中…" : "一键创建"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="group">
