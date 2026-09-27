@@ -7,12 +7,12 @@ P1-2：字段类型强制 / 范围收敛改由 pydantic 模型完成（替代 PU
 手写的一堆 if/else clamp）。对外仍保持 Settings.get()/save(patch)/llm()/permission_mode()
 的字典式接口，main.py / agent.py 调用处零改动。
 """
+
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -165,12 +165,26 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", env_file=None)
 
     llm: LLMSettings = LLMSettings()
-    permission_mode: Literal["auto", "approve", "chat"] = "approve"
+    # 注意：以下两个字段故意用 str + before 校验器做「兜底」而非 Literal：
+    # 若用 Literal，一旦配置里出现非法值，整个 model_validate 会抛 ValidationError，
+    # 导致 _coerce 整体回退到未收敛的原始 dict——连 approval_timeout/temperature 等
+    # 其它字段的 clamp 也被一并跳过（BUG-2：非法 permission_mode 会让 -5 的超时漏过）。
+    permission_mode: str = "approve"
     # plan = 先输出计划文本并停止，用户确认后再执行（参考 Cline Plan/Act）
     # act  = 现状，直接执行工具
-    agent_mode: Literal["plan", "act"] = "act"
+    agent_mode: str = "act"
     server: ServerSettings = ServerSettings()
     user_prefs: str = ""
+
+    @field_validator("permission_mode", mode="before")
+    @classmethod
+    def _sanitize_permission_mode(cls, v):
+        return v if v in ("auto", "approve", "chat") else "approve"
+
+    @field_validator("agent_mode", mode="before")
+    @classmethod
+    def _sanitize_agent_mode(cls, v):
+        return v if v in ("plan", "act") else "act"
 
 
 def home_dir() -> Path:
@@ -235,9 +249,7 @@ class Settings:
             os.chmod(self.path.parent, 0o700)  # 数据目录 700（含数据库）
         except OSError:
             pass
-        self.path.write_text(
-            json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             os.chmod(self.path, 0o600)
         except OSError:
