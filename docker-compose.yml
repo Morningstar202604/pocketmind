@@ -1,0 +1,24 @@
+# 口袋 Agent · docker compose 一键部署
+# 用法：docker compose up -d
+# 必填：AGENT_TOKEN（首次启动自动写入配置的访问令牌，公网访问必须设置）
+services:
+  agentd:
+    build: .
+    container_name: pocket-agent
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      AGENT_HOME: /data
+      # 首次启动会用这个值初始化访问令牌（之后以 /data/config.json 为准）
+      AGENT_TOKEN: "${AGENT_TOKEN:?请在 .env 或环境变量中设置 AGENT_TOKEN}"
+    volumes:
+      - agent-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8787/api/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  agent-data:

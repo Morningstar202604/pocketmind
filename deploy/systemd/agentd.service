@@ -1,0 +1,17 @@
+[Unit]
+Description=Pocket Agent (agentd) - local AI agent server
+After=network.target
+
+[Service]
+Type=simple
+Environment=AGENT_HOME=/root/.agent/termux-agent
+ExecStart=/usr/bin/python3 -m agentd.main --lan --port 8787
+WorkingDirectory=/opt/termux-agent
+Restart=always
+RestartSec=3
+# 安全：只允许本服务用户，数据目录 700
+ProtectSystem=full
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
