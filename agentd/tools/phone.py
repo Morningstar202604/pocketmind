@@ -21,8 +21,19 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from . import Tool, register
+
+
+def _kill_proc(proc: asyncio.subprocess.Process) -> None:
+    """尽力杀掉子进程并回收；已退出 / 查无此进程则忽略。"""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
 
 
 async def _run(args: list[str], input_text: str | None = None, timeout: int = 20) -> tuple[int, str, str]:
@@ -39,11 +50,13 @@ async def _run(args: list[str], input_text: str | None = None, timeout: int = 20
         )
     except TimeoutError:
         # 超时必须杀掉子进程，否则变成僵尸进程继续在后台跑
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
+        _kill_proc(proc)
         out, err = await proc.communicate()
+        raise
+    except asyncio.CancelledError:
+        # 外部取消（用户停止 / SSE 断开 / 删会话）也必须回收子进程，
+        # 否则卡在 communicate 里的长命令（如 60s 下载）会变成孤儿进程残留。
+        _kill_proc(proc)
         raise
     return proc.returncode or 0, out.decode("utf-8", errors="replace").strip(), err.decode("utf-8", errors="replace").strip()
 
@@ -67,23 +80,19 @@ def _fail(msg: str) -> dict:
     return {"ok": False, "error": msg}
 
 
-async def _exec_json(bin_name: str, args: list[str], input_text: str | None = None, timeout: int = 20) -> dict:
-    b = _bin(bin_name)
-    if not b:
-        return _unavailable(bin_name)
-    try:
-        code, out, err = await _run([b, *args], input_text=input_text, timeout=timeout)
-    except TimeoutError:
-        return _fail(f"{bin_name} 执行超时（>{timeout}s）")
-    if code != 0:
-        return _fail(f"{bin_name} 失败：{err or f'exit {code}'}")
-    if not out:
-        return _fail(f"{bin_name} 无输出")
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        return _fail(f"{bin_name} 返回了无法解析的内容：{out[:200]}")
-    return _ok(result=data)
+def _safe_http_url(url: str) -> str | None:
+    """校验 URL 仅允许 http/https scheme，拒绝 file:// / javascript: / data: 等。
+
+    下载/打开工具的参数来自 LLM（可能被外部内容注入），限制 scheme 可防止误把
+    file:///etc/passwd 当 URL 下载、或用 javascript:  scheme 触发异常行为。
+    返回 None 表示非法。
+    """
+    if not isinstance(url, str) or not url.strip():
+        return None
+    u = urlparse(url.strip())
+    if u.scheme not in ("http", "https") or not u.netloc:
+        return None
+    return url.strip()
 
 
 # ==================== 系统 ====================
@@ -95,7 +104,8 @@ async def battery() -> dict:
     try:
         code, out, err = await _run([b])
         data = json.loads(out) if out else {}
-        # termux-battery-status 真实输出是 JSON 数组，取第一项
+        # termux-battery-status 真实输出是单个 JSON 对象；个别封装/旧版可能返回
+        # 单元素数组，两种形态都兼容（数组则取第一项）。
         if isinstance(data, list):
             data = data[0] if data else {}
     except (TimeoutError, json.JSONDecodeError, IndexError, TypeError):
@@ -175,8 +185,10 @@ async def set_volume(stream: str, level: int) -> dict:
     b = _bin("termux-volume")
     if not b:
         return _unavailable("termux-volume")
+    # termux-volume 用法：`termux-volume <stream> <level>`（位置参数，无 -s/-v 选项）。
+    # 音量范围因设备/流而异（音乐流通常 0-15），这里按设备实际 clamp。
     try:
-        await _run([b, "-s", str(stream), "-v", str(max(0, min(100, level)))])
+        await _run([b, str(stream), str(max(0, min(100, level)))])
         return _ok(stream=stream, level=level)
     except TimeoutError:
         return _fail("设置音量超时")
@@ -201,26 +213,27 @@ async def send_sms(numbers: list[str], text: str) -> dict:
         return _unavailable("termux-sms-send")
     if not numbers:
         return _fail("缺少收件人号码")
-    args = [b]
-    for n in numbers:
-        args += ["-n", str(n)]
+    # termux-sms-send 用法：`-n number[,number2,...] [text]`，多收件人用逗号合并到
+    # 同一个 -n 后面（重复 -n 会被 getopts 覆盖，只发最后一个）。文本无位置参数时从 stdin 读。
+    recipients = ",".join(str(n) for n in numbers)
     try:
-        await _run(args, input_text=str(text))
+        await _run([b, "-n", recipients], input_text=str(text))
         return _ok(sent_to=numbers, chars=len(str(text)))
     except TimeoutError:
         return _fail("发送短信超时")
 
 
 async def read_sms(limit: int = 20) -> dict:
-    b = _bin("termux-sms-inbox")
+    b = _bin("termux-sms-list")
     if not b:
-        return _unavailable("termux-sms-inbox")
+        return _unavailable("termux-sms-list")
+    # termux-sms-list 用法：`-l <limit> -t inbox|sent|draft|outbox|all`（无 termux-sms-inbox 命令）。
     try:
-        code, out, err = await _run([b, "-l", str(max(1, min(100, limit)))])
+        code, out, err = await _run([b, "-l", str(max(1, min(100, limit))), "-t", "inbox"])
     except TimeoutError:
         return _fail("读取短信超时")
     if code != 0:
-        return _fail(f"termux-sms-inbox 失败：{err or f'exit {code}'}")
+        return _fail(f"termux-sms-list 失败：{err or f'exit {code}'}")
     try:
         data = json.loads(out) if out else []
     except json.JSONDecodeError:
@@ -229,8 +242,8 @@ async def read_sms(limit: int = 20) -> dict:
     for m in (data if isinstance(data, list) else [])[:limit]:
         if isinstance(m, dict):
             items.append({
-                "from": m.get("number"),
-                "time": m.get("received_time") or m.get("time"),
+                "from": m.get("number") or m.get("address"),
+                "time": m.get("received_time") or m.get("received_date") or m.get("date") or m.get("time"),
                 "text": (m.get("body") or "")[:200],
             })
     return _ok(count=len(items), messages=items)
@@ -255,8 +268,10 @@ async def get_location(provider: str = "network") -> dict:
         return _unavailable("termux-location")
     if provider not in ("gps", "network", "passive"):
         provider = "network"
+    # termux-location 用法：`-p gps|network|passive -r once|last|updates`；
+    # -r 取值是 once/last/updates，不是数字（-r 1 会被拒绝）。这里只要一次性定位。
     try:
-        code, out, err = await _run([b, "-p", provider, "-r", "1"], timeout=30)
+        code, out, err = await _run([b, "-p", provider, "-r", "once"], timeout=30)
     except TimeoutError:
         return _fail("获取定位超时（GPS 冷启动可能较慢，可稍后再试）")
     if code != 0:
@@ -392,8 +407,9 @@ async def scan_wifi() -> dict:
     b = _bin("termux-wifi-scaninfo")
     if not b:
         return _unavailable("termux-wifi-scaninfo")
+    # termux-wifi-scaninfo 无选项，直接返回最近一次扫描结果（JSON 数组）。
     try:
-        code, out, err = await _run([b, "-n", "1"], timeout=30)
+        code, out, err = await _run([b], timeout=30)
     except TimeoutError:
         return _fail("WiFi 扫描超时")
     if code != 0:
@@ -432,8 +448,9 @@ async def take_photo(output: str = "") -> dict:
     if not b:
         return _unavailable("termux-camera-photo")
     path = output or str(Path.home() / "storage" / "pictures" / f"agent-{int(time.time())}.jpg")
+    # termux-camera-photo 用法：`-c <camera-id> <output-file>`，输出文件是位置参数（无 -o 选项）。
     try:
-        code, out, err = await _run([b, "-c", "0", "-o", str(path)], timeout=30)
+        code, out, err = await _run([b, "-c", "0", str(path)], timeout=30)
     except TimeoutError:
         return _fail("拍照超时")
     if code != 0:
@@ -445,7 +462,9 @@ async def share_text(text: str, title: str = "") -> dict:
     b = _bin("termux-share")
     if not b:
         return _unavailable("termux-share")
-    args = [b, "-a", "android.intent.action.SEND"]
+    # termux-share 用法：`-a send|edit|view -t <title>`（-a 取值是 send/edit/view，
+    # 不是完整 intent 字符串；从 stdin 读文本时默认 content-type 为 text/plain）。
+    args = [b, "-a", "send"]
     if title:
         args += ["-t", str(title)]
     try:
@@ -459,10 +478,14 @@ async def download_file(url: str, output: str = "") -> dict:
     b = _bin("termux-download")
     if not b:
         return _unavailable("termux-download")
+    safe = _safe_http_url(url)
+    if safe is None:
+        return _fail("URL 非法：仅支持 http/https 链接（拒绝 file:/javascript:/data: 等）")
     path = output or str(Path.home() / "storage" / "downloads")
+    # termux-download 用法：`-p <path> [-t title] [-d desc] <url>`（路径选项是 -p，不是 -o）。
     try:
-        await _run([b, "-o", str(path), str(url)], timeout=60)
-        return _ok(url=url, saved_to=str(path))
+        await _run([b, "-p", str(path), safe], timeout=60)
+        return _ok(url=safe, saved_to=str(path))
     except TimeoutError:
         return _fail("下载超时（网络慢或文件大）")
 
@@ -471,9 +494,15 @@ async def open_target(target: str) -> dict:
     b = _bin("termux-open")
     if not b:
         return _unavailable("termux-open")
+    # target 既可能是本地文件路径，也可能是 URL：URL 才做 scheme 校验；
+    # 看起来像 URL（含 :// 或 scheme:）但不是 http(s) 的一律拒绝。
+    t = str(target).strip()
+    if "://" in t or ":" in t.split("/", 1)[0]:
+        if _safe_http_url(t) is None:
+            return _fail("仅支持 http/https 链接或本地路径（拒绝 file:/javascript:/data: 等）")
     try:
-        await _run([b, str(target)], timeout=15)
-        return _ok(opened=target)
+        await _run([b, t], timeout=15)
+        return _ok(opened=t)
     except TimeoutError:
         return _fail("打开超时")
 

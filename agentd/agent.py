@@ -46,22 +46,26 @@ def _fallback_title(message: str) -> str:
 
 def _trim(messages: list[dict], maxn: int = MAX_CONTEXT) -> list[dict]:
     """裁剪早期消息，保证 tool 消息永远跟着它的 assistant tool_call 一起被裁掉；
-    第一条 system（记忆摘要/角色设定）永远保留。"""
+    第一条 system（记忆摘要/角色设定）永远保留。
+
+    按「块」丢弃：一个 assistant(tool_calls) 块 = assistant 本体 + 紧随其后的所有
+    tool 响应，整块一起删，绝不拆散。否则当 drop 额度在 tool 消息中间耗尽时，
+    会留下一条没有前置 assistant tool_call 的孤立 tool 消息，OpenAI 兼容 API 直接 400。
+    """
     if len(messages) <= maxn:
         return messages
     drop = len(messages) - maxn
     i = 1 if messages and messages[0]["role"] == "system" else 0  # 保护 system
     while i < len(messages) and drop > 0:
         m = messages[i]
-        if m["role"] == "tool":
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            # 整块丢弃：assistant + 紧随的所有 tool 响应（原子，不可拆）。
+            # drop 按整块实际消息数扣，避免每块只扣 1 导致过度裁剪。
+            start = i
             i += 1
-            drop -= 1
-        elif m["role"] == "assistant" and m.get("tool_calls"):
-            i += 1
-            drop -= 1
             while i < len(messages) and messages[i]["role"] == "tool":
                 i += 1
-                drop -= 1
+            drop -= i - start
         else:
             i += 1
             drop -= 1
@@ -73,19 +77,32 @@ class Agent:
         self.store = store
         self.settings = settings
         self.mock = mock
+        self._client = None  # AsyncOpenAI 懒加载缓存（httpx 连接池复用，避免每次新建泄漏）
 
     def _llm(self):
         if self.mock:
             return MockLLM(self.settings)
+        if self._client is not None:
+            return self._client
         from openai import AsyncOpenAI
 
         llm = self.settings.get().get("llm", {})
-        return AsyncOpenAI(
+        self._client = AsyncOpenAI(
             api_key=llm.get("api_key") or "empty",
             base_url=llm.get("base_url") or None,
             timeout=180,
             max_retries=2,
         )
+        return self._client
+
+    async def aclose(self) -> None:
+        """关闭底层 httpx 连接池（每个 chat 结束后调用，防 FD / 连接泄漏）。"""
+        if self._client is not None:
+            try:
+                await self._client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._client = None
 
     async def _stream(self, messages: list[dict], tools: list[dict] | None):
         """统一流式接口：产出 (content, reasoning, tool_calls_delta)。"""
@@ -266,7 +283,13 @@ class Agent:
                 await emit({"type": "tool_start", "id": tid, "name": name, "input": args})
 
                 decision = "allow"
-                if ask_approval is not None:
+                # chat 模式 = 纯聊天，服务端强制禁用一切工具。
+                # 不能只靠「不把 tools 列表传给 LLM」：一旦模型被外部内容注入后仍强行
+                # 吐出 tool_call，should_ask 在 chat 模式恒为 False，旧逻辑会无审批直接执行，
+                # 形成权限绕过。这里在执行前兜底：chat 模式一律拒绝。
+                if mode == "chat":
+                    decision = "deny"
+                elif ask_approval is not None:
                     if tool is None:
                         # 模型幻觉出的未知工具：approve 模式下同样要求用户确认，不静默执行
                         if mode != "auto":
@@ -288,12 +311,21 @@ class Agent:
                     undoable = False
                     if ck and ck.get("backup"):
                         try:
-                            from .checkpoints import CheckpointStore
+                            from .checkpoints import CheckpointStore, get_shared
 
-                            cs = CheckpointStore(self.store.path.parent / "checkpoints.db")
-                            await cs.start()
-                            await cs.record(session_id, tid, name, ck["path"], ck["backup"], ck.get("kind", "restore"))
-                            await cs.close()
+                            # 优先复用进程级共享连接；未注入时（如 MCP server / 单测）
+                            # 退回一次性新建，保证功能不受影响。
+                            cs = get_shared()
+                            owns = False
+                            if cs is None:
+                                cs = CheckpointStore(self.store.path.parent / "checkpoints.db")
+                                await cs.start()
+                                owns = True
+                            try:
+                                await cs.record(session_id, tid, name, ck["path"], ck["backup"], ck.get("kind", "restore"))
+                            finally:
+                                if owns:
+                                    await cs.close()
                             undoable = True
                         except Exception:  # noqa: BLE001
                             pass

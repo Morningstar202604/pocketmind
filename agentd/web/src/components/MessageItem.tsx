@@ -8,11 +8,24 @@ import { PocketLogo } from "./PocketLogo";
 
 /* ---------- Markdown（含代码块/表格，DOMPurify 消毒） ---------- */
 
+// 一次性注册 DOMPurify 钩子：消毒后强制给所有 <a> 加 rel="noopener noreferrer"，
+// 防止 LLM 输出里的外链 target=_blank 带来的反向 tabnabbing（window.opener 泄漏）。
+DOMPurify.addHook("afterSanitizeAttributes", (node: Element) => {
+  if (node.tagName === "A") {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
 export function Markdown({ text }: { text: string }) {
   const html = useMemo(
     // marked v12 的 parse 在 async 模式下返回 Promise；显式 { async: false } 确保同步返回 string，
     // 不再用 `as string` 类型撒谎
-    () => DOMPurify.sanitize(marked.parse(text, { async: false }) as string),
+    () =>
+      DOMPurify.sanitize(marked.parse(text, { async: false }) as string, {
+        // 允许 target 属性（钩子会统一加），rel 由钩子写入
+        ADD_ATTR: ["target", "rel"],
+      }),
     [text]
   );
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;

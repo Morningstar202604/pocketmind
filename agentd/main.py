@@ -10,6 +10,7 @@
   - 工具审批由服务端强制，approve 模式下写/危险操作必须用户确认；
   - GET /api/settings 只返回打码后的 API Key。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,6 +40,7 @@ def _sse_event(ev: dict) -> ServerSentEvent:
     sep 固定为 "\\n"，与原手写 ``f"data: {...}\\n\\n"`` 完全一致。
     """
     return ServerSentEvent(data=json.dumps(ev, ensure_ascii=False), sep="\n")
+
 
 VERSION = "0.2.0"
 APP_NAME = "口袋 Agent"
@@ -87,7 +89,15 @@ class ApprovalCenter:
         return True
 
     def forget(self, session_id: str) -> None:
-        """会话删除时清理：未决审批 + 「始终允许」记忆。"""
+        """会话删除时清理：未决审批 + 「始终允许」记忆。
+
+        对仍在 await 的 gate 直接置「deny」并 set event，让 ask() 立刻返回，
+        而不是干等到 120s 超时（删会话后审批卡片已经没了，用户永远点不到）。
+        """
+        for k, gate in self._gates.items():
+            if k[0] == session_id and not gate["event"].is_set():
+                gate["decision"] = "deny"
+                gate["event"].set()
         self._gates = {k: v for k, v in self._gates.items() if k[0] != session_id}
         self._always.pop(session_id, None)
 
@@ -118,14 +128,33 @@ def emit_now(session_id: str):
     return _emit
 
 
+def _notify_bg(title: str, content: str, persistent: bool = False) -> None:
+    """后台发通知：notify() 内部是阻塞的 subprocess.run，绝不能在事件循环里直接调。
+
+    丢线程池跑 + fire-and-forget，调用方不 await——这样在 CancelledError / 异常收尾
+    路径里也不会因为再 await 而被二次取消打断。
+    """
+    try:
+        asyncio.get_running_loop().create_task(
+            asyncio.to_thread(notify, title, content, persistent)
+        )
+    except RuntimeError:
+        notify(title, content, persistent)
+
+
 async def run_agent(session_id: str, message: str) -> None:
     """处理一条用户消息：新会话自动命名 → Agent 循环 → 结束后续跑排队消息。"""
-    notify("口袋 Agent", f"正在处理：{message[:40]}", persistent=True)
+    _notify_bg("口袋 Agent", f"正在处理：{message[:40]}", persistent=True)
+    agent = None
     try:
         # 新会话（尚无 user 消息）自动命名
         if await store.first_user_message(session_id) is None:
             try:
-                title = await Agent(store, settings_mgr, mock=MOCK).title_for(message)
+                title_agent = Agent(store, settings_mgr, mock=MOCK)
+                try:
+                    title = await title_agent.title_for(message)
+                finally:
+                    await title_agent.aclose()
                 await store.touch_session(session_id, title or "新会话")
             except Exception:  # noqa: BLE001 —— 命名失败不阻塞
                 pass
@@ -134,28 +163,43 @@ async def run_agent(session_id: str, message: str) -> None:
         async def ask(tid: str, name: str, summary: str, risk: str) -> str:
             emit = emit_now(session_id)
             if emit:
-                await emit({"type": "approval", "id": tid, "name": name, "summary": summary, "risk": risk})
-                notify("口袋 Agent · 需要确认", f"{summary}（{'危险' if risk == 'danger' else '需要' if risk == 'write' else '只读'}操作），去应用里处理", persistent=True)
+                await emit(
+                    {"type": "approval", "id": tid, "name": name, "summary": summary, "risk": risk}
+                )
+                _notify_bg(
+                    "口袋 Agent · 需要确认",
+                    f"{summary}（{'危险' if risk == 'danger' else '需要' if risk == 'write' else '只读'}操作），去应用里处理",
+                    persistent=True,
+                )
             return await approval.ask(session_id, tid, name)
 
         await agent.chat(session_id, message, emit=emit_now(session_id), ask_approval=ask)
-        notify("口袋 Agent · 完成", f"已处理：{message[:30]}", persistent=False)
+        _notify_bg("口袋 Agent · 完成", f"已处理：{message[:30]}", persistent=False)
     except asyncio.CancelledError:
         q = runs.get(session_id, {}).get("queue")
         if q:
             q.put_nowait({"type": "error", "message": "已停止"})
-        notify("口袋 Agent", "已停止")
+        _notify_bg("口袋 Agent", "已停止")
     except Exception as e:  # noqa: BLE001 —— 服务端兜底，不能静默
         q = runs.get(session_id, {}).get("queue")
         if q:
             q.put_nowait({"type": "error", "message": str(e)})
-        notify("口袋 Agent · 出错", str(e)[:80])
+        _notify_bg("口袋 Agent · 出错", str(e)[:80])
     finally:
+        # 关闭本 chat 的 LLM 连接池（AsyncOpenAI 内部 httpx client，防 FD 泄漏）
+        if agent is not None:
+            try:
+                await agent.aclose()
+            except Exception:  # noqa: BLE001
+                pass
         run = runs.get(session_id)
         pending = (run or {}).get("pending", [])
+        cancelled = (run or {}).get("task") is not None and run["task"].cancelled()
         runs.pop(session_id, None)
-        # 排队续跑：同一会话期间发来的消息在此自动执行
-        if pending:
+        # 排队续跑：同一会话期间发来的消息在此自动执行。
+        # 但若本轮是被外部取消（用户停止 / SSE 断开 / 删会话），则丢弃 pending，
+        # 避免会话已删/已停还在后台偷偷续跑。
+        if pending and not cancelled:
             nxt = pending.pop(0)
             queue2: asyncio.Queue = asyncio.Queue()
             runs[session_id] = {"task": None, "queue": queue2, "pending": pending}
@@ -217,6 +261,13 @@ def create_app() -> FastAPI:
         关闭顺序：停调度 → 断 MCP → 关异步存储。
         """
         await store.start()  # P1-5：异步引擎建连 + WAL + 建表/回填
+        # 共享 CheckpointStore：整个进程复用一条连接，避免每次文件工具/undo/删会话
+        # 都新建 aiosqlite 连接（CREATE TABLE + commit + dispose 的开销）
+        from .checkpoints import CheckpointStore, set_shared
+
+        cs = CheckpointStore(settings_mgr.path.parent / "checkpoints.db")
+        await cs.start()
+        set_shared(cs)
         _load_recipes()  # 读入预设配方（内存缓存，避免路由内阻塞读文件）
         scheduler_svc.start()
         # P1：MCP 服务器可选接入（mock 模式不连，保持演示环境纯净）
@@ -269,15 +320,21 @@ def create_app() -> FastAPI:
             chat_id = TG_CHAT_ID or str(srv.get("tg_chat_id", ""))
             if should_start(token, chat_id):
                 tg_gateway = TelegramGateway(
-                    token=token, chat_id=chat_id, store=store,
-                    settings=settings_mgr, approval=approval, mock=MOCK,
+                    token=token,
+                    chat_id=chat_id,
+                    store=store,
+                    settings=settings_mgr,
+                    approval=approval,
+                    mock=MOCK,
                 )
                 await tg_gateway.start()
                 print(f"[agentd] Telegram gateway 已启动（chat_id={chat_id}）")
             else:
                 print("[agentd] 未配置 Telegram token/chat_id，跳过 Telegram gateway")
         except ImportError:
-            print("[agentd] 未安装 python-telegram-bot，跳过 Telegram gateway（pip install python-telegram-bot）")
+            print(
+                "[agentd] 未安装 python-telegram-bot，跳过 Telegram gateway（pip install python-telegram-bot）"
+            )
         except Exception as e:  # noqa: BLE001 —— gateway 起不来绝不拖垮主服务
             print(f"[agentd] Telegram gateway 启动失败（不影响主服务）: {e}")
         yield
@@ -293,6 +350,11 @@ def create_app() -> FastAPI:
                 await c.close()
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            set_shared(None)
+            await cs.close()
+        except Exception:  # noqa: BLE001
+            pass
         if store is not None:
             await store.close()  # P1-5：关闭异步引擎连接
 
@@ -309,7 +371,7 @@ def create_app() -> FastAPI:
         auth = request.headers.get("authorization", "")
         if not auth.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="需要访问令牌")
-        given = auth[len("Bearer "):].strip()
+        given = auth[len("Bearer ") :].strip()
         if not hmac.compare_digest(given, token):
             raise HTTPException(status_code=401, detail="需要访问令牌")
 
@@ -353,7 +415,10 @@ def create_app() -> FastAPI:
                 # 事件字段与原手写 SSE 完全一致，仅改用 sse-starlette 编码
                 yield _sse_event({"type": "session", "session_id": sid})
                 yield _sse_event(
-                    {"type": "queued", "message": "上一轮回复还在进行中，这条已排队，完成后自动执行"}
+                    {
+                        "type": "queued",
+                        "message": "上一轮回复还在进行中，这条已排队，完成后自动执行",
+                    }
                 )
                 yield _sse_event({"type": "done", "stop_reason": "queued"})
 
@@ -418,8 +483,12 @@ def create_app() -> FastAPI:
         tool_call_id = payload.get("tool_call_id", "")
         if not (session_id and tool_call_id):
             raise HTTPException(400, "需要 session_id 与 tool_call_id")
-        from .checkpoints import CheckpointStore, undo
+        from .checkpoints import CheckpointStore, get_shared, undo
 
+        cs = get_shared()
+        if cs is not None:
+            return await undo(cs, session_id, tool_call_id)
+        # 共享连接未注入（极少见）：退回一次性连接
         cs = CheckpointStore(settings_mgr.path.parent / "checkpoints.db")
         await cs.start()
         try:
@@ -458,12 +527,19 @@ def create_app() -> FastAPI:
         ok = await store.delete_session(sid)
         if ok:
             approval.forget(sid)  # 清理该会话的"始终允许"记忆与未决审批
-            from .checkpoints import CheckpointStore
+            from .checkpoints import CheckpointStore, get_shared
 
-            cs = CheckpointStore(settings_mgr.path.parent / "checkpoints.db")
-            await cs.start()
-            await cs.delete_session(sid)
-            await cs.close()
+            cs = get_shared()
+            owns = False
+            if cs is None:
+                cs = CheckpointStore(settings_mgr.path.parent / "checkpoints.db")
+                await cs.start()
+                owns = True
+            try:
+                await cs.delete_session(sid)
+            finally:
+                if owns:
+                    await cs.close()
             # 级联清理该会话下的定时任务（内存调度 + 持久化库）
             scheduler_svc.delete_by_session(sid)
         return {"ok": ok}
@@ -488,7 +564,9 @@ def create_app() -> FastAPI:
         expr = str(payload.get("expr", "")).strip()
         message = str(payload.get("message", "")).strip()
         if not (name and tt in TRIGGER_TYPES and expr and message):
-            raise HTTPException(400, "缺少必要字段：name / trigger_type(cron|interval|date) / expr / message")
+            raise HTTPException(
+                400, "缺少必要字段：name / trigger_type(cron|interval|date) / expr / message"
+            )
         if tt == "interval":
             try:
                 int(float(expr))
@@ -502,17 +580,22 @@ def create_app() -> FastAPI:
         cond = str(payload.get("condition", "")).strip()
         if cond and parse_condition(cond) is None:
             raise HTTPException(400, "条件格式：battery < 20（仅支持电池电量阈值）")
-        job = scheduler_svc.create(
-            {
-                "name": name,
-                "trigger_type": tt,
-                "expr": expr,
-                "message": message,
-                "session_id": str(payload.get("session_id", "")).strip(),
-                "condition": cond,
-                "enabled": bool(payload.get("enabled", True)),
-            }
-        )
+        try:
+            job = scheduler_svc.create(
+                {
+                    "name": name,
+                    "trigger_type": tt,
+                    "expr": expr,
+                    "message": message,
+                    "session_id": str(payload.get("session_id", "")).strip(),
+                    "condition": cond,
+                    "enabled": bool(payload.get("enabled", True)),
+                }
+            )
+        except ValueError as e:
+            # cron 表达式非法 / date 字符串无法解析等：构造 trigger 时抛 ValueError，
+            # 统一转成 400 而非 500（健壮性边界：非法输入不应让服务崩）
+            raise HTTPException(400, f"表达式无法解析：{e}") from None
         return job
 
     @app.put("/api/jobs/{jid}", dependencies=[Depends(check_token)])
@@ -542,7 +625,9 @@ def create_app() -> FastAPI:
         out = []
         for r in RECIPES:
             matched = _recipe_matched_job(r.get("message", ""))
-            out.append({**r, "applied": matched is not None, "job_id": matched["id"] if matched else None})
+            out.append(
+                {**r, "applied": matched is not None, "job_id": matched["id"] if matched else None}
+            )
         return {"recipes": out}
 
     @app.post("/api/recipes/{recipe_id}/apply", dependencies=[Depends(check_token)])
@@ -616,7 +701,9 @@ def create_app() -> FastAPI:
             "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "settings": {
                 "permission_mode": settings_mgr.get().get("permission_mode", "approve"),
-                "llm": {k: v for k, v in settings_mgr.get().get("llm", {}).items() if k != "api_key"},
+                "llm": {
+                    k: v for k, v in settings_mgr.get().get("llm", {}).items() if k != "api_key"
+                },
                 "user_prefs": settings_mgr.get().get("user_prefs", ""),
             },
             "sessions": [],
@@ -627,7 +714,14 @@ def create_app() -> FastAPI:
                     {"role": m["role"], "content": m["content"], "meta": m.get("meta")}
                     for m in await store.get_messages(s["id"], limit=1000)
                 ]
-                out["sessions"].append({"id": s["id"], "title": s["title"], "message_count": len(msgs), "messages": msgs})
+                out["sessions"].append(
+                    {
+                        "id": s["id"],
+                        "title": s["title"],
+                        "message_count": len(msgs),
+                        "messages": msgs,
+                    }
+                )
         return out
 
     @app.get("/api/settings", dependencies=[Depends(check_token)])
@@ -639,6 +733,10 @@ def create_app() -> FastAPI:
         server = dict(s.get("server", {}))
         if server.get("tg_token"):
             server["tg_token"] = mask_key(server["tg_token"])
+        # server.token（局域网访问令牌）与 api_key 同级敏感：GET 一律打码回传，
+        # 否则任何能访问 /api/settings 的人（或 XSS）都能拿到明文令牌完全接管服务。
+        if server.get("token"):
+            server["token"] = mask_key(server["token"])
         return {**s, "llm": llm, "server": server}
 
     @app.put("/api/settings", dependencies=[Depends(check_token)])
@@ -672,6 +770,12 @@ def create_app() -> FastAPI:
             tg = server.get("tg_token")
             if isinstance(tg, str) and (not tg.strip() or tg == masked_tg):
                 server.pop("tg_token", None)
+            # server.token（局域网令牌）同理：GET 已打码，前端原样回传打码占位时剔除，
+            # 避免把真实令牌覆盖成一串星号。
+            masked_token = mask_key(settings_mgr.get().get("server", {}).get("token", ""))
+            tok = server.get("token")
+            if isinstance(tok, str) and (not tok.strip() or tok == masked_token):
+                server.pop("token", None)
         # permission_mode 非法值不写入（pydantic Literal 也会拒绝，这里显式兜底）
         mode = payload.get("permission_mode")
         if mode is not None and mode not in ("auto", "approve", "chat"):
@@ -715,10 +819,15 @@ def main():
     parser.add_argument("--mock", action="store_true", help="离线 mock 模式")
     parser.add_argument("--home", default=None, help="数据目录（默认 ~/.agent/termux-agent）")
     # Telegram 远程控制（可选）：命令行覆盖 settings 里的 server.tg_token / tg_chat_id
-    parser.add_argument("--tg-token", default=None, help="Telegram bot token（不填则读 settings.server.tg_token）")
+    parser.add_argument(
+        "--tg-token", default=None, help="Telegram bot token（不填则读 settings.server.tg_token）"
+    )
     parser.add_argument("--tg-chat-id", default=None, help="允许访问的 Telegram chat_id 白名单")
-    parser.add_argument("--mcp-server", action="store_true",
-                        help="以 stdio MCP server 模式启动（不启动 FastAPI，供 Claude Desktop/Cline 连接）")
+    parser.add_argument(
+        "--mcp-server",
+        action="store_true",
+        help="以 stdio MCP server 模式启动（不启动 FastAPI，供 Claude Desktop/Cline 连接）",
+    )
     args = parser.parse_args()
 
     MOCK = args.mock
@@ -746,15 +855,21 @@ def main():
         s = settings_mgr.get()
         token = str(s.get("server", {}).get("token", "")).strip()
         if not token:
-            print("✗ 安全策略：--lan 必须配置访问令牌才能启动（否则局域网内任何设备都能调用本服务）。")
-            print("  请先设置 server.token（启动本机模式后，在页面「设置 → 局域网访问令牌」填入），再重试。")
+            print(
+                "✗ 安全策略：--lan 必须配置访问令牌才能启动（否则局域网内任何设备都能调用本服务）。"
+            )
+            print(
+                "  请先设置 server.token（启动本机模式后，在页面「设置 → 局域网访问令牌」填入），再重试。"
+            )
             raise SystemExit(1)
 
     import uvicorn
 
     print(f"[agentd] 口袋 Agent v{VERSION} | mock={MOCK} | 监听 {host}:{args.port}")
     if MOCK:
-        print("[agentd] mock 模式：消息含 电池/短信/定位/剪贴板/传感器/通知/工具 等词会走工具链路，便于自测")
+        print(
+            "[agentd] mock 模式：消息含 电池/短信/定位/剪贴板/传感器/通知/工具 等词会走工具链路，便于自测"
+        )
     uvicorn.run(create_app(), host=host, port=args.port, log_level="warning")
 
 
