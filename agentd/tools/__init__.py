@@ -7,8 +7,9 @@ LLM 通过 OpenAI 兼容的 function calling 拿到结构化定义，
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 Handler = Callable[..., Awaitable[dict]]
 
@@ -68,7 +69,7 @@ async def call_tool(name: str, args: dict) -> dict:
         return {"error": f"参数不合法：{err}"}
     try:
         return await asyncio.wait_for(tool.handler(**args), timeout=tool.timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return {"error": f"工具 {name} 执行超时（>{tool.timeout}s）"}
     except Exception as e:  # noqa: BLE001 —— 工具失败必须回传给模型
         return {"error": f"{type(e).__name__}: {e}"}
@@ -91,7 +92,7 @@ def _build_model(tool: Tool):
     """由 JSON Schema 构造 pydantic 模型：类型强制、必填校验、未知字段忽略。"""
     if tool.name in _model_cache:
         return _model_cache[tool.name]
-    from pydantic import BaseModel, ConfigDict, Field, create_model
+    from pydantic import ConfigDict, Field, create_model
 
     params = tool.parameters or {}
     props = params.get("properties", {}) or {}

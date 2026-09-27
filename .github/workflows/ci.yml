@@ -30,7 +30,7 @@ jobs:
         run: python -m compileall agentd/ -q
 
       - name: Ruff lint
-        run: ruff check agentd/ tests/ --exit-zero
+        run: ruff check agentd/ tests/
 
       - name: P0 单元回归（不需启动服务）
         run: python tests/p0_regression_test.py

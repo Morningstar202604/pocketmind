@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """M5 回归：审批/命名/级联/未知工具/打码/权限 —— 直连 API 验证"""
-import json, os, subprocess, sys, time, urllib.request
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
 
 BASE = "http://127.0.0.1:8799"
 passed, failed = [], []
@@ -61,6 +66,7 @@ check("API key 打码", s["llm"]["api_key"] == "sk-a***************************3
 
 # 2. 数据文件权限（600/700）
 import pathlib
+
 home = pathlib.Path(os.environ.get("AGENT_HOME", "/tmp/pa-test"))
 mode_db = (home / "agent.db").stat().st_mode & 0o777
 mode_dir = home.stat().st_mode & 0o777

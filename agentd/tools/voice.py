@@ -88,8 +88,9 @@ async def _tts_offline(text: str) -> dict:
         cache.mkdir(parents=True, exist_ok=True)
         out = cache / f"tts_{int(time.time())}.wav"
         try:
-            import numpy as np
             import wave
+
+            import numpy as np
 
             samples = np.asarray(audio.samples, dtype=np.int16)
             with wave.open(str(out), "wb") as w:

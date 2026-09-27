@@ -14,6 +14,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "agentd/mock_llm.py" = ["F821"]  # mock 中动态构造的命名空间
 "tests/*.py" = ["E402", "F401"]  # 测试脚本允许 sys.path 操作和未使用导入
+"agentd/tools/*.py" = ["ASYNC109"]  # 工具处理器的 timeout 是传给 subprocess 的同步参数，非 asyncio 超时
 
 [tool.ruff.format]
 quote-style = "double"

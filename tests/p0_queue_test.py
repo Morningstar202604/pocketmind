@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """P0 排队验收（并发：第一轮挂审批时发第二轮）"""
-import json, sys, threading, time, urllib.request
+import json
+import sys
+import threading
+import time
+import urllib.request
 
 BASE = "http://127.0.0.1:8799"
 passed, failed = [], []
@@ -21,7 +25,8 @@ def chat(message, session_id, timeout=30):
         with urllib.request.urlopen(r, timeout=timeout) as resp:
             while True:
                 line = resp.readline()
-                if not line: break
+                if not line:
+                    break
                 if line.startswith(b"data: "):
                     events.append(json.loads(line[6:].decode()))
     except Exception as e:

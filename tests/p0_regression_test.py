@@ -31,7 +31,7 @@ async def main():
     # ---------- P0-4：$HOME 展开 ----------
     from agentd.tools import phone as phone_mod
 
-    src = Path(phone_mod.__file__).read_text(encoding="utf-8")
+    src = await asyncio.to_thread(Path(phone_mod.__file__).read_text, encoding="utf-8")
     check("P0-4 take_photo 默认路径无字面 $HOME",
           '"$HOME"' not in src and "'$HOME'" not in src,
           "phone.py 中仍存在 $HOME 字面量")

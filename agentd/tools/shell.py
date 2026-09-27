@@ -44,7 +44,7 @@ async def run_shell(command: str, timeout: int = 60) -> dict:
     timed_out = False
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         timed_out = True
         try:
             proc.kill()

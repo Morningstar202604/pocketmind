@@ -37,7 +37,7 @@ async def _run(args: list[str], input_text: str | None = None, timeout: int = 20
             proc.communicate(input_text.encode() if input_text is not None else None),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # 超时必须杀掉子进程，否则变成僵尸进程继续在后台跑
         try:
             proc.kill()
@@ -73,7 +73,7 @@ async def _exec_json(bin_name: str, args: list[str], input_text: str | None = No
         return _unavailable(bin_name)
     try:
         code, out, err = await _run([b, *args], input_text=input_text, timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail(f"{bin_name} 执行超时（>{timeout}s）")
     if code != 0:
         return _fail(f"{bin_name} 失败：{err or f'exit {code}'}")
@@ -98,7 +98,7 @@ async def battery() -> dict:
         # termux-battery-status 真实输出是 JSON 数组，取第一项
         if isinstance(data, list):
             data = data[0] if data else {}
-    except (asyncio.TimeoutError, json.JSONDecodeError, IndexError, TypeError):
+    except (TimeoutError, json.JSONDecodeError, IndexError, TypeError):
         return _fail("读取电量失败")
     return _ok(
         status=data.get("status"),
@@ -119,7 +119,7 @@ async def notify(title: str, message: str = "") -> dict:
     try:
         await _run(args)
         return _ok()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("发送通知超时")
 
 
@@ -130,7 +130,7 @@ async def toast(message: str) -> dict:
     try:
         await _run([b, "-s", str(message)])
         return _ok()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("toast 超时")
 
 
@@ -141,7 +141,7 @@ async def vibrate(duration_ms: int = 500) -> dict:
     try:
         await _run([b, "-d", str(max(50, min(10000, duration_ms)))])
         return _ok(vibrated_ms=duration_ms)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("震动超时")
 
 
@@ -152,7 +152,7 @@ async def torch(on: bool) -> dict:
     try:
         await _run([b, "on" if on else "off"])
         return _ok(torch="on" if on else "off")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("手电筒控制超时")
 
 
@@ -163,7 +163,7 @@ async def get_volume(stream: str = "music") -> dict:
     try:
         code, out, err = await _run([b])
         data = json.loads(out) if out else []
-    except (asyncio.TimeoutError, json.JSONDecodeError):
+    except (TimeoutError, json.JSONDecodeError):
         return _fail("读取音量失败")
     for item in data if isinstance(data, list) else []:
         if isinstance(item, dict) and item.get("stream") == stream:
@@ -178,7 +178,7 @@ async def set_volume(stream: str, level: int) -> dict:
     try:
         await _run([b, "-s", str(stream), "-v", str(max(0, min(100, level)))])
         return _ok(stream=stream, level=level)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("设置音量超时")
 
 
@@ -189,7 +189,7 @@ async def set_brightness(level: int) -> dict:
     try:
         await _run([b, str(max(0, min(255, level)))])
         return _ok(brightness=level)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("设置亮度超时")
 
 
@@ -207,7 +207,7 @@ async def send_sms(numbers: list[str], text: str) -> dict:
     try:
         await _run(args, input_text=str(text))
         return _ok(sent_to=numbers, chars=len(str(text)))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("发送短信超时")
 
 
@@ -217,7 +217,7 @@ async def read_sms(limit: int = 20) -> dict:
         return _unavailable("termux-sms-inbox")
     try:
         code, out, err = await _run([b, "-l", str(max(1, min(100, limit)))])
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("读取短信超时")
     if code != 0:
         return _fail(f"termux-sms-inbox 失败：{err or f'exit {code}'}")
@@ -243,7 +243,7 @@ async def make_call(number: str) -> dict:
     try:
         await _run([b, str(number)], timeout=10)
         return _ok(calling=number)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("拨号超时")
 
 
@@ -257,7 +257,7 @@ async def get_location(provider: str = "network") -> dict:
         provider = "network"
     try:
         code, out, err = await _run([b, "-p", provider, "-r", "1"], timeout=30)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("获取定位超时（GPS 冷启动可能较慢，可稍后再试）")
     if code != 0:
         return _fail(f"定位失败：{err or f'exit {code}'}")
@@ -283,7 +283,7 @@ async def clipboard_get() -> dict:
     try:
         code, out, err = await _run([b])
         return _ok(content=out) if code == 0 else _fail("读取剪贴板失败")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("读取剪贴板超时")
 
 
@@ -294,7 +294,7 @@ async def clipboard_set(text: str) -> dict:
     try:
         await _run([b], input_text=str(text))
         return _ok()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("写入剪贴板超时")
 
 
@@ -306,7 +306,7 @@ async def list_sensors() -> dict:
         return _unavailable("termux-sensor")
     try:
         code, out, err = await _run([b, "-l"])
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("读取传感器列表超时")
     if code != 0:
         return _fail(f"termux-sensor 失败：{err or f'exit {code}'}")
@@ -321,7 +321,7 @@ async def read_sensor(name: str) -> dict:
         return _unavailable("termux-sensor")
     try:
         code, out, err = await _run([b, "-s", str(name), "-n", "1"], timeout=15)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("读取传感器超时")
     if code != 0:
         return _fail(f"termux-sensor 失败：{err or f'exit {code}'}")
@@ -345,7 +345,7 @@ async def tts_speak(text: str, rate: float = 1.0) -> dict:
     try:
         await _run(args, input_text=str(text))
         return _ok(spoken_chars=len(str(text)))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("TTS 朗读超时")
 
 
@@ -355,7 +355,7 @@ async def speech_to_text(lang: str = "zh-CN") -> dict:
         return _unavailable("termux-speech-to-text")
     try:
         code, out, err = await _run([b, "-l", str(lang)], timeout=45)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("语音识别超时（未检测到说话内容）")
     if code != 0:
         return _fail(f"语音识别失败：{err or f'exit {code}'}")
@@ -370,7 +370,7 @@ async def wifi_info() -> dict:
         return _unavailable("termux-wifi-connectioninfo")
     try:
         code, out, err = await _run([b])
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("读取 WiFi 信息超时")
     if code != 0:
         return _fail(f"termux-wifi-connectioninfo 失败：{err or f'exit {code}'}")
@@ -394,7 +394,7 @@ async def scan_wifi() -> dict:
         return _unavailable("termux-wifi-scaninfo")
     try:
         code, out, err = await _run([b, "-n", "1"], timeout=30)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("WiFi 扫描超时")
     if code != 0:
         return _fail(f"termux-wifi-scaninfo 失败：{err or f'exit {code}'}")
@@ -421,7 +421,7 @@ async def set_wifi(enabled: bool) -> dict:
     try:
         await _run([b, "true" if enabled else "false"])
         return _ok(wifi_enabled=enabled)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("WiFi 开关超时")
 
 
@@ -434,7 +434,7 @@ async def take_photo(output: str = "") -> dict:
     path = output or str(Path.home() / "storage" / "pictures" / f"agent-{int(time.time())}.jpg")
     try:
         code, out, err = await _run([b, "-c", "0", "-o", str(path)], timeout=30)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("拍照超时")
     if code != 0:
         return _fail(f"拍照失败：{err or f'exit {code}'}（可能需要先 termux-setup-storage）")
@@ -451,7 +451,7 @@ async def share_text(text: str, title: str = "") -> dict:
     try:
         await _run(args, input_text=str(text))
         return _ok()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("调起分享超时")
 
 
@@ -463,7 +463,7 @@ async def download_file(url: str, output: str = "") -> dict:
     try:
         await _run([b, "-o", str(path), str(url)], timeout=60)
         return _ok(url=url, saved_to=str(path))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("下载超时（网络慢或文件大）")
 
 
@@ -474,7 +474,7 @@ async def open_target(target: str) -> dict:
     try:
         await _run([b, str(target)], timeout=15)
         return _ok(opened=target)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _fail("打开超时")
 
 

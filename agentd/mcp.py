@@ -61,7 +61,7 @@ class MCPClient:
                 self._session.call_tool(tool_name, arguments or {}),
                 timeout=self.timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"error": f"MCP 工具 {tool_name} 超时"}
         except Exception as e:  # noqa: BLE001 —— 调用异常转成结构化错误，不冒泡崩服务
             return {"error": f"MCP 调用失败：{e}"}

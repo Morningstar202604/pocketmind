@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """P1 定时任务验收：创建 interval 任务 → 触发执行 → 会话产出结果 → 启停/删除"""
-import json, sys, time, urllib.request
+import json
+import sys
+import time
+import urllib.request
+
 BASE = "http://127.0.0.1:8799"
 passed, failed = [], []
 
