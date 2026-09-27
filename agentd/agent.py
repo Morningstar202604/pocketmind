@@ -153,16 +153,16 @@ class Agent:
                 }
             )
         # P1：跨会话相关记忆（用户问的与新任务相关的旧事）
-        related = self.store.search_memories(message, limit=3, exclude_session=session_id)
+        related = await self.store.search_memories(message, limit=3, exclude_session=session_id)
         if related:
             rel_text = "\n".join(f"· {m['content'][:160]}" for m in related)
             messages.append({"role": "system", "content": f"与此相关的历史记忆：\n{rel_text}"})
-        summary = self.store.get_summary(session_id)
+        summary = await self.store.get_summary(session_id)
         if summary:
             messages.append({"role": "system", "content": f"此前对话摘要：{summary}"})
         # 恢复历史消息：从 meta 反序列化 tool_calls / tool_call_id，
         # 否则重启后孤立的 role:"tool" 消息会让 OpenAI 兼容 API 返回 400。
-        for m in self.store.get_messages(session_id):
+        for m in await self.store.get_messages(session_id):
             msg: dict = {"role": m["role"], "content": m["content"] or ""}
             meta = m.get("meta") or {}
             if m["role"] == "assistant" and meta.get("tool_calls"):
@@ -178,7 +178,7 @@ class Agent:
                 msg["tool_call_id"] = meta["tool_call_id"]
             messages.append(msg)
         messages.append({"role": "user", "content": message})
-        self.store.add_message(session_id, "user", message)
+        await self.store.add_message(session_id, "user", message)
 
         for _ in range(MAX_ITERATIONS):
             messages = _trim(messages)
@@ -207,10 +207,10 @@ class Agent:
 
             if not tool_calls:
                 text = content_acc.strip()
-                self.store.add_message(session_id, "assistant", text)
+                await self.store.add_message(session_id, "assistant", text)
                 # 一轮结束后滚动更新记忆摘要（后续对话的开头注入）
                 try:
-                    self.store.set_summary(session_id, await self._summarize(session_id, messages))
+                    await self.store.set_summary(session_id, await self._summarize(session_id, messages))
                 except Exception as e:  # noqa: BLE001 —— 摘要失败不影响主流程，但需留痕
                     print(f"[agentd] 记忆摘要更新失败: {e!r}", file=sys.stderr)
                 await emit({"type": "done", "stop_reason": "end_turn"})
@@ -229,7 +229,7 @@ class Agent:
             if calls_list:
                 assistant_msg["tool_calls"] = calls_list
             messages.append(assistant_msg)
-            self.store.add_message(
+            await self.store.add_message(
                 session_id, "assistant", content_acc,
                 {"tool_calls": [{"id": c["id"], "name": c["function"]["name"], "args": c["function"]["arguments"][:500]} for c in calls_list]},
             )
@@ -272,8 +272,9 @@ class Agent:
                             from .checkpoints import CheckpointStore
 
                             cs = CheckpointStore(self.store.path.parent / "checkpoints.db")
-                            cs.record(session_id, tid, name, ck["path"], ck["backup"], ck.get("kind", "restore"))
-                            cs.close()
+                            await cs.start()
+                            await cs.record(session_id, tid, name, ck["path"], ck["backup"], ck.get("kind", "restore"))
+                            await cs.close()
                             undoable = True
                         except Exception:  # noqa: BLE001
                             pass
@@ -282,7 +283,7 @@ class Agent:
 
                 text = json.dumps(result, ensure_ascii=False)
                 messages.append({"role": "tool", "tool_call_id": tid, "content": text[:MAX_TOOL_TEXT]})
-                self.store.add_message(
+                await self.store.add_message(
                     session_id, "tool", text[:MAX_TOOL_TEXT],
                     {"tool_call_id": tid, "name": name, "status": result.get("denied") and "denied" or ("error" in result and "failed" or "completed")},
                 )
@@ -318,7 +319,7 @@ class Agent:
     # ---------- 记忆摘要 ----------
     async def _summarize(self, session_id: str, messages: list[dict]) -> str:
         """把"旧摘要 + 本轮对话"压缩成一段新摘要，滚动更新。"""
-        old = self.store.get_summary(session_id) or ""
+        old = (await self.store.get_summary(session_id)) or ""
         recent = messages[-8:]
         if self.mock:
             return self._llm().summarize(recent)

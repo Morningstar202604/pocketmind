@@ -116,10 +116,10 @@ def create_app() -> FastAPI:
         notify("口袋 Agent", f"正在处理：{message[:40]}", persistent=True)
         try:
             # 新会话（尚无 user 消息）自动命名
-            if store.first_user_message(session_id) is None:
+            if await store.first_user_message(session_id) is None:
                 try:
                     title = await Agent(store, settings_mgr, mock=MOCK).title_for(message)
-                    store.touch_session(session_id, title or "新会话")
+                    await store.touch_session(session_id, title or "新会话")
                 except Exception:  # noqa: BLE001 —— 命名失败不阻塞
                     pass
             agent = Agent(store, settings_mgr, mock=MOCK)
@@ -170,8 +170,8 @@ def create_app() -> FastAPI:
 
     async def scheduled_run(session_id: str, message: str):
         """定时任务触发：指定会话不存在时自动新建；执行结果写入该会话，可在前端回看。"""
-        if not session_id or store.get_session(session_id) is None:
-            session_id = store.create_session()
+        if not session_id or await store.get_session(session_id) is None:
+            session_id = await store.create_session()
         runs.setdefault(session_id, {"task": None, "queue": asyncio.Queue(), "pending": []})
         await run_agent(session_id, message)
 
@@ -179,6 +179,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _start_scheduler():
+        await store.start()  # P1-5：异步引擎建连 + WAL + 建表/回填
         scheduler_svc.start()
         # P1：MCP 服务器可选接入（mock 模式不连，保持演示环境纯净）
         if not MOCK:
@@ -228,6 +229,8 @@ def create_app() -> FastAPI:
                 await c.close()
             except Exception:  # noqa: BLE001
                 pass
+        if store is not None:
+            await store.close()  # P1-5：关闭异步引擎连接
 
     # ---------- 鉴权（局域网开启后强制） ----------
     def check_token(request: Request) -> None:
@@ -270,8 +273,8 @@ def create_app() -> FastAPI:
 
         session_id = payload.get("session_id")
         if not isinstance(session_id, str) or not session_id.strip():
-            session_id = store.create_session()
-        elif store.get_session(session_id) is None:
+            session_id = await store.create_session()
+        elif await store.get_session(session_id) is None:
             raise HTTPException(404, "会话不存在")
 
         # 同一会话进行中：消息入队，当前轮结束后由 run_agent → agent.chat 统一落库执行
@@ -352,32 +355,33 @@ def create_app() -> FastAPI:
         from .checkpoints import CheckpointStore, undo
 
         cs = CheckpointStore(settings_mgr.path.parent / "checkpoints.db")
+        await cs.start()
         try:
-            return undo(cs, session_id, tool_call_id)
+            return await undo(cs, session_id, tool_call_id)
         finally:
-            cs.close()
+            await cs.close()
 
     @app.put("/api/sessions/{sid}", dependencies=[Depends(check_token)])
     async def rename_session(sid: str, payload: dict):
         title = str(payload.get("title", "")).strip()[:60]
         if not title:
             raise HTTPException(400, "标题不能为空")
-        if store is None or store.get_session(sid) is None:
+        if store is None or await store.get_session(sid) is None:
             raise HTTPException(404, "会话不存在")
-        store.touch_session(sid, title)
+        await store.touch_session(sid, title)
         return {"ok": True, "title": title}
 
     @app.get("/api/sessions", dependencies=[Depends(check_token)])
     async def list_sessions():
         if store is None:
             return []
-        return store.list_sessions()
+        return await store.list_sessions()
 
     @app.post("/api/sessions", dependencies=[Depends(check_token)])
     async def create_session():
         if store is None:
             raise HTTPException(503)
-        sid = store.create_session()
+        sid = await store.create_session()
         return {"session_id": sid, "title": "新会话"}
 
     @app.delete("/api/sessions/{sid}", dependencies=[Depends(check_token)])
@@ -385,14 +389,15 @@ def create_app() -> FastAPI:
         if store is None:
             raise HTTPException(503)
         cancel_run(sid)
-        ok = store.delete_session(sid)
+        ok = await store.delete_session(sid)
         if ok:
             approval.forget(sid)  # 清理该会话的"始终允许"记忆与未决审批
             from .checkpoints import CheckpointStore
 
             cs = CheckpointStore(settings_mgr.path.parent / "checkpoints.db")
-            cs.delete_session(sid)
-            cs.close()
+            await cs.start()
+            await cs.delete_session(sid)
+            await cs.close()
             # 级联清理该会话下的定时任务（内存调度 + 持久化库）
             scheduler_svc.delete_by_session(sid)
         return {"ok": ok}
@@ -401,9 +406,9 @@ def create_app() -> FastAPI:
     async def session_messages(sid: str):
         if store is None:
             raise HTTPException(503)
-        if store.get_session(sid) is None:
+        if await store.get_session(sid) is None:
             raise HTTPException(404, "会话不存在")
-        return store.get_messages(sid)
+        return await store.get_messages(sid)
 
     # ---------- P1：定时任务 API ----------
     @app.get("/api/jobs", dependencies=[Depends(check_token)])
@@ -512,10 +517,10 @@ def create_app() -> FastAPI:
             "sessions": [],
         }
         if store is not None:
-            for s in store.list_sessions(limit=500):
+            for s in await store.list_sessions(limit=500):
                 msgs = [
                     {"role": m["role"], "content": m["content"], "meta": m.get("meta")}
-                    for m in store.get_messages(s["id"], limit=1000)
+                    for m in await store.get_messages(s["id"], limit=1000)
                 ]
                 out["sessions"].append({"id": s["id"], "title": s["title"], "message_count": len(msgs), "messages": msgs})
         return out

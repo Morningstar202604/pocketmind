@@ -3,15 +3,19 @@
 对可回滚的危险操作（覆盖写文件、删除文件）在执行前自动备份原文件，
 用户可在前端一键撤销。备份存 $AGENT_HOME/checkpoints/，记录落 SQLite，
 服务重启后仍可撤销。
+
+P1-5：记录存储由手写同步 sqlite3 改为 SQLAlchemy 2.0 异步引擎（aiosqlite），
+公共方法改为 async；文件备份/还原仍是同步磁盘 IO（量小，不在热路径）。
 """
 from __future__ import annotations
 
-import json
 import os
-import sqlite3
 import time
 import uuid
 from pathlib import Path
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 
 def home_dir() -> Path:
@@ -41,13 +45,21 @@ class CheckpointStore:
     """undo 记录持久化：哪个会话、哪次工具调用、备份在哪、还原了没。"""
 
     def __init__(self, db_path: str | Path):
-        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.path = str(db_path)
+        # 只建引擎；建表在 start() 异步完成
+        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.path}")
+        self._conn: AsyncConnection | None = None
+
+    async def start(self) -> None:
+        """建立连接并建表（每次新建实例后调用）。"""
+        self._conn = await self.engine.connect()
         try:
-            os.chmod(db_path, 0o600)  # 备份记录仅本人可读
+            os.chmod(self.path, 0o600)  # 备份记录仅本人可读
         except OSError:
             pass
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS checkpoints (
+        await self._conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
                 tool_call_id TEXT NOT NULL,
@@ -57,47 +69,56 @@ class CheckpointStore:
                 kind TEXT NOT NULL DEFAULT 'restore',
                 created_at REAL NOT NULL,
                 undone INTEGER DEFAULT 0
-            )"""
-        )
-        self.conn.commit()
+            )
+            """
+        ))
+        await self._conn.commit()
 
-    def record(self, session_id: str, tool_call_id: str, tool_name: str, path: str, backup: str, kind: str = "restore") -> None:
-        self.conn.execute(
-            "INSERT OR REPLACE INTO checkpoints(id, session_id, tool_call_id, tool_name, path, backup, kind, created_at, undone) VALUES (?,?,?,?,?,?,?,?,0)",
-            (uuid.uuid4().hex[:16], session_id, tool_call_id, tool_name, path, backup, kind, time.time()),
-        )
-        self.conn.commit()
+    async def record(self, session_id: str, tool_call_id: str, tool_name: str, path: str, backup: str, kind: str = "restore") -> None:
+        assert self._conn is not None
+        await self._conn.execute(text(
+            "INSERT OR REPLACE INTO checkpoints(id, session_id, tool_call_id, tool_name, path, backup, kind, created_at, undone) "
+            "VALUES (:id,:s,:t,:n,:p,:b,:k,:c,0)"
+        ), {
+            "id": uuid.uuid4().hex[:16], "s": session_id, "t": tool_call_id, "n": tool_name,
+            "p": path, "b": backup, "k": kind, "c": time.time(),
+        })
+        await self._conn.commit()
 
-    def find(self, session_id: str, tool_call_id: str) -> dict | None:
-        r = self.conn.execute(
-            "SELECT id, tool_name, path, backup, kind, undone FROM checkpoints WHERE session_id=? AND tool_call_id=? ORDER BY created_at DESC LIMIT 1",
-            (session_id, tool_call_id),
-        ).fetchone()
+    async def find(self, session_id: str, tool_call_id: str) -> dict | None:
+        assert self._conn is not None
+        r = (await self._conn.execute(text(
+            "SELECT id, tool_name, path, backup, kind, undone FROM checkpoints "
+            "WHERE session_id=:s AND tool_call_id=:t ORDER BY created_at DESC LIMIT 1"
+        ), {"s": session_id, "t": tool_call_id})).fetchone()
         if not r:
             return None
-        return {
-            "id": r[0], "tool_name": r[1], "path": r[2],
-            "backup": r[3], "kind": r[4], "undone": bool(r[5]),
-        }
+        d = dict(r._mapping)
+        d["undone"] = bool(d["undone"])
+        return d
 
-    def mark_undone(self, ckid: str) -> None:
-        self.conn.execute("UPDATE checkpoints SET undone=1 WHERE id=?", (ckid,))
-        self.conn.commit()
+    async def mark_undone(self, ckid: str) -> None:
+        assert self._conn is not None
+        await self._conn.execute(text("UPDATE checkpoints SET undone=1 WHERE id=:i"), {"i": ckid})
+        await self._conn.commit()
 
-    def delete_session(self, session_id: str) -> None:
-        self.conn.execute("DELETE FROM checkpoints WHERE session_id=?", (session_id,))
-        self.conn.commit()
+    async def delete_session(self, session_id: str) -> None:
+        assert self._conn is not None
+        await self._conn.execute(text("DELETE FROM checkpoints WHERE session_id=:s"), {"s": session_id})
+        await self._conn.commit()
 
-    def close(self) -> None:
+    async def close(self) -> None:
         try:
-            self.conn.close()
-        except Exception:  # noqa: BLE001
+            if self._conn is not None:
+                await self._conn.close()
+            await self.engine.dispose()
+        except Exception:
             pass
 
 
-def undo(store: CheckpointStore, session_id: str, tool_call_id: str) -> dict:
+async def undo(store: CheckpointStore, session_id: str, tool_call_id: str) -> dict:
     """撤销一次已完成的文件类操作。"""
-    ck = store.find(session_id, tool_call_id)
+    ck = await store.find(session_id, tool_call_id)
     if not ck:
         return {"error": "没有可撤销的操作（可能未备份或记录已删除）"}
     if ck["undone"]:
@@ -117,7 +138,7 @@ def undo(store: CheckpointStore, session_id: str, tool_call_id: str) -> dict:
                 target.unlink()
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(backup, target)
-        store.mark_undone(ck["id"])
+        await store.mark_undone(ck["id"])
         return {"ok": True, "restored": str(target), "tool": ck["tool_name"]}
     except Exception as e:  # noqa: BLE001
         return {"error": f"撤销失败：{e}"}

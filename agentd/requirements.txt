@@ -2,6 +2,11 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 openai>=1.40
 apscheduler>=3.10
+sse-starlette>=2.1
+pydantic-settings>=2.0
+mcp>=1.0
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.19
 
 # 可选：离线语音（不装不影响主功能，见 termux/voice.md）
 # sherpa-onnx
