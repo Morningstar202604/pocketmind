@@ -15,10 +15,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
@@ -65,7 +66,7 @@ class ApprovalCenter:
         self._gates[(session_id, tool_call_id)] = gate
         try:
             await asyncio.wait_for(gate["event"].wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return "timeout"  # 超时默认拒绝（安全优先）
         finally:
             self._gates.pop((session_id, tool_call_id), None)
@@ -91,95 +92,132 @@ class ApprovalCenter:
         self._always.pop(session_id, None)
 
 
-# ---------- 应用 ----------
+# ---------- 应用全局状态 ----------
+# 这些是模块级单例：run_agent / run_agent_for_job 必须是模块级函数（scheduler 触发时
+# 经延迟导入调用），因此它们依赖的 store / runs / approval 也必须是模块级全局。
 settings_mgr = Settings()
 store: Store | None = None
 approval = ApprovalCenter()
-runs: dict[str, dict] = {}  # session_id -> {task, queue}
+runs: dict[str, dict] = {}  # session_id -> {task, queue, pending}
 MOCK = False
+# Telegram 远程控制：CLI 覆盖值（为空则回落到 settings.server.tg_*）
+TG_TOKEN: str = ""
+TG_CHAT_ID: str = ""
+tg_gateway = None  # TelegramGateway 实例（未启用时为 None）
+
+
+def emit_now(session_id: str):
+    """取该会话的 SSE 事件队列，返回一个异步 emit 回调；无进行中任务时返回 None。"""
+    q = runs.get(session_id, {}).get("queue")
+    if q is None:
+        return None
+
+    async def _emit(ev: dict):
+        q.put_nowait(ev)
+
+    return _emit
+
+
+async def run_agent(session_id: str, message: str) -> None:
+    """处理一条用户消息：新会话自动命名 → Agent 循环 → 结束后续跑排队消息。"""
+    notify("口袋 Agent", f"正在处理：{message[:40]}", persistent=True)
+    try:
+        # 新会话（尚无 user 消息）自动命名
+        if await store.first_user_message(session_id) is None:
+            try:
+                title = await Agent(store, settings_mgr, mock=MOCK).title_for(message)
+                await store.touch_session(session_id, title or "新会话")
+            except Exception:  # noqa: BLE001 —— 命名失败不阻塞
+                pass
+        agent = Agent(store, settings_mgr, mock=MOCK)
+
+        async def ask(tid: str, name: str, summary: str, risk: str) -> str:
+            emit = emit_now(session_id)
+            if emit:
+                await emit({"type": "approval", "id": tid, "name": name, "summary": summary, "risk": risk})
+                notify("口袋 Agent · 需要确认", f"{summary}（{'危险' if risk == 'danger' else '需要' if risk == 'write' else '只读'}操作），去应用里处理", persistent=True)
+            return await approval.ask(session_id, tid, name)
+
+        await agent.chat(session_id, message, emit=emit_now(session_id), ask_approval=ask)
+        notify("口袋 Agent · 完成", f"已处理：{message[:30]}", persistent=False)
+    except asyncio.CancelledError:
+        q = runs.get(session_id, {}).get("queue")
+        if q:
+            q.put_nowait({"type": "error", "message": "已停止"})
+        notify("口袋 Agent", "已停止")
+    except Exception as e:  # noqa: BLE001 —— 服务端兜底，不能静默
+        q = runs.get(session_id, {}).get("queue")
+        if q:
+            q.put_nowait({"type": "error", "message": str(e)})
+        notify("口袋 Agent · 出错", str(e)[:80])
+    finally:
+        run = runs.get(session_id)
+        pending = (run or {}).get("pending", [])
+        runs.pop(session_id, None)
+        # 排队续跑：同一会话期间发来的消息在此自动执行
+        if pending:
+            nxt = pending.pop(0)
+            queue2: asyncio.Queue = asyncio.Queue()
+            runs[session_id] = {"task": None, "queue": queue2, "pending": pending}
+            task2 = asyncio.create_task(run_agent(session_id, nxt))
+            runs[session_id]["task"] = task2
+
+
+def cancel_run(session_id: str) -> bool:
+    run = runs.get(session_id)
+    if run and run.get("task") and not run["task"].done():
+        run["task"].cancel()
+        return True
+    return False
+
+
+async def run_agent_for_job(session_id: str, message: str) -> None:
+    """定时任务触发入口（scheduler._fire_job 经延迟导入调用本模块级函数）。
+
+    会话不存在时自动新建；执行结果写入该会话，可在前端回看。之所以做成模块级顶层
+    函数而非闭包，是因为它会被 APScheduler 的可 pickle 回调链路触达。
+    """
+    if not session_id or await store.get_session(session_id) is None:
+        session_id = await store.create_session()
+    runs.setdefault(session_id, {"task": None, "queue": asyncio.Queue(), "pending": []})
+    await run_agent(session_id, message)
+
+
+# ---------- Recipe 预设配方（config/recipes.json） ----------
+# 在 lifespan 启动时一次性读入内存，避免在 async 路由里做阻塞的文件读取。
+RECIPES: list[dict] = []
+
+
+def _load_recipes() -> None:
+    """从仓库根 config/recipes.json 读入预设配方；缺失/损坏时置空列表。"""
+    global RECIPES
+    p = Path(__file__).resolve().parent.parent / "config" / "recipes.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        RECIPES = [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001 —— 配方缺失不阻塞服务
+        RECIPES = []
 
 
 def create_app() -> FastAPI:
     global store
-    app = FastAPI(title=APP_NAME, version=VERSION)
     store = Store(settings_mgr.path.parent / "agent.db")
 
-    def emit_now(session_id: str):
-        q = runs.get(session_id, {}).get("queue")
-        if q is None:
-            return
-        async def _emit(ev: dict):
-            q.put_nowait(ev)
-        return _emit
+    # ---------- 定时/条件触发（SQLAlchemyJobStore 持久化） ----------
+    from .scheduler import TRIGGER_TYPES, SchedulerService, parse_condition
 
-    async def run_agent(session_id: str, message: str):
-        notify("口袋 Agent", f"正在处理：{message[:40]}", persistent=True)
-        try:
-            # 新会话（尚无 user 消息）自动命名
-            if await store.first_user_message(session_id) is None:
-                try:
-                    title = await Agent(store, settings_mgr, mock=MOCK).title_for(message)
-                    await store.touch_session(session_id, title or "新会话")
-                except Exception:  # noqa: BLE001 —— 命名失败不阻塞
-                    pass
-            agent = Agent(store, settings_mgr, mock=MOCK)
-
-            async def ask(tid: str, name: str, summary: str, risk: str) -> str:
-                emit = emit_now(session_id)
-                if emit:
-                    await emit({"type": "approval", "id": tid, "name": name, "summary": summary, "risk": risk})
-                notify("口袋 Agent · 需要确认", f"{summary}（{'危险' if risk == 'danger' else '需要' if risk == 'write' else '只读'}操作），去应用里处理", persistent=True)
-                return await approval.ask(session_id, tid, name)
-
-            await agent.chat(session_id, message, emit=emit_now(session_id), ask_approval=ask)
-            notify("口袋 Agent · 完成", f"已处理：{message[:30]}", persistent=False)
-        except asyncio.CancelledError:
-            q = runs.get(session_id, {}).get("queue")
-            if q:
-                q.put_nowait({"type": "error", "message": "已停止"})
-            notify("口袋 Agent", "已停止")
-        except Exception as e:  # noqa: BLE001 —— 服务端兜底，不能静默
-            q = runs.get(session_id, {}).get("queue")
-            if q:
-                q.put_nowait({"type": "error", "message": str(e)})
-            notify("口袋 Agent · 出错", str(e)[:80])
-        finally:
-            run = runs.get(session_id)
-            pending = (run or {}).get("pending", [])
-            runs.pop(session_id, None)
-            # 排队续跑：同一会话期间发来的消息在此自动执行
-            if pending:
-                nxt = pending.pop(0)
-                queue2: asyncio.Queue = asyncio.Queue()
-                runs[session_id] = {"task": None, "queue": queue2, "pending": pending}
-                task2 = asyncio.create_task(run_agent(session_id, nxt))
-                runs[session_id]["task"] = task2
-
-    def cancel_run(session_id: str) -> bool:
-        run = runs.get(session_id)
-        if run and run.get("task") and not run["task"].done():
-            run["task"].cancel()
-            return True
-        return False
-
-    # ---------- P1：定时/条件触发 ----------
-    from .scheduler import TRIGGER_TYPES, JobStore, SchedulerService, parse_condition
-
-    jobs_store = JobStore(settings_mgr.path.parent / "jobs.db")
+    scheduler_svc = SchedulerService(settings_mgr.path.parent / "jobs.db")
     mcp_clients: list[MCPClient] = []
 
-    async def scheduled_run(session_id: str, message: str):
-        """定时任务触发：指定会话不存在时自动新建；执行结果写入该会话，可在前端回看。"""
-        if not session_id or await store.get_session(session_id) is None:
-            session_id = await store.create_session()
-        runs.setdefault(session_id, {"task": None, "queue": asyncio.Queue(), "pending": []})
-        await run_agent(session_id, message)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """FastAPI 生命周期：替代已弃用的 @app.on_event。
 
-    scheduler_svc = SchedulerService(jobs_store, run_cb=scheduled_run, notify_cb=lambda t, c: notify(t, c, persistent=False))
-
-    @app.on_event("startup")
-    async def _start_scheduler():
+        启动顺序：异步存储建连 → 恢复定时任务调度 → 接入 MCP 服务器；
+        关闭顺序：停调度 → 断 MCP → 关异步存储。
+        """
         await store.start()  # P1-5：异步引擎建连 + WAL + 建表/回填
+        _load_recipes()  # 读入预设配方（内存缓存，避免路由内阻塞读文件）
         scheduler_svc.start()
         # P1：MCP 服务器可选接入（mock 模式不连，保持演示环境纯净）
         if not MOCK:
@@ -194,7 +232,7 @@ def create_app() -> FastAPI:
                 )
                 try:
                     tools = await client.connect()
-                except Exception as e:  # noqa: BLE001 —— 连接失败不阻塞启动
+                except Exception:  # noqa: BLE001 —— 连接失败不阻塞启动
                     await client.close()
                     continue
                 for t in tools:
@@ -221,8 +259,34 @@ def create_app() -> FastAPI:
                 client.tools = [str(t.get("name", "")) for t in tools if t.get("name")]
                 mcp_clients.append(client)
 
-    @app.on_event("shutdown")
-    async def _stop_scheduler():
+        # ---- Telegram 远程控制（可选：无 token 时优雅跳过，不影响主服务）----
+        global tg_gateway
+        try:
+            from .telegram_gateway import TelegramGateway, should_start
+
+            srv = settings_mgr.get().get("server", {})
+            token = TG_TOKEN or str(srv.get("tg_token", ""))
+            chat_id = TG_CHAT_ID or str(srv.get("tg_chat_id", ""))
+            if should_start(token, chat_id):
+                tg_gateway = TelegramGateway(
+                    token=token, chat_id=chat_id, store=store,
+                    settings=settings_mgr, approval=approval, mock=MOCK,
+                )
+                await tg_gateway.start()
+                print(f"[agentd] Telegram gateway 已启动（chat_id={chat_id}）")
+            else:
+                print("[agentd] 未配置 Telegram token/chat_id，跳过 Telegram gateway")
+        except ImportError:
+            print("[agentd] 未安装 python-telegram-bot，跳过 Telegram gateway（pip install python-telegram-bot）")
+        except Exception as e:  # noqa: BLE001 —— gateway 起不来绝不拖垮主服务
+            print(f"[agentd] Telegram gateway 启动失败（不影响主服务）: {e}")
+        yield
+        # ---- 关闭 ----
+        if tg_gateway is not None:
+            try:
+                await tg_gateway.stop()
+            except Exception:  # noqa: BLE001
+                pass
         scheduler_svc.shutdown()
         for c in mcp_clients:
             try:
@@ -231,6 +295,8 @@ def create_app() -> FastAPI:
                 pass
         if store is not None:
             await store.close()  # P1-5：关闭异步引擎连接
+
+    app = FastAPI(title=APP_NAME, version=VERSION, lifespan=lifespan)
 
     # ---------- 鉴权（局域网开启后强制） ----------
     def check_token(request: Request) -> None:
@@ -427,12 +493,12 @@ def create_app() -> FastAPI:
             try:
                 int(float(expr))
             except ValueError:
-                raise HTTPException(400, "interval 表达式需为秒数（如 3600）")
+                raise HTTPException(400, "interval 表达式需为秒数（如 3600）") from None
         if tt == "date":
             try:
                 __import__("datetime").datetime.strptime(expr, "%Y-%m-%d %H:%M")
             except ValueError:
-                raise HTTPException(400, "date 表达式格式：YYYY-MM-DD HH:MM")
+                raise HTTPException(400, "date 表达式格式：YYYY-MM-DD HH:MM") from None
         cond = str(payload.get("condition", "")).strip()
         if cond and parse_condition(cond) is None:
             raise HTTPException(400, "条件格式：battery < 20（仅支持电池电量阈值）")
@@ -462,6 +528,45 @@ def create_app() -> FastAPI:
     @app.delete("/api/jobs/{jid}", dependencies=[Depends(check_token)])
     async def jobs_delete(jid: str):
         return {"ok": scheduler_svc.delete(jid)}
+
+    # ---------- Recipe：预设配方一键实例化为定时任务 ----------
+    def _recipe_matched_job(rec_message: str) -> dict | None:
+        """按配方 message 精确匹配已创建的 job（单层 recipe→job，不做多级依赖）。"""
+        for j in scheduler_svc.list():
+            if j.get("message") == rec_message:
+                return j
+        return None
+
+    @app.get("/api/recipes", dependencies=[Depends(check_token)])
+    async def recipes_list():
+        out = []
+        for r in RECIPES:
+            matched = _recipe_matched_job(r.get("message", ""))
+            out.append({**r, "applied": matched is not None, "job_id": matched["id"] if matched else None})
+        return {"recipes": out}
+
+    @app.post("/api/recipes/{recipe_id}/apply", dependencies=[Depends(check_token)])
+    async def recipes_apply(recipe_id: str):
+        rec = next((r for r in RECIPES if r.get("id") == recipe_id), None)
+        if rec is None:
+            raise HTTPException(404, "配方不存在")
+        # 幂等：同一配方已实例化过则直接返回已有 job
+        matched = _recipe_matched_job(rec.get("message", ""))
+        if matched is not None:
+            return matched
+        job = scheduler_svc.create(
+            {
+                "name": str(rec.get("name", recipe_id))[:60],
+                "trigger_type": rec.get("trigger_type", "interval"),
+                "expr": str(rec.get("expr", "")),
+                "message": str(rec.get("message", "")),
+                "condition": rec.get("condition") or "",
+                "enabled": bool(rec.get("enabled", True)),
+            }
+        )
+        if job is None:
+            raise HTTPException(500, "配方实例化失败")
+        return job
 
     @app.get("/api/providers")
     async def providers():
@@ -530,7 +635,11 @@ def create_app() -> FastAPI:
         s = settings_mgr.get()
         llm = dict(s.get("llm", {}))
         llm["api_key"] = mask_key(llm.get("api_key", ""))
-        return {**s, "llm": llm}
+        # tg_token 与 API Key 同级敏感，回传前打码（put 时同 api_key：打码占位原样写回会被剔除）
+        server = dict(s.get("server", {}))
+        if server.get("tg_token"):
+            server["tg_token"] = mask_key(server["tg_token"])
+        return {**s, "llm": llm, "server": server}
 
     @app.put("/api/settings", dependencies=[Depends(check_token)])
     async def put_settings(payload: dict):
@@ -556,10 +665,21 @@ def create_app() -> FastAPI:
                         }
                     )
             server["mcp"] = cleaned_mcp
+        if isinstance(server, dict):
+            # tg_token 与 api_key 同理：GET 返回的是打码占位，原样回传会污染真实 token，
+            # 因此回传值等于打码占位（或空）时剔除，仅当用户填了新值才写入。
+            masked_tg = mask_key(settings_mgr.get().get("server", {}).get("tg_token", ""))
+            tg = server.get("tg_token")
+            if isinstance(tg, str) and (not tg.strip() or tg == masked_tg):
+                server.pop("tg_token", None)
         # permission_mode 非法值不写入（pydantic Literal 也会拒绝，这里显式兜底）
         mode = payload.get("permission_mode")
         if mode is not None and mode not in ("auto", "approve", "chat"):
             payload.pop("permission_mode", None)
+        # agent_mode（plan/act）非法值同样不写入
+        amode = payload.get("agent_mode")
+        if amode is not None and amode not in ("plan", "act"):
+            payload.pop("agent_mode", None)
         # 类型强制 / 范围收敛（temperature、max_tokens、approval_timeout、字符串截断等）
         # 全部由 pydantic 模型在 Settings.save() 内完成，不再手写 if/else clamp。
         settings_mgr.save(payload)
@@ -587,13 +707,18 @@ def create_app() -> FastAPI:
 
 
 def main():
-    global MOCK
+    global MOCK, TG_TOKEN, TG_CHAT_ID
     parser = argparse.ArgumentParser(description="口袋 Agent agentd")
     parser.add_argument("--host", default=None, help="监听地址（默认 127.0.0.1，--lan 时 0.0.0.0）")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--lan", action="store_true", help="允许局域网访问（会校验访问令牌）")
     parser.add_argument("--mock", action="store_true", help="离线 mock 模式")
     parser.add_argument("--home", default=None, help="数据目录（默认 ~/.agent/termux-agent）")
+    # Telegram 远程控制（可选）：命令行覆盖 settings 里的 server.tg_token / tg_chat_id
+    parser.add_argument("--tg-token", default=None, help="Telegram bot token（不填则读 settings.server.tg_token）")
+    parser.add_argument("--tg-chat-id", default=None, help="允许访问的 Telegram chat_id 白名单")
+    parser.add_argument("--mcp-server", action="store_true",
+                        help="以 stdio MCP server 模式启动（不启动 FastAPI，供 Claude Desktop/Cline 连接）")
     args = parser.parse_args()
 
     MOCK = args.mock
@@ -602,6 +727,19 @@ def main():
 
         os.environ["AGENT_HOME"] = args.home
     settings_mgr.load()
+
+    # MCP server 独立模式：直接走 stdio，不启动 FastAPI
+    if args.mcp_server:
+        from .mcp_server import main as mcp_main
+
+        mcp_main()
+        return
+
+    # 把 CLI 传入的 TG 配置存到模块全局，lifespan 启动时读取
+    if args.tg_token:
+        TG_TOKEN = args.tg_token
+    if args.tg_chat_id:
+        TG_CHAT_ID = args.tg_chat_id
 
     host = args.host or ("0.0.0.0" if args.lan else "127.0.0.1")
     if args.lan:
@@ -621,4 +759,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # `python -m agentd.main` 时本模块以 __main__ 运行，全局 store/runs 都挂在它上面；
+    # 而 scheduler._fire_job 触发时会 `from .main import run_agent_for_job`，若不做这步别名，
+    # Python 会把 agentd.main 当一个全新模块再执行一遍，那个副本里 store=None，定时任务
+    # 一触发就 AttributeError。这里强制让具名模块指向 __main__，两份代码共享同一份全局状态。
+    import sys
+
+    sys.modules["agentd.main"] = sys.modules[__name__]
     main()

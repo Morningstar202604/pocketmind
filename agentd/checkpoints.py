@@ -9,6 +9,7 @@ P1-5：记录存储由手写同步 sqlite3 改为 SQLAlchemy 2.0 异步引擎（
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -116,6 +117,28 @@ class CheckpointStore:
             pass
 
 
+def _restore_file(backup: str, path: str, kind: str) -> dict:
+    """同步磁盘还原：在 to_thread 线程池里跑，不阻塞事件循环（ASYNC240）。"""
+    import shutil
+
+    backup_p = Path(backup)
+    target_p = Path(path)
+    if not backup_p.exists():
+        return {"error": "备份文件已丢失，无法撤销"}
+    try:
+        # 还原：目标若是新文件（kind=restore 删除场景）→ 写回；覆盖场景 → 先清再写
+        if target_p.exists() and kind == "overwrite":
+            if target_p.is_dir():
+                shutil.rmtree(target_p, ignore_errors=True)
+            else:
+                target_p.unlink()
+        target_p.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup_p, target_p)
+        return {"restored": str(target_p)}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"撤销失败：{e}"}
+
+
 async def undo(store: CheckpointStore, session_id: str, tool_call_id: str) -> dict:
     """撤销一次已完成的文件类操作。"""
     ck = await store.find(session_id, tool_call_id)
@@ -123,22 +146,9 @@ async def undo(store: CheckpointStore, session_id: str, tool_call_id: str) -> di
         return {"error": "没有可撤销的操作（可能未备份或记录已删除）"}
     if ck["undone"]:
         return {"error": "该操作已撤销过"}
-    backup = Path(ck["backup"])
-    target = Path(ck["path"])
-    if not backup.exists():
-        return {"error": "备份文件已丢失，无法撤销"}
-    try:
-        import shutil
-
-        # 还原：目标若是新文件（kind=restore 删除场景）→ 写回；覆盖场景 → 先清再写
-        if target.exists() and ck["kind"] == "overwrite":
-            if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
-            else:
-                target.unlink()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(backup, target)
-        await store.mark_undone(ck["id"])
-        return {"ok": True, "restored": str(target), "tool": ck["tool_name"]}
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"撤销失败：{e}"}
+    # pathlib 存在性/删除/拷贝是阻塞磁盘 IO，丢到线程池里做
+    result = await asyncio.to_thread(_restore_file, ck["backup"], ck["path"], ck["kind"])
+    if "error" in result:
+        return result
+    await store.mark_undone(ck["id"])
+    return {"ok": True, "restored": result["restored"], "tool": ck["tool_name"]}

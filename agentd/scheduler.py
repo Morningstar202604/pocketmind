@@ -1,17 +1,26 @@
-"""定时/条件触发（P1）：APScheduler(AsyncIOScheduler) + 自管 SQLite 持久化。
+"""定时/条件触发：APScheduler(AsyncIOScheduler) + 官方 SQLAlchemyJobStore 持久化。
 
-不引入 SQLAlchemy（手机端轻量原则）：job 定义存 SQLite 自己的表，
-进程重启后从库恢复调度；APScheduler 只做内存里的时间引擎。
+设计要点（P2 重构）：
+1. 持久化改由 APScheduler 官方 SQLAlchemyJobStore 承担：job 的 trigger、func 引用、
+   args/kwargs 全部 pickle 进 SQLite（apscheduler_jobs 表），进程重启后自动恢复调度，
+   不再维护自写的 jobs 表。
+2. 回调必须是「模块级、可导入」的函数（SQLAlchemyJobStore 会按引用 pickle/unpickle），
+   因此定义顶层 ``_fire_job``；它只接收 job_id（位置参数）+ 字符串 kwargs，绝不绑定
+   持有 store/runs 的闭包。真正执行 agent 的逻辑放在 main.py 的顶层函数
+   ``run_agent_for_job``，触发时再延迟导入，避免循环依赖。
+3. 业务字段（message/session_id/condition/name/trigger_type/expr/created_at）全部塞进
+   job.kwargs（纯字符串），不新增扩展表，不改动 SQLAlchemyJobStore 的表结构。
+4. 「停用」用 APScheduler 的 pause_job/resume_job 表达：停用即 next_run_time=None，
+   持久化后重启仍保持停用状态。
 """
 from __future__ import annotations
 
-import asyncio
-import json
-import sqlite3
 import time
 import uuid
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -43,129 +52,77 @@ def parse_condition(cond: str) -> tuple[str, str, float] | None:
     return None
 
 
-class JobStore:
-    """job 定义的 SQLite 持久化（自管表，无需 SQLAlchemy）。"""
+async def _check_condition(cond: tuple[str, str, float]) -> bool:
+    """条件求值：读手机电量与阈值比较。读不到电池时视为满足（避免任务静默丢失）。"""
+    metric, op, value = cond
+    try:
+        from .tools.phone import get_battery  # 延迟导入避免循环
 
-    def __init__(self, db_path: str):
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                trigger_type TEXT NOT NULL,
-                expr TEXT NOT NULL,
-                message TEXT NOT NULL,
-                session_id TEXT DEFAULT '',
-                condition TEXT DEFAULT '',
-                enabled INTEGER DEFAULT 1,
-                created_at REAL NOT NULL
-            )"""
-        )
-        self._conn.commit()
+        info = await get_battery()
+        pct = float(info.get("percentage", 0))
+    except Exception:  # noqa: BLE001
+        return True
+    return {
+        "<": pct < value,
+        ">": pct > value,
+        "<=": pct <= value,
+        ">=": pct >= value,
+        "==": abs(pct - value) < 0.5,
+    }.get(op, True)
 
-    def list(self) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT id,name,trigger_type,expr,message,session_id,condition,enabled,created_at FROM jobs ORDER BY created_at DESC"
-        ).fetchall()
-        return [
-            {
-                "id": r[0],
-                "name": r[1],
-                "trigger_type": r[2],
-                "expr": r[3],
-                "message": r[4],
-                "session_id": r[5],
-                "condition": r[6],
-                "enabled": bool(r[7]),
-                "created_at": r[8],
-            }
-            for r in rows
-        ]
 
-    def get(self, jid: str) -> dict | None:
-        for j in self.list():
-            if j["id"] == jid:
-                return j
-        return None
+async def _fire_job(
+    job_id: str,
+    *,
+    message: str = "",
+    session_id: str = "",
+    condition: str = "",
+    name: str = "",
+    **_: object,
+) -> None:
+    """APScheduler 触发入口（模块级、可被 pickle 的回调）。
 
-    def add(self, job: dict) -> str:
-        jid = job.get("id") or uuid.uuid4().hex[:12]
-        self._conn.execute(
-            "INSERT INTO jobs (id,name,trigger_type,expr,message,session_id,condition,enabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                jid,
-                job["name"],
-                job["trigger_type"],
-                job["expr"],
-                job["message"],
-                job.get("session_id", ""),
-                job.get("condition", ""),
-                1 if job.get("enabled", True) else 0,
-                job.get("created_at", time.time()),
-            ),
-        )
-        self._conn.commit()
-        return jid
+    APScheduler 调用形式为 ``_fire_job(*args, **kwargs)``：args=[job_id]，其余业务字段
+    从 kwargs 解包。真正执行 agent 的是 main.py 顶层函数 ``run_agent_for_job``，此处
+    延迟导入以解开 main ↔ scheduler 的循环依赖。
+    """
+    from .notify import notify
 
-    def update(self, jid: str, patch: dict) -> bool:
-        fields = {
-            "name": "name",
-            "trigger_type": "trigger_type",
-            "expr": "expr",
-            "message": "message",
-            "session_id": "session_id",
-            "condition": "condition",
-            "enabled": "enabled",
-        }
-        sets, vals = [], []
-        for k, col in fields.items():
-            if k in patch:
-                v = patch[k]
-                if k == "enabled":
-                    v = 1 if v else 0
-                sets.append(f"{col}=?")
-                vals.append(v)
-        if not sets:
-            return False
-        vals.append(jid)
-        cur = self._conn.execute(f"UPDATE jobs SET {','.join(sets)} WHERE id=?", vals)
-        self._conn.commit()
-        return cur.rowcount > 0
+    # 条件触发：不满足则跳过本轮（仍发一条通知留痕）
+    parsed = parse_condition(condition)
+    if parsed:
+        ok = await _check_condition(parsed)
+        if not ok:
+            notify("口袋 Agent · 条件未满足", f"{name}：{condition}，本次跳过", persistent=False)
+            return
 
-    def delete(self, jid: str) -> bool:
-        cur = self._conn.execute("DELETE FROM jobs WHERE id=?", (jid,))
-        self._conn.commit()
-        return cur.rowcount > 0
+    notify("口袋 Agent · 定时任务", f"正在执行：{name}", persistent=False)
+    try:
+        from .main import run_agent_for_job  # 延迟导入：避免与 main.py 循环依赖
 
-    def delete_by_session(self, session_id: str) -> int:
-        """删除某会话下的全部任务（会话被删时级联清理）。"""
-        cur = self._conn.execute("DELETE FROM jobs WHERE session_id=?", (session_id,))
-        self._conn.commit()
-        return cur.rowcount
-
-    def close(self) -> None:
-        try:
-            self._conn.close()
-        except Exception:  # noqa: BLE001
-            pass
+        await run_agent_for_job(session_id, message)
+    except Exception:  # noqa: BLE001 —— 定时任务异常不能影响调度器
+        notify("口袋 Agent · 定时任务出错", name, persistent=False)
 
 
 class SchedulerService:
-    """包一层 AsyncIOScheduler：启动恢复 + CRUD 同步内存调度。"""
+    """AsyncIOScheduler + SQLAlchemyJobStore 的薄封装。
 
-    def __init__(
-        self,
-        store: JobStore,
-        run_cb: Callable[[str, str], Awaitable[None]],
-        notify_cb: Callable[[str, str], None] | None = None,
-    ):
-        self._store = store
-        self._run_cb = run_cb
-        self._notify = notify_cb or (lambda t, c: None)
-        self._sched = AsyncIOScheduler()
-        self._job_ids: set[str] = set()
+    对外保持 create/update/delete/list/get/delete_by_session/start/shutdown 接口不变，
+    main.py 路由层无需感知底层从「自管 sqlite」换成了「官方 JobStore」。
+    """
 
-    def _make_trigger(self, job: dict):
+    def __init__(self, db_path: str | Path, notify_cb: Callable[[str, str], None] | None = None):
+        # notify_cb 仅为兼容旧构造签名保留（当前 _fire_job 直接调 notify）；
+        # 传入时也无害，这里暂存以便将来扩展。
+        self._notify_cb = notify_cb or (lambda t, c: None)
+        # 官方 SQLAlchemyJobStore：url 形式内部自建同步 engine，表 apscheduler_jobs 自动创建
+        self._jobstore = SQLAlchemyJobStore(url=f"sqlite:///{db_path}")
+        self._sched = AsyncIOScheduler(jobstores={"default": self._jobstore})
+
+    # ---------- trigger 构造 ----------
+    @staticmethod
+    def _make_trigger(job: dict):
         tt = job["trigger_type"]
         if tt == "cron":
             return CronTrigger.from_crontab(job["expr"])
@@ -174,117 +131,93 @@ class SchedulerService:
         # date：一次性，格式 "YYYY-MM-DD HH:MM"
         return DateTrigger(run_date=job["expr"])
 
-    async def _fire(self, job_id: str) -> None:
-        job = self._store.get(job_id)
-        if not job or not job["enabled"]:
-            return
-        # 条件触发：满足才执行（如 battery < 20）
-        cond = parse_condition(job["condition"])
-        if cond:
-            ok = await self._check_condition(cond)
-            if not ok:
-                self._notify("口袋 Agent · 条件未满足", f"{job['name']}：{job['condition']}，本次跳过")
-                return
-        self._notify("口袋 Agent · 定时任务", f"正在执行：{job['name']}")
-        try:
-            await self._run_cb(job["session_id"] or "", job["message"])
-        except Exception:  # noqa: BLE001 —— 定时任务异常不能影响调度器
-            self._notify("口袋 Agent · 定时任务出错", job["name"])
-
-    async def _check_condition(self, cond: tuple[str, str, float]) -> bool:
-        metric, op, value = cond
-        try:
-            from .tools.phone import get_battery  # 延迟导入避免循环
-
-            info = await get_battery()
-            pct = float(info.get("percentage", 0))
-        except Exception:  # noqa: BLE001
-            return True  # 读不到电池时视为满足（避免任务静默丢失）
+    # ---------- job ↔ dict 转换 ----------
+    @staticmethod
+    def _job_to_dict(job) -> dict:
+        """把 APScheduler Job 对象转成对外 dict（字段与旧自管 JobStore 对齐）。"""
+        kw = dict(job.kwargs or {})
+        nrt = job.next_run_time
         return {
-            "<": pct < value,
-            ">": pct > value,
-            "<=": pct <= value,
-            ">=": pct >= value,
-            "==": abs(pct - value) < 0.5,
-        }.get(op, True)
+            "id": job.id,
+            "name": kw.get("name", job.id),
+            "trigger_type": kw.get("trigger_type", ""),
+            "expr": kw.get("expr", ""),
+            "message": kw.get("message", ""),
+            "session_id": kw.get("session_id", ""),
+            "condition": kw.get("condition", ""),
+            # 停用任务被 pause 后 next_run_time 为 None
+            "enabled": nrt is not None,
+            "created_at": kw.get("created_at", 0),
+            "next_run": nrt.isoformat() if nrt else None,
+        }
 
+    # ---------- 公共 CRUD（接口与旧实现一致） ----------
     def start(self) -> None:
-        for job in self._store.list():
-            if job["enabled"]:
-                self._schedule(job)
+        """启动调度器：SQLAlchemyJobStore 自动加载已持久化的 job，未停用者恢复触发。"""
         if not self._sched.running:
             self._sched.start()
 
-    def _schedule(self, job: dict) -> None:
-        if job["id"] in self._job_ids:
-            return
-        try:
-            self._sched.add_job(
-                self._fire,
-                trigger=self._make_trigger(job),
-                id=job["id"],
-                args=[job["id"]],
-                replace_existing=True,
-                misfire_grace_time=300,
-            )
-            self._job_ids.add(job["id"])
-        except Exception as e:  # noqa: BLE001 —— 非法表达式不阻塞启动
-            import sys
-            print(f"[agentd] 定时任务 {job['id']} 调度失败: {e}", file=sys.stderr)
+    def get(self, jid: str) -> dict | None:
+        job = self._sched.get_job(jid)
+        return self._job_to_dict(job) if job else None
+
+    def list(self) -> list[dict]:
+        return [self._job_to_dict(j) for j in self._sched.get_jobs()]
 
     def create(self, job: dict) -> dict:
-        jid = self._store.add(job)
-        stored = self._store.get(jid)
-        if stored and stored["enabled"]:
-            self._schedule(stored)
-        return stored
+        jid = job.get("id") or uuid.uuid4().hex[:12]
+        # 业务字段全部进 kwargs（纯字符串，可 pickle）；args 只放 job_id
+        kwargs = {
+            "message": job["message"],
+            "session_id": job.get("session_id", ""),
+            "condition": job.get("condition", ""),
+            "name": job["name"],
+            "trigger_type": job["trigger_type"],
+            "expr": job["expr"],
+            "created_at": job.get("created_at", time.time()),
+        }
+        self._sched.add_job(
+            _fire_job,
+            trigger=self._make_trigger(job),
+            id=jid,
+            args=[jid],
+            kwargs=kwargs,
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+        # 默认停用：立即 pause（next_run_time=None，持久化后重启仍停用）
+        if not job.get("enabled", True):
+            self._sched.pause_job(jid)
+        return self.get(jid)
 
     def update(self, jid: str, patch: dict) -> dict | None:
-        self._store.update(jid, patch)
-        job = self._store.get(jid)
-        if not job:
+        if self._sched.get_job(jid) is None:
             return None
-        # 内存调度同步：停旧的，按需加新的
-        try:
-            self._sched.remove_job(jid)
-        except Exception:  # noqa: BLE001
-            pass
-        self._job_ids.discard(jid)
-        if job["enabled"]:
-            self._schedule(job)
-        return job
+        if "enabled" in patch:
+            if patch["enabled"]:
+                self._sched.resume_job(jid)
+            else:
+                self._sched.pause_job(jid)
+        return self.get(jid)
 
     def delete(self, jid: str) -> bool:
         try:
             self._sched.remove_job(jid)
+            return True
         except Exception:  # noqa: BLE001
-            pass
-        self._job_ids.discard(jid)
-        return self._store.delete(jid)
+            return False
 
     def delete_by_session(self, session_id: str) -> int:
-        """删除某会话下全部任务（会话删除级联）：停内存调度 + 删库。"""
-        for j in self._store.list():
-            if j["session_id"] == session_id:
+        """删除某会话下全部任务（会话删除时级联清理）。"""
+        removed = 0
+        for job in self._sched.get_jobs():
+            if (job.kwargs or {}).get("session_id") == session_id:
                 try:
-                    self._sched.remove_job(j["id"])
+                    self._sched.remove_job(job.id)
+                    removed += 1
                 except Exception:  # noqa: BLE001
                     pass
-                self._job_ids.discard(j["id"])
-        return self._store.delete_by_session(session_id)
-
-    def list(self) -> list[dict]:
-        out = []
-        for j in self._store.list():
-            nxt = None
-            if j["enabled"]:
-                try:
-                    job = self._sched.get_job(j["id"])
-                    nxt = job.next_run_time.isoformat() if job and job.next_run_time else None
-                except Exception:  # noqa: BLE001
-                    pass
-            out.append({**j, "next_run": nxt})
-        return out
+        return removed
 
     def shutdown(self) -> None:
         try:
@@ -292,4 +225,11 @@ class SchedulerService:
                 self._sched.shutdown(wait=False)
         except Exception:  # noqa: BLE001
             pass
-        self._store.close()
+        try:
+            self._jobstore.engine.dispose()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# 便于类型标注：run_agent_for_job 的签名约定（main.py 提供实现）
+RunAgentForJob = Callable[[str, str], Awaitable[None]]
