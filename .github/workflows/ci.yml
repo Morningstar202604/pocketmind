@@ -11,6 +11,10 @@ jobs:
   backend:
     name: Backend (lint + test)
     runs-on: ubuntu-latest
+    env:
+      # 与各测试脚本默认值保持一致（tests/*.py 默认 /tmp/pa-test），
+      # 避免服务数据目录与测试检查目录错位
+      AGENT_HOME: /tmp/pa-test
     steps:
       - uses: actions/checkout@v5
 
@@ -41,8 +45,7 @@ jobs:
       - name: Start mock server
         run: |
           export PATH="/tmp/faketermux:$PATH"
-          export AGENT_HOME="/tmp/agent-ci-test"
-          rm -rf /tmp/agent-ci-test
+          rm -rf "$AGENT_HOME"
           nohup python -m agentd.main --mock --port 8799 > /tmp/agentd-ci.log 2>&1 &
           echo $! > /tmp/agentd-ci.pid
           for i in $(seq 1 15); do
@@ -76,7 +79,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: agentd/web/package-lock.json
 
@@ -129,7 +132,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: agentd/web/package-lock.json
 
