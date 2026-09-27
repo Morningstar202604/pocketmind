@@ -19,8 +19,8 @@ import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # 仅供类型提示，运行期不真正导入（可选依赖）
-    from .memory import Store
     from .config import Settings
+    from .memory import Store
 
 # 审批按钮动作白名单
 _ACTIONS = ("approve", "deny")
@@ -60,8 +60,8 @@ class TelegramGateway:
         self,
         token: str,
         chat_id: str,
-        store: "Store",
-        settings: "Settings",
+        store: Store,
+        settings: Settings,
         approval,
         mock: bool = False,
     ):
@@ -79,7 +79,6 @@ class TelegramGateway:
     # ---------------- 生命周期 ----------------
     async def start(self) -> None:
         """构建 Application 并开始长轮询。未安装 ptb 时抛 ImportError，由 main.py 兜底。"""
-        from telegram import Update
         from telegram.ext import (
             ApplicationBuilder,
             CallbackQueryHandler,

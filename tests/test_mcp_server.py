@@ -58,7 +58,7 @@ async def run():
         return {"ok": True, "echo": args}
 
     with mock.patch("agentd.mcp_server.call_tool", side_effect=fake_call_tool):
-        result = await mcp.call_tool("get_battery", {})
+        await mcp.call_tool("get_battery", {})
     check("调用工具转发到 call_tool", captured.get("name") == "get_battery", str(captured))
     check("无参工具入参为空 dict", captured.get("args") == {}, str(captured))
 
