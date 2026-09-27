@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend (lint + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: agentd/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r agentd/requirements.txt
+          pip install ruff pytest pytest-asyncio
+
+      - name: Compile check
+        run: python -m compileall agentd/ -q
+
+      - name: Ruff lint
+        run: ruff check agentd/ tests/ --exit-zero
+
+      - name: Set up faketermux stubs
+        run: bash tests/setup_faketermux.sh
+
+      - name: Start mock server
+        run: |
+          export PATH="/tmp/faketermux:$PATH"
+          export AGENT_HOME="/tmp/agent-ci-test"
+          python -m agentd.main --mock --port 8799 &
+          sleep 3
+          curl -sf http://127.0.0.1:8799/api/health
+
+      - name: Run regression tests
+        run: |
+          python tests/m5_regression.py
+          python tests/p0_queue_test.py
+          python tests/p1_jobs_test.py
+
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agentd/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: agentd/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc -b --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify dist freshness
+        run: |
+          # 确保提交的 dist 与 src 构建产物一致（手机端零 Node 构建，dist 入库）
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ 与 src 构建产物不一致，请重新 build 并提交"
+            git diff --stat dist/
+            exit 1
+          fi

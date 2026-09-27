@@ -19,6 +19,7 @@ import asyncio
 import json
 import shutil
 import time
+from pathlib import Path
 from typing import Any
 
 from . import Tool, register
@@ -430,7 +431,7 @@ async def take_photo(output: str = "") -> dict:
     b = _bin("termux-camera-photo")
     if not b:
         return _unavailable("termux-camera-photo")
-    path = output or f"$HOME/storage/pictures/agent-{int(time.time())}.jpg"
+    path = output or str(Path.home() / "storage" / "pictures" / f"agent-{int(time.time())}.jpg")
     try:
         code, out, err = await _run([b, "-c", "0", "-o", str(path)], timeout=30)
     except asyncio.TimeoutError:
@@ -446,7 +447,7 @@ async def share_text(text: str, title: str = "") -> dict:
         return _unavailable("termux-share")
     args = [b, "-a", "android.intent.action.SEND"]
     if title:
-        args += ["-t", "text/plain"]
+        args += ["-t", str(title)]
     try:
         await _run(args, input_text=str(text))
         return _ok()
@@ -458,7 +459,7 @@ async def download_file(url: str, output: str = "") -> dict:
     b = _bin("termux-download")
     if not b:
         return _unavailable("termux-download")
-    path = output or "$HOME/storage/downloads"
+    path = output or str(Path.home() / "storage" / "downloads")
     try:
         await _run([b, "-o", str(path), str(url)], timeout=60)
         return _ok(url=url, saved_to=str(path))

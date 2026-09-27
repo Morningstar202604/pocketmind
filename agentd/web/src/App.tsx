@@ -120,6 +120,7 @@ export default function App() {
   const [showTimers, setShowTimers] = useState(false);
   const [theme, setTheme] = useState<ThemePref>(getThemePref);
   const abortRef = useRef<AbortController | null>(null);
+  const msgsRef = useRef<HTMLDivElement>(null);
 
   // system 模式下跟随系统主题切换
   useEffect(() => {
@@ -129,6 +130,12 @@ export default function App() {
     mq.addEventListener("change", fn);
     return () => mq.removeEventListener("change", fn);
   }, [theme]);
+
+  // 消息列表自动滚动到底部（流式输出时跟随）
+  useEffect(() => {
+    const el = msgsRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -216,6 +223,9 @@ export default function App() {
         );
       }
     } finally {
+      // 兜底：SSE 正常结束但未收到 done 事件时（如连接中途断开/后端重启），
+      // 标记消息完成，避免永久停在"正在思考…"
+      setMessages((prev) => prev.map((m) => (m.id === aid && !m.done ? { ...m, done: true } : m)));
       abortRef.current = null;
     }
   };
@@ -367,7 +377,7 @@ export default function App() {
         {messages.length === 0 ? (
           <EmptyState onPick={(t) => void send(t)} ready={ready} />
         ) : (
-          <div className="msgs">
+          <div className="msgs" ref={msgsRef}>
             {messages.map((m) => (
               <MessageItem
                 key={m.id}

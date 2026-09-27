@@ -272,10 +272,10 @@ def create_app() -> FastAPI:
         elif store.get_session(session_id) is None:
             raise HTTPException(404, "会话不存在")
 
-        # 同一会话进行中：消息落库并入队，当前轮结束后自动执行（不再 409 拒绝）
+        # 同一会话进行中：消息入队，当前轮结束后由 run_agent → agent.chat 统一落库执行
+        # （不在此重复 add_message，否则 agent.chat:166 会再写一次导致重复）
         if session_id in runs:
             runs[session_id].setdefault("pending", []).append(message)
-            store.add_message(session_id, "user", message)
             sid = session_id
 
             async def queued_sse():
@@ -493,7 +493,7 @@ def create_app() -> FastAPI:
             "connected": [
                 {
                     "name": c.name,
-                    "tools": [t.name for t in c.tools] if hasattr(c, "tools") else [],
+                    "tools": c.tools if hasattr(c, "tools") and isinstance(c.tools, list) else [],
                 }
                 for c in mcp_clients
             ],

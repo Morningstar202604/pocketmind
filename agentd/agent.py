@@ -160,8 +160,23 @@ class Agent:
         summary = self.store.get_summary(session_id)
         if summary:
             messages.append({"role": "system", "content": f"此前对话摘要：{summary}"})
+        # 恢复历史消息：从 meta 反序列化 tool_calls / tool_call_id，
+        # 否则重启后孤立的 role:"tool" 消息会让 OpenAI 兼容 API 返回 400。
         for m in self.store.get_messages(session_id):
-            messages.append({"role": m["role"], "content": m["content"] or ""})
+            msg: dict = {"role": m["role"], "content": m["content"] or ""}
+            meta = m.get("meta") or {}
+            if m["role"] == "assistant" and meta.get("tool_calls"):
+                msg["tool_calls"] = [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {"name": c["name"], "arguments": c.get("args", "{}")},
+                    }
+                    for c in meta["tool_calls"]
+                ]
+            elif m["role"] == "tool" and meta.get("tool_call_id"):
+                msg["tool_call_id"] = meta["tool_call_id"]
+            messages.append(msg)
         messages.append({"role": "user", "content": message})
         self.store.add_message(session_id, "user", message)
 

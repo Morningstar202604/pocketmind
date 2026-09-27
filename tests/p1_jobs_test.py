@@ -22,14 +22,27 @@ check("初始无任务", r["jobs"] == [], str(r))
 j = req("POST", "/api/jobs", {"name": "电池巡检", "trigger_type": "interval", "expr": "5", "message": "看一下电池电量", "condition": "battery < 100"})
 jid = j["id"]
 check("创建任务", j["name"] == "电池巡检" and j["enabled"], j)
-# 3. 等待触发（5s 间隔 + 余量）
-time.sleep(10)
-sessions = req("GET", "/api/sessions")
-check("触发产生会话", len(sessions) >= 1, str(sessions))
-if sessions:
+# 3. 等待触发并轮询直到有会话完成（interval 任务可能多次触发，取第一个完成的）
+sessions = []
+found_result = False
+detail = ""
+for _ in range(20):  # 最多等 20s，每 1s 轮询
+    time.sleep(1)
+    sessions = req("GET", "/api/sessions")
+    if sessions:
+        for s in sessions:
+            msgs = req("GET", f"/api/sessions/{s['id']}/messages")
+            if any(m["role"] == "assistant" and "工具已执行完毕" in (m["content"] or "") for m in msgs):
+                found_result = True
+                break
+        if found_result:
+            break
+if not found_result and sessions:
     sid = sessions[0]["id"]
     msgs = req("GET", f"/api/sessions/{sid}/messages")
-    check("会话有执行结果", any(m["role"] == "assistant" and "工具已执行完毕" in (m["content"] or "") for m in msgs), str([m["content"][:20] for m in msgs]))
+    detail = str([m["content"][:20] for m in msgs])
+check("触发产生会话", len(sessions) >= 1, str(sessions))
+check("会话有执行结果", found_result, detail)
 # 4. 启停
 j2 = req("PUT", f"/api/jobs/{jid}", {"enabled": False})
 check("停用任务", j2["enabled"] is False)
