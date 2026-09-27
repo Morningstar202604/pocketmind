@@ -1,3 +1,7 @@
+// ⚠ 已废弃（legacy）：旧版 goose ACP 桥。依赖 goose 二进制（原沙箱路径
+//   /workspace/goose/target/release/goose），真机不可用。新版后端为 Python
+//   agentd（FastAPI + SSE，8787 端口），启动请用：bash web/start.sh
+//
 // 单端口服务器：静态站(dist/) + /api 轮询接口 + 内部连 goose ACP WS。
 // 浏览器只发短请求（静态资源 / health / chat / state 轮询），无 SSE、无长连接，
 // 彻底绕开预览代理对 wss/EventSource 不稳定的问题。

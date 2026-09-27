@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# 在 PC 上构建安卓 APK（Termux Agent 前端）
+# ⚠ 已废弃（legacy）：本脚本构建的是旧版 goose 架构的 Flutter APK
+#   （连接 ws://127.0.0.1:3284/acp）。当前新版后端为 Python agentd（SSE/8787），
+#   与此 APK 不兼容。推荐使用网页版：bash termux/start.sh
+#
+# 在 PC 上构建安卓 APK（旧版 Termux Agent 前端）
 # 依赖：自动安装 JDK + Android SDK + Flutter
 # 用法：
 #   bash build_apk.sh          # 构建 debug APK（可直接 adb install）
@@ -106,7 +110,10 @@ else
 fi
 
 echo ""
-echo "手机侧：先跑 termux/install.sh all 装好 goose + provider，"
+echo "⚠ 注意：本 APK 对应旧版 goose 后端（ACP/3284），与新版 agentd（SSE/8787）不兼容。"
+echo "  新版手机端使用：bash termux/start.sh → 浏览器打开 http://127.0.0.1:8787"
+echo ""
+echo "手机侧（旧版流程）：先跑 termux/install.legacy.sh 装好 goose + provider，"
 echo "启动后在 Termux 里执行:"
 echo "  source ~/.agent/termux.env && ~/.local/bin/goose serve --dangerously-unauthenticated"
 echo "然后打开本 APK，默认地址 ws://127.0.0.1:3284/acp 即可连接。"

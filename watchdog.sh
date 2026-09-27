@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# 看门狗：确保 goose serve (3284) 和单端口 web 服务器 (5173) 始终存活
+# ⚠ 已废弃（legacy）：本脚本属于旧版 goose 架构，硬编码 /workspace/... 路径，
+#   仅存在于原 AI 沙箱，真机不可用。新版系统为 Python agentd，请使用：
+#   bash termux/start.sh   或   bash web/start.sh
+#
+# 旧看门狗：确保 goose serve (3284) 和单端口 web 服务器 (5173) 始终存活
 # 每 20s 检查一次，挂了就重启。无 Vite、无 bridge 独立进程。
 
 # 若存在 .env（被 git 忽略，本地凭据），载入 LLM_API_KEY 等变量

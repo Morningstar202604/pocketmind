@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# ⚠ 已废弃（legacy）：旧版 goose 架构的安装脚本（编译 Rust goose，需 3GB 源码）。
+# 新版 agentd 使用：bash termux/install.sh（纯 Python，2-5 分钟）
 set -euo pipefail
 
 # One-shot install for the Android agent distribution on Termux.

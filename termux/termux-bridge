@@ -1,4 +1,8 @@
 #!/bin/bash
+# ⚠ 已废弃（legacy）：旧版 goose 架构的 termux-api 桥接。新版 agentd 已内置
+#   termux-api 调用（agentd/tools/phone.py，纯 Python，无 jq 依赖），无需本脚本。
+#   请使用：bash termux/start.sh
+#
 # termux-api bridge for the Android agent distribution.
 # Each function wraps a termux-api call and prints JSON so the agent can call it via shell.
 

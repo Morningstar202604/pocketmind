@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
-# 一键启动：拉起 goose（ACP）+ 网页版 node 服务
-# 用法: bash web/start.sh [端口默认5173]
-# 前置: 已安装 node、已配置 LLM_API_KEY（见 .env 或 web/settings.json）
-set -e
+# 口袋 Agent · 网页版一键启动（新版 agentd 后端）
+#
+# 注意：本文件已随项目重构改为启动 agentd（Python FastAPI）。
+# 旧版 goose ACP 桥（node web/server.mjs）已废弃，其二进制路径仅存在于原 AI 沙箱，
+# 在真机上无法运行，勿再使用。
+#
+# 用法:
+#   bash web/start.sh                # 本机访问 http://127.0.0.1:8787
+#   bash web/start.sh 8788           # 自定义端口
+#   bash web/start.sh 8787 --lan     # 局域网访问（需先在设置里配置访问令牌）
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PORT="${1:-5173}"
-
-# 1) 载入 .env（如果存在），否则从 web/settings.json 取 key
-if [ -f .env ]; then
-  set -a; . ./.env; set +a
-fi
-if [ -z "$LLM_API_KEY" ] && [ -f web/settings.json ]; then
-  LLM_API_KEY="$(node -e 'try{console.log(require("./web/settings.json").apiKey||"")}catch(e){}' )"
-  export LLM_API_KEY
+PORT="${1:-8787}"
+EXTRA=""
+if [ "${2:-}" = "--lan" ]; then
+  EXTRA="--lan"
+  echo "⚠ 局域网模式：请确认已在页面设置里配置访问令牌，否则任何设备都能调用本服务。"
 fi
 
-# 2) 依赖检查
-command -v node >/dev/null 2>&1 || { echo "需要 node (npm i -g nodejs / 装 node)"; exit 1; }
-[ -d web/node_modules ] || { echo "安装前端依赖..."; (cd web && npm install); }
-
-# 3) 前端构建（server.mjs 直接托管 dist/）
-if [ ! -f web/dist/index.html ]; then
-  echo "构建前端 dist..."
-  (cd web && ./node_modules/.bin/vite build)
+PY="$(command -v python3 || command -v python || true)"
+if [ -z "$PY" ]; then
+  echo "✗ 未找到 python3/python，请先安装 Python 3.10+" >&2
+  exit 1
 fi
 
-# 4) 起 node 服务（server.mjs 会自管 goose 进程，读 web/settings.json + LLM_API_KEY）
-echo "启动 node 服务 (端口 $PORT, goose 自管理)..."
-exec env PORT="$PORT" node web/server.mjs
+echo "启动口袋 Agent（端口 $PORT）..."
+echo "浏览器打开 http://127.0.0.1:$PORT"
+exec "$PY" -m agentd.main --port "$PORT" $EXTRA

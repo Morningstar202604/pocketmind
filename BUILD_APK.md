@@ -1,5 +1,11 @@
 # 构建 Termux Agent 安卓 APK
 
+> ⚠ **重要提示（已废弃）**：本 `app/`（Flutter）属于重构前的旧版 goose 架构，
+> APK 默认连接旧后端 ACP（`ws://127.0.0.1:3284/acp`）。当前新版后端是 Python
+> agentd（FastAPI + SSE，端口 8787），**没有 ACP 服务**，此 APK 与新后端不兼容。
+> **推荐入口：网页版 / PWA**（`bash termux/start.sh` → 浏览器打开 8787，可"安装到主屏"）。
+> 以下内容仅作为旧版构建流程的参考。
+
 本仓库提供 `app/scripts/build_apk.sh` 一键脚本，自动安装 JDK、Android SDK、Flutter 并构建 APK。
 
 ## 本地构建
