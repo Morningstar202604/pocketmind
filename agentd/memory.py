@@ -25,6 +25,7 @@ class Store:
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self._fts = False  # FTS5 是否可用（编译进 sqlite 且建表成功才为 True）
         self._migrate()
         self._secure_files()
 
@@ -79,6 +80,47 @@ class Store:
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_mem_sid ON memory(session_id, kind)")
         self.conn.commit()
+        self._init_fts()
+
+    def _init_fts(self) -> None:
+        """建立 FTS5 虚拟表 memories_fts 并回填旧摘要。
+
+        用 trigram 分词器以支持中文子串匹配（3 字以上）；若当前 sqlite 未编译
+        FTS5/trigram 则静默降级，self._fts=False，搜索自动回退 LIKE。
+        """
+        try:
+            self.conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    content,
+                    session_id UNINDEXED,
+                    kind UNINDEXED,
+                    created_at UNINDEXED,
+                    tokenize='trigram'
+                )
+                """
+            )
+            self.conn.commit()
+            self._fts = True
+            self._backfill_fts()
+        except Exception:  # noqa: BLE001 —— FTS 不可用不影响主流程
+            self._fts = False
+
+    def _backfill_fts(self) -> None:
+        """把 memory 表里已存在、但尚未进 FTS 索引的摘要补进去（幂等）。"""
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO memories_fts(rowid, content, session_id, kind, created_at)
+                SELECT m.id, m.content, m.session_id, m.kind, m.created_at
+                FROM memory m
+                WHERE m.kind='summary'
+                  AND NOT EXISTS (SELECT 1 FROM memories_fts f WHERE f.rowid = m.id)
+                """
+            )
+            self.conn.commit()
+        except Exception:  # noqa: BLE001
+            self._fts = False
 
     # ---------- 会话 ----------
     def create_session(self, title: str = "新会话") -> str:
@@ -124,6 +166,8 @@ class Store:
     def delete_session(self, sid: str) -> bool:
         self.conn.execute("DELETE FROM messages WHERE session_id=?", (sid,))
         self.conn.execute("DELETE FROM memory WHERE session_id=?", (sid,))
+        if self._fts:
+            self.conn.execute("DELETE FROM memories_fts WHERE session_id=?", (sid,))
         cur = self.conn.execute("DELETE FROM sessions WHERE id=?", (sid,))
         self.conn.commit()
         return cur.rowcount > 0
@@ -132,6 +176,8 @@ class Store:
         self.conn.execute("DELETE FROM messages")
         self.conn.execute("DELETE FROM sessions")
         self.conn.execute("DELETE FROM memory")
+        if self._fts:
+            self.conn.execute("DELETE FROM memories_fts")
         self.conn.commit()
 
     # ---------- 消息 ----------
@@ -173,10 +219,19 @@ class Store:
         if not summary:
             return
         self.conn.execute("DELETE FROM memory WHERE session_id=? AND kind='summary'", (sid,))
-        self.conn.execute(
+        if self._fts:
+            # 同步清掉该会话旧摘要的 FTS 索引（rowid 即将变化）
+            self.conn.execute("DELETE FROM memories_fts WHERE session_id=? AND kind='summary'", (sid,))
+        cur = self.conn.execute(
             "INSERT INTO memory(session_id, kind, content, created_at) VALUES (?,?,?,?)",
             (sid, "summary", summary, _now()),
         )
+        if self._fts:
+            # 写入记忆时同步写 FTS 索引（rowid 与 memory.id 对齐）
+            self.conn.execute(
+                "INSERT INTO memories_fts(rowid, content, session_id, kind, created_at) VALUES (?,?,?,?,?)",
+                (cur.lastrowid, summary, sid, "summary", _now()),
+            )
         self.conn.commit()
 
     def get_summary(self, sid: str) -> str | None:
@@ -187,26 +242,58 @@ class Store:
         return r["content"] if r else None
 
     # ---------- 相关历史记忆（P1：跨会话回忆） ----------
-    def search_memories(self, query: str, limit: int = 3, exclude_session: str | None = None) -> list[dict]:
-        """按关键词检索此前对话摘要（SQLite 原生 LIKE，零新依赖）。
+    @staticmethod
+    def _fts_phrase(word: str) -> str:
+        """把关键词包成 FTS5 短语查询（双引号包裹、内部双引号转义），避免特殊字符破坏 MATCH 语法。"""
+        return '"' + word.replace('"', '""') + '"'
 
-        关键词提取：英文/数字词（>2 位）+ 中文按标点切块（>1 字）。
-        数据量小（每会话一条摘要），LIKE 足够快；FTS5/sqlite-vec 留作可选扩展。
-        """
-        words = self._keywords(query)
-        if not words:
-            return []
+    def _like_search(self, words: list[str], limit: int, exclude_session: str | None) -> list:
+        """旧版 LIKE 子串检索：作为 FTS 不可用 / 未命中时的降级路径。"""
         conds, args = [], []
         for w in words:
             conds.append("content LIKE ?")
             args.append(f"%{w}%")
+        sql = (
+            "SELECT session_id, content, created_at FROM memory "
+            "WHERE kind='summary' AND (" + " OR ".join(conds) + ")"
+        )
         if exclude_session:
-            conds.append("session_id != ?")
+            # 排除条件必须是独立 AND（不能并入上面的 OR 分组，否则会把其它会话
+            # 的全部摘要都带出来——这是原实现的一个 latent bug，这里一并修正）
+            sql += " AND session_id != ?"
             args.append(exclude_session)
-        rows = self.conn.execute(
-            f"SELECT session_id, content, created_at FROM memory WHERE kind='summary' AND ({' OR '.join(conds)}) ORDER BY created_at DESC LIMIT ?",
-            (*args, limit),
-        ).fetchall()
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        return self.conn.execute(sql, (*args, limit)).fetchall()
+
+    def search_memories(self, query: str, limit: int = 3, exclude_session: str | None = None) -> list[dict]:
+        """按关键词检索此前对话摘要。
+
+        P1-3：优先用 FTS5 MATCH（trigram 支持中文子串，比 LIKE 快且支持全文打分）；
+        FTS 不可用 / 语法异常 / 未命中时自动回退到 LIKE 子串检索，保证召回不丢。
+        接口签名与返回格式与原实现完全一致。
+        """
+        words = self._keywords(query)
+        if not words:
+            return []
+        rows: list = []
+        if self._fts:
+            try:
+                # 多词 OR 联合匹配
+                match = " OR ".join(self._fts_phrase(w) for w in words)
+                sql = (
+                    "SELECT session_id, content, created_at FROM memories_fts "
+                    "WHERE memories_fts MATCH ? AND kind='summary'"
+                )
+                args: list = [match]
+                if exclude_session:
+                    sql += " AND session_id != ?"
+                    args.append(exclude_session)
+                sql += " ORDER BY created_at DESC LIMIT ?"
+                rows = self.conn.execute(sql, (*args, limit)).fetchall()
+            except Exception:  # noqa: BLE001 —— FTS 查询异常则回退 LIKE
+                rows = []
+        if not rows:
+            rows = self._like_search(words, limit, exclude_session)
         return [dict(r) for r in rows]
 
     @staticmethod
