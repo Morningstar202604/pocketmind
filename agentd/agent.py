@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from . import permissions
 from .memory import Store
@@ -204,6 +204,25 @@ class Agent:
                                     acc["args"] += tc.function.arguments
             except asyncio.CancelledError:
                 raise
+
+            # ---------- Plan 模式：首轮输出后即停止，不执行任何工具 ----------
+            # 参考 Cline Plan/Act：先把「计划文本 + 打算调用的工具」交给用户确认，
+            # 用户切到 act 模式（或下一轮）才真正执行。tool_calls 一律不执行，只随计划透出。
+            if self.settings.agent_mode() == "plan":
+                planned = [
+                    {"name": tc["name"], "arguments": tc["args"] or "{}"}
+                    for _, tc in sorted(tool_calls.items())
+                ]
+                plan_text = content_acc.strip()
+                if planned:
+                    calls_desc = "\n".join(f"· 调用 {c['name']}({c['arguments']})" for c in planned)
+                    plan_text = (f"{plan_text}\n\n计划调用工具：\n{calls_desc}" if plan_text
+                                 else f"计划调用工具：\n{calls_desc}")
+                # 计划本身作为一条 assistant 消息落库（不含 tool_calls，因为并未执行）
+                await self.store.add_message(session_id, "assistant", plan_text or "（无具体计划内容）")
+                await emit({"type": "plan", "plan": plan_text, "tool_calls": planned})
+                await emit({"type": "done", "stop_reason": "plan"})
+                return
 
             if not tool_calls:
                 text = content_acc.strip()

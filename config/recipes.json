@@ -1,0 +1,42 @@
+[
+  {
+    "id": "battery_check",
+    "name": "低电量提醒",
+    "description": "每 30 分钟巡检一次，电量低于 20% 时提醒充电",
+    "trigger_type": "interval",
+    "expr": "1800",
+    "message": "查看电池电量，如果低于20%就发通知提醒充电",
+    "condition": "battery < 20",
+    "enabled": true
+  },
+  {
+    "id": "daily_summary",
+    "name": "每日总结",
+    "description": "每天早上 8 点总结昨天的对话和待办",
+    "trigger_type": "cron",
+    "expr": "0 8 * * *",
+    "message": "总结一下昨天的对话和待办",
+    "condition": null,
+    "enabled": true
+  },
+  {
+    "id": "weather",
+    "name": "每日天气",
+    "description": "每天早上 7:30 播报今天天气",
+    "trigger_type": "cron",
+    "expr": "30 7 * * *",
+    "message": "查一下今天天气",
+    "condition": null,
+    "enabled": false
+  },
+  {
+    "id": "lunch_reminder",
+    "name": "午饭提醒",
+    "description": "每个工作日 12 点提醒吃饭",
+    "trigger_type": "cron",
+    "expr": "0 12 * * 1-5",
+    "message": "发个通知提醒我该吃午饭了",
+    "condition": null,
+    "enabled": false
+  }
+]

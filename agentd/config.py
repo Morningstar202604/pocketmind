@@ -82,7 +82,15 @@ DEFAULTS = {
     # auto = 全放行（不推荐） | approve = 写操作与危险操作需确认（推荐） | chat = 纯聊天（不调用工具）
     "permission_mode": "approve",
     # mcp：可选接入的 MCP 服务器 [{name, command, args}]（零依赖 stdio 客户端）
-    "server": {"allow_lan": False, "token": "", "approval_timeout": 120, "mcp": []},
+    # tg_token / tg_chat_id：可选的 Telegram 远程控制（token 属敏感信息，API 回传打码）
+    "server": {
+        "allow_lan": False,
+        "token": "",
+        "approval_timeout": 120,
+        "mcp": [],
+        "tg_token": "",
+        "tg_chat_id": "",
+    },
     # 用户长期偏好：跨会话注入 system（存在本机，零依赖）
     "user_prefs": "",
 }
@@ -134,6 +142,9 @@ class ServerSettings(BaseModel):
     token: str = ""
     approval_timeout: int = 120
     mcp: list[MCPServerCfg] = []
+    # Telegram 远程控制：bot token 与允许访问的 chat_id 白名单（均留空即不启用）
+    tg_token: str = ""
+    tg_chat_id: str = ""
 
     @field_validator("approval_timeout", mode="before")
     @classmethod
@@ -155,6 +166,9 @@ class AppSettings(BaseSettings):
 
     llm: LLMSettings = LLMSettings()
     permission_mode: Literal["auto", "approve", "chat"] = "approve"
+    # plan = 先输出计划文本并停止，用户确认后再执行（参考 Cline Plan/Act）
+    # act  = 现状，直接执行工具
+    agent_mode: Literal["plan", "act"] = "act"
     server: ServerSettings = ServerSettings()
     user_prefs: str = ""
 
@@ -178,9 +192,16 @@ class Settings:
             if self.path.exists():
                 loaded = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
-                    self.data = self._coerce(self._merge(dict(DEFAULTS), loaded))
+                    self.data = self._merge(dict(DEFAULTS), loaded)
+                else:
+                    self.data = dict(DEFAULTS)
+            else:
+                self.data = dict(DEFAULTS)
         except Exception:
             self.data = dict(DEFAULTS)
+        # 无论是否已有配置文件，都过一遍 pydantic 模型：补齐新字段默认值（如 agent_mode）、
+        # 收敛类型。否则首次启动（无 config.json）时新增字段会缺失。
+        self.data = self._coerce(self.data)
 
     @staticmethod
     def _merge(base: dict, patch: dict) -> dict:
@@ -229,6 +250,11 @@ class Settings:
     def permission_mode(self) -> str:
         m = self.data.get("permission_mode", "approve")
         return m if m in ("auto", "approve", "chat") else "approve"
+
+    def agent_mode(self) -> str:
+        """plan / act；非法值回退到 act（直接执行，保持现状不阻塞）。"""
+        m = self.data.get("agent_mode", "act")
+        return m if m in ("plan", "act") else "act"
 
 
 def mask_key(key: str) -> str:
