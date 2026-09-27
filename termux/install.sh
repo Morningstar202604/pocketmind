@@ -6,8 +6,9 @@
 #   git clone <本仓库地址>
 #   cd termux-agent && bash termux/install.sh
 #
-# 安装内容（约 2-5 分钟，无需编译任何 Rust）：
-#   1. Python 3              pkg install python
+# 安装内容（约 3-8 分钟；pydantic-core 在 Termux 上需用 Rust 现场编译一次）：
+#   1. Python 3 + 编译工具   pkg install python git rust binutils build-essential
+#      （pydantic-core 是 Rust 写的，Termux/aarch64 无预编译 wheel，必须本地编译）
 #   2. termux-api            手机能力桥（通知/剪贴板/电量/短信/电话…）
 #   3. pip 依赖               fastapi / uvicorn / openai / apscheduler
 #   4. 数据目录               $HOME/.agent/termux-agent（权限 700，仅自己可读）
@@ -20,7 +21,10 @@ step() { echo ""; echo "== $1 =="; }
 
 step "1/4 检查 Termux 基础组件"
 command -v pkg >/dev/null 2>&1 || { echo "❌ 请先在 Termux 里执行：pkg install termux-tools"; exit 1; }
-command -v python >/dev/null 2>&1 || { echo "安装 Python 3..."; pkg install -y python; }
+# python/git/编译工具链：pydantic-core(Rust) 与可能的 C 扩展需要 rust + binutils + build-essential
+for pkg_name in python git rust binutils build-essential; do
+  command -v "$pkg_name" >/dev/null 2>&1 || { echo "安装 $pkg_name..."; pkg install -y "$pkg_name"; }
+done
 if ! command -v termux-notification >/dev/null 2>&1; then
   echo "安装 termux-api（手机能力桥）..."
   pkg install -y termux-api
@@ -33,7 +37,13 @@ python --version
 
 step "2/4 安装 Python 依赖"
 python -m pip install --upgrade pip -q
-python -m pip install -r agentd/requirements.txt -q
+# Termux 新版 Python 3.12 可能标记为 externally-managed（PEP 668）：
+# 先按普通方式装，失败再回退 --break-system-packages（Termux 的 Python 即用户自己的环境，
+# 没有 root 系统 Python，加该参数是安全且常规的做法）。
+if ! python -m pip install -r agentd/requirements.txt -q; then
+  echo "首次 pip 安装失败（可能是 externally-managed），改用 --break-system-packages 重试..."
+  python -m pip install --break-system-packages -r agentd/requirements.txt -q
+fi
 
 step "3/4 初始化数据目录（权限 700，仅自己可读）"
 DATA_DIR="$HOME/.agent/termux-agent"

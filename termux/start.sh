@@ -16,4 +16,13 @@ if [ "${2:-}" = "--lan" ]; then
 fi
 
 echo "启动口袋 Agent（端口 $PORT）..."
-exec python -m agentd.main --port "$PORT" $EXTRA
+# 唤醒锁：阻止 CPU 在锁屏后休眠（否则定时任务/工具回调会被系统冻结）。
+# 退出时务必释放，避免空耗电池；termux-wake-lock 不存在（非 Termux）时静默跳过。
+WAKE=0
+if command -v termux-wake-lock >/dev/null 2>&1; then
+  termux-wake-lock && WAKE=1
+fi
+cleanup() { [ "$WAKE" = 1 ] && command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock; }
+trap cleanup EXIT INT TERM
+
+python -m agentd.main --port "$PORT" $EXTRA
