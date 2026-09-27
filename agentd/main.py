@@ -80,6 +80,14 @@ class ApprovalCenter:
             return "allow"
         return "deny"
 
+    def is_auto_allowed(self, session_id: str, tool_name: str) -> bool:
+        """该工具是否已被用户「始终允许」。
+
+        供 ask 闭包在弹审批卡之前查询：已始终允许的工具直接放行，不再向前端
+        emit 一张「其实已自动批准」的幽灵审批卡（否则用户会看到一张点了就 404 的卡）。
+        """
+        return tool_name in self._always.get(session_id, set())
+
     def decide(self, session_id: str, tool_call_id: str, decision: str) -> bool:
         gate = self._gates.get((session_id, tool_call_id))
         if not gate:
@@ -161,6 +169,11 @@ async def run_agent(session_id: str, message: str) -> None:
         agent = Agent(store, settings_mgr, mock=MOCK)
 
         async def ask(tid: str, name: str, summary: str, risk: str) -> str:
+            # 已「始终允许」的工具：不再弹审批卡、不注册 gate，直接放行。
+            # 必须在 emit 之前判断——否则前端会收到一张早已自动批准的幽灵审批卡，
+            # 用户点同意时 gate 已不存在（404），体验上是「卡了一下又消失」。
+            if approval.is_auto_allowed(session_id, name):
+                return "allow"
             emit = emit_now(session_id)
             if emit:
                 await emit(
