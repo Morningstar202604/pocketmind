@@ -1,5 +1,8 @@
 fastapi>=0.115
-uvicorn[standard]>=0.30
+# 注意：不要用 uvicorn[standard]。[standard] 会拉入 uvloop / httptools——二者在
+# Termux(aarch64/bionic) 上没有可用 wheel，必须本地编译，极易失败。本机低并发场景
+# 下 uvicorn 自带的纯 Python h11 完全够用，因此这里只装裸 uvicorn。
+uvicorn>=0.30
 openai>=1.40
 apscheduler>=3.10
 sse-starlette>=2.1
@@ -7,6 +10,8 @@ pydantic-settings>=2.0
 mcp>=1.0
 sqlalchemy[asyncio]>=2.0
 aiosqlite>=0.19
+# fastapi 传递依赖：python-multipart 0.0.20 有多个 CVE（PYSEC-2026-*），这里显式抬地板
+python-multipart>=0.0.31
 
 # 可选：离线语音（不装不影响主功能，见 termux/voice.md）
 # sherpa-onnx
