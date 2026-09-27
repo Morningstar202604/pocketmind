@@ -57,10 +57,12 @@ async def _check_condition(cond: tuple[str, str, float]) -> bool:
     """条件求值：读手机电量与阈值比较。读不到电池时视为满足（避免任务静默丢失）。"""
     metric, op, value = cond
     try:
-        from .tools.phone import get_battery  # 延迟导入避免循环
+        # phone.py 里函数名是 battery()，注册的工具名才是 "get_battery"；
+        # 必须按实际函数名导入，否则 ImportError 会被下面的 except 吞掉、条件恒为 True。
+        from .tools.phone import battery as get_battery
 
         info = await get_battery()
-        pct = float(info.get("percentage", 0))
+        pct = float(info.get("percentage") or 0)
     except Exception:  # noqa: BLE001
         return True
     return {
