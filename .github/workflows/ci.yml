@@ -100,3 +100,48 @@ jobs:
             git diff --stat dist/
             exit 1
           fi
+
+  # E2E（Playwright）：浏览器下载较重，默认不随 PR/push 跑，
+  # 只在 workflow_dispatch（Actions 页面手动触发）时执行，避免拖慢常规 CI。
+  e2e:
+    name: E2E (Playwright, manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agentd/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: agentd/requirements.txt
+
+      - name: Install backend deps
+        run: pip install -r agentd/requirements.txt
+
+      - name: Set up faketermux stubs
+        run: bash tests/setup_faketermux.sh
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: agentd/web/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E
+        run: npm run test:e2e
+        env:
+          # webServer 会从仓库根目录启动 mock 后端；PATH 前置 faketermux 桩
+          AGENT_HOME: /tmp/agentd-e2e
+          PATH: /tmp/faketermux:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
