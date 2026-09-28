@@ -74,7 +74,7 @@ export interface Recipe {
 }
 
 /** 拉取全部配方及其应用状态。 */
-export const getRecipes = () => api.get<Recipe[]>("/api/recipes");
+export const getRecipes = () => api.get<{ recipes: Recipe[] }>("/api/recipes").then((d) => d.recipes);
 /** 一键应用配方，后端创建对应定时任务并返回 job。 */
 export const applyRecipe = (id: string) => api.post<Job>(`/api/recipes/${id}/apply`);
 
