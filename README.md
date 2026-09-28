@@ -1,10 +1,13 @@
 <div align="center">
-  <h1>termux-agent · 口袋 Agent</h1>
-  <p>在安卓手机（Termux）上运行的通用 AI Agent · Python agentd 后端 + React 网页前端，LLM 走外部 OpenAI 兼容 API</p>
+  <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
+  <h1>PocketMind · 口袋智灵</h1>
+  <p><b>口袋里能真正操作你手机的 always-on Agent</b> —— 本地优先 · 隐私保护 · Termux 原生</p>
+  <img src="https://img.shields.io/github/actions/workflow/status/X33834/termux-agent/ci.yml?branch=main&label=CI" alt="CI" />
+  <img src="https://img.shields.io/badge/tests-131%20backend%20%2B%2025%20frontend-green" alt="Tests" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
-  <img src="https://img.shields.io/badge/Language-Python-blue" alt="Language" />
-  <img src="https://img.shields.io/badge/UI-React_Web-8A2BE2" alt="UI" />
+  <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
   <br />
+  <sub>Web UI · PWA · MCP Server · Telegram 网关 · 定时配方 · Plan/Act 双模式</sub>
 </div>
 
 ---

@@ -28,7 +28,7 @@ AskApproval = Callable[[str, str, str, str], Awaitable[str]]  # (tool_call_id, n
 # （相同前缀命中后 token 费约 1 折，DeepSeek/豆包/百炼/Kimi 均支持）。
 # 注意：勿随意改动这里，改动会降低缓存命中率。
 SYSTEM_FIXED = (
-    "你是「口袋 Agent」，运行在用户 Android 手机的 Termux 环境里，可以调用手机能力"
+    "你是「口袋智灵」（PocketMind），运行在用户 Android 手机的 Termux 环境里，可以调用手机能力"
     "（短信、电话、定位、传感器、WiFi、通知、剪贴板、文件、shell 等）。\n"
     "原则：\n"
     "1. 用用户的语言回答（默认简体中文），简洁直接，不写废话。\n"

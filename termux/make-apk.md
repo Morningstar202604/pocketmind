@@ -1,4 +1,4 @@
-# 口袋 Agent · APK 打包方案
+# 口袋智灵 · APK 打包方案
 
 本产品是「Termux 本地服务 + 浏览器 Web UI」，**PWA（添加到主屏幕）就是它的
 "安装"形态，零构建、零体积开销**；下面两种路径按需选一。
@@ -15,7 +15,7 @@
 | Edge | 菜单 →「添加到手机」→「安装」 |
 | 其他 Chromium 内核 | 同样有「添加到主屏幕」 |
 
-安装后：主屏出现「口袋 Agent」图标（渐变口袋 Logo），独立全屏窗口运行，
+安装后：主屏出现「口袋智灵」图标（渐变口袋 Logo），独立全屏窗口运行，
 和 APK 体验一致。Service Worker 缓存了页面壳，断网重开也能秒开界面
 （工具调用时再连回本机服务）。
 
@@ -30,7 +30,7 @@
 2. File → Open → 选择 `termux/apk-shell/` 目录；
 3. Build → Generate Signed APK（首次需创建签名）或直接 Run 到手机调试；
 4. 把 APK 装到手机（`adb install` 或传到手机点击安装）；
-5. 手机上先 `bash termux/start.sh` 启动 agentd，再打开「口袋 Agent」App。
+5. 手机上先 `bash termux/start.sh` 启动 agentd，再打开「口袋智灵」App。
 
 ### 壳的安全细节
 

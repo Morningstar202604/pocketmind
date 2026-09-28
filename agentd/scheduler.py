@@ -97,17 +97,17 @@ async def _fire_job(
         ok = await _check_condition(parsed)
         if not ok:
             await notify_async(
-                "口袋 Agent · 条件未满足", f"{name}：{condition}，本次跳过", persistent=False
+                "口袋智灵 · 条件未满足", f"{name}：{condition}，本次跳过", persistent=False
             )
             return
 
-    await notify_async("口袋 Agent · 定时任务", f"正在执行：{name}", persistent=False)
+    await notify_async("口袋智灵 · 定时任务", f"正在执行：{name}", persistent=False)
     try:
         from .main import run_agent_for_job  # 延迟导入：避免与 main.py 循环依赖
 
         await run_agent_for_job(session_id, message)
     except Exception:  # noqa: BLE001 —— 定时任务异常不能影响调度器
-        await notify_async("口袋 Agent · 定时任务出错", name, persistent=False)
+        await notify_async("口袋智灵 · 定时任务出错", name, persistent=False)
 
 
 class SchedulerService:

@@ -156,7 +156,7 @@ export function MessageItem({
         <span className="avatar">
           <PocketLogo size={26} />
         </span>
-        <span className="agent-name">{msg.done ? "口袋 Agent" : "正在思考…"}</span>
+        <span className="agent-name">{msg.done ? "口袋智灵" : "正在思考…"}</span>
       </div>
       {msg.error && <div className="err-banner">{msg.error}</div>}
       {msg.queued && <div className="err-banner queued-banner">已排队：上一轮回复还在进行中，这条将在完成后自动执行。</div>}

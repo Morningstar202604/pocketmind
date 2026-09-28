@@ -1,4 +1,4 @@
-# 口袋 Agent · 快速开始（新版）
+# 口袋智灵 · 快速开始（新版）
 
 > 本仓库已按《审查报告与重构方案》完成 M1+M2+M3 重构：**Python agentd + FastAPI + 一套 Web UI**。
 > 旧实现（goose/Node/Flutter）已全部清理，本仓库仅保留新架构。

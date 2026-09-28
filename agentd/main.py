@@ -1,4 +1,4 @@
-"""口袋 Agent · agentd —— 手机上的本地智能体服务（单进程）。
+"""口袋智灵 · agentd —— 手机上的本地智能体服务（单进程）。
 
 启动：
   python -m agentd.main                     # 本机访问，端口 8787
@@ -43,7 +43,7 @@ def _sse_event(ev: dict) -> ServerSentEvent:
 
 
 VERSION = "0.2.0"
-APP_NAME = "口袋 Agent"
+APP_NAME = "口袋智灵"
 
 DIST = Path(__file__).parent / "web" / "dist"
 
@@ -152,7 +152,7 @@ def _notify_bg(title: str, content: str, persistent: bool = False) -> None:
 
 async def run_agent(session_id: str, message: str) -> None:
     """处理一条用户消息：新会话自动命名 → Agent 循环 → 结束后续跑排队消息。"""
-    _notify_bg("口袋 Agent", f"正在处理：{message[:40]}", persistent=True)
+    _notify_bg("口袋智灵", f"正在处理：{message[:40]}", persistent=True)
     agent = None
     try:
         # 新会话（尚无 user 消息）自动命名
@@ -180,24 +180,24 @@ async def run_agent(session_id: str, message: str) -> None:
                     {"type": "approval", "id": tid, "name": name, "summary": summary, "risk": risk}
                 )
                 _notify_bg(
-                    "口袋 Agent · 需要确认",
+                    "口袋智灵 · 需要确认",
                     f"{summary}（{'危险' if risk == 'danger' else '需要' if risk == 'write' else '只读'}操作），去应用里处理",
                     persistent=True,
                 )
             return await approval.ask(session_id, tid, name)
 
         await agent.chat(session_id, message, emit=emit_now(session_id), ask_approval=ask)
-        _notify_bg("口袋 Agent · 完成", f"已处理：{message[:30]}", persistent=False)
+        _notify_bg("口袋智灵 · 完成", f"已处理：{message[:30]}", persistent=False)
     except asyncio.CancelledError:
         q = runs.get(session_id, {}).get("queue")
         if q:
             q.put_nowait({"type": "error", "message": "已停止"})
-        _notify_bg("口袋 Agent", "已停止")
+        _notify_bg("口袋智灵", "已停止")
     except Exception as e:  # noqa: BLE001 —— 服务端兜底，不能静默
         q = runs.get(session_id, {}).get("queue")
         if q:
             q.put_nowait({"type": "error", "message": str(e)})
-        _notify_bg("口袋 Agent · 出错", str(e)[:80])
+        _notify_bg("口袋智灵 · 出错", str(e)[:80])
     finally:
         # 关闭本 chat 的 LLM 连接池（AsyncOpenAI 内部 httpx client，防 FD 泄漏）
         if agent is not None:
@@ -709,7 +709,7 @@ def create_app() -> FastAPI:
         import datetime
 
         out: dict = {
-            "app": "口袋 Agent",
+            "app": "口袋智灵",
             "version": VERSION,
             "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "settings": {
@@ -814,7 +814,7 @@ def create_app() -> FastAPI:
         async def root_placeholder():
             return HTMLResponse(
                 "<html><body style='font-family:sans-serif;background:#0f1115;color:#e4e4e7;padding:40px'>"
-                "<h2>口袋 Agent 服务已启动</h2>"
+                "<h2>口袋智灵 服务已启动</h2>"
                 "<p>前端尚未构建。在仓库根目录执行：</p>"
                 "<pre>cd agentd/web && npm install && npm run build</pre>"
                 "</body></html>"
@@ -825,7 +825,7 @@ def create_app() -> FastAPI:
 
 def main():
     global MOCK, TG_TOKEN, TG_CHAT_ID
-    parser = argparse.ArgumentParser(description="口袋 Agent agentd")
+    parser = argparse.ArgumentParser(description="口袋智灵 agentd")
     parser.add_argument("--host", default=None, help="监听地址（默认 127.0.0.1，--lan 时 0.0.0.0）")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--lan", action="store_true", help="允许局域网访问（会校验访问令牌）")
@@ -878,7 +878,7 @@ def main():
 
     import uvicorn
 
-    print(f"[agentd] 口袋 Agent v{VERSION} | mock={MOCK} | 监听 {host}:{args.port}")
+    print(f"[agentd] 口袋智灵 v{VERSION} | mock={MOCK} | 监听 {host}:{args.port}")
     if MOCK:
         print(
             "[agentd] mock 模式：消息含 电池/短信/定位/剪贴板/传感器/通知/工具 等词会走工具链路，便于自测"

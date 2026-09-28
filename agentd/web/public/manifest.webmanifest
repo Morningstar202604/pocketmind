@@ -1,6 +1,6 @@
 {
-  "name": "口袋 Agent",
-  "short_name": "口袋Agent",
+  "name": "口袋智灵",
+  "short_name": "口袋智灵",
   "description": "手机本地智能体：聊天、执行命令、调用手机能力，数据只在你设备上。",
   "lang": "zh-CN",
   "start_url": "/",

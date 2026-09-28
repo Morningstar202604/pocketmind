@@ -76,7 +76,7 @@ export default function App() {
         <div className="brand">
           <PocketLogo size={38} />
           <div>
-            <h1>口袋 Agent</h1>
+            <h1>口袋智灵</h1>
             <p>{mock ? "离线演示模式" : "本地智能体 · 数据只在你设备上"}</p>
           </div>
         </div>

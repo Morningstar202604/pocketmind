@@ -1,4 +1,4 @@
-# 口袋 Agent（agentd）—— 手机本地智能体服务
+# 口袋智灵（agentd）—— 手机本地智能体服务
 
 重构后的核心：**Python 单进程**（FastAPI + agent 循环），替代旧实现的
 goose(Rust) + Node 双服务器。前端为 `agentd/web/`（Vite + React + TS），构建产物 `agentd/web/dist`

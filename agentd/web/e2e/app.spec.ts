@@ -10,10 +10,10 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole("button", { name: /新建/ }).click();
 });
 
-test.describe("口袋 Agent Web 端到端", () => {
+test.describe("口袋智灵 Web 端到端", () => {
   test("1. 页面加载：品牌与主界面可见", async ({ page }) => {
     // 顶栏 h1（exact 避免匹配到历史回复里的同名 markdown 标题）
-    await expect(page.getByRole("heading", { name: "口袋 Agent", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "口袋智灵", exact: true })).toBeVisible();
     await expect(page.locator("textarea")).toBeVisible();
   });
 

@@ -43,17 +43,17 @@ class MockLLM:
             ("位置", "get_location", {"provider": "network"}),
             ("剪贴板", "get_clipboard", {}),
             ("传感器", "list_sensors", {}),
-            ("通知", "send_notification", {"title": "口袋Agent 测试通知", "message": "这是 mock 演示"}),
+            ("通知", "send_notification", {"title": "口袋智灵 测试通知", "message": "这是 mock 演示"}),
             ("打电话", "make_call", {"number": "10086"}),
             ("打个电话", "make_call", {"number": "10086"}),
             ("发短信", "send_sms", {"numbers": ["13800000000"], "text": "测试短信"}),
             ("发条短信", "send_sms", {"numbers": ["13800000000"], "text": "测试短信"}),
-            ("语音", "tts_speak", {"text": "你好，我是口袋 Agent"}),
+            ("语音", "tts_speak", {"text": "你好，我是口袋智灵"}),
             ("离线朗读", "tts_offline", {"text": "明天早上八点提醒我开会"}),
             ("拍照", "take_photo", {}),
             ("WiFi", "get_wifi_info", {}),
             ("wifi", "get_wifi_info", {}),
-            ("工具", "run_shell", {"command": "echo 口袋Agent工具链路OK"}),
+            ("工具", "run_shell", {"command": "echo 口袋智灵工具链路OK"}),
         ]
 
     async def chat(self, messages: list[dict], tools: list[dict] | None):

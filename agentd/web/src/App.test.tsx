@@ -56,7 +56,7 @@ describe("App 冒烟测试", () => {
   it("渲染不崩溃，并显示品牌名", async () => {
     render(<App />);
     // 顶栏品牌名一定在
-    expect(await screen.findByText("口袋 Agent")).toBeInTheDocument();
+    expect(await screen.findByText("口袋智灵")).toBeInTheDocument();
   });
 
   it("ready 状态下顶栏显示「已就绪」", async () => {

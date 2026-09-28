@@ -125,7 +125,7 @@ class TelegramGateway:
             return
         await context.bot.send_message(
             update.effective_chat.id,
-            "你好，我是口袋 Agent。直接发消息就能让我操作这台手机。\n"
+            "你好，我是口袋智灵。直接发消息就能让我操作这台手机。\n"
             "需要审批的写 / 危险操作，我会在这里弹出允许 / 拒绝按钮。\n"
             "发送 /help 查看可用命令。",
         )

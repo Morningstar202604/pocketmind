@@ -1,4 +1,4 @@
-/* 口袋 Agent · Service Worker —— 极简离线壳
+/* 口袋智灵 · Service Worker —— 极简离线壳
  *
  * 策略：
  *  - install：预缓存 app shell，并从 index.html 动态提取 /assets/* 与 /icons/* 一并缓存

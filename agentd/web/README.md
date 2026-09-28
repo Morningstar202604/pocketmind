@@ -1,4 +1,4 @@
-# 口袋 Agent · Web 前端
+# 口袋智灵 · Web 前端
 
 React 18 + Vite + TypeScript + Zustand + fetch-event-source。
 生产产物 `dist/` 直接入库（手机端零 Node 构建），由后端 `agentd` 托管。
