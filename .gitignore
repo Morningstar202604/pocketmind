@@ -143,3 +143,4 @@
 # 口袋 Agent：web/dist 需随仓库分发（手机端纯 pip 安装，不构建前端）
 !agentd/web/dist/
 !agentd/web/dist/**
+website/_shots/
