@@ -33,6 +33,34 @@
 
 ---
 
+## 界面预览
+
+<p align="center">
+  <img src="assets/screenshots/tool-call.png" width="640" alt="工具调用（深色主题）" />
+  <br />
+  <sub>桌面端 · 工具调用链路（get_battery 执行完成）</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/settings.png" width="640" alt="设置面板" />
+  <br />
+  <sub>设置面板 · 模型厂商 / Plan-Act 工作方式 / 权限与安全</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/recipes.png" width="640" alt="定时配方" />
+  <br />
+  <sub>定时任务 · 配方一键创建（低电量提醒 / 每日总结 / 每日天气）</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/mobile.png" width="300" alt="手机端" />
+  <br />
+  <sub>手机竖屏 · Termux 上的口袋智灵</sub>
+</p>
+
+---
+
 ## 快速开始
 
 ### 方案 A：网页版（推荐，无需 APK）
