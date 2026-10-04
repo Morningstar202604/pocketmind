@@ -1,65 +1,71 @@
-# Android Agent — 项目知识备忘
+# PocketMind（口袋智灵）— 项目知识备忘
 
-## 构建与编译
+> 本文档面向接手本仓库的开发者与 AI 助手。历史版本曾以 `aaif-goose/goose`（Rust）
+> 为底座、走 ACP 协议，**该架构已整体废弃**，现在仓库里没有任何 Rust/goose/ACP 代码；
+> 若在别处看到相关描述，一律以本文件与实际代码为准。
 
-- 底座：`aaif-goose/goose`（Rust 工作区），pinned commit `e629eea`
-- Termux/便携构建命令（官方支持，见 goose 仓库 BUILDING_LINUX.md）：
-  `cargo build --release -p goose-cli --bin goose --no-default-features --features portable-default`
-- portable feature 集 = rustls-tls + live-voice + aws-providers + telemetry + otel；
-  musl 目标下自动禁用 `local-inference`(V8) 与 `system-keyring`(D-Bus)，Android 上两者不可用
-- Termux 装 Rust：`pkg install rust cmake protobuf clang build-essential`
-- 本机 PC 上 release 编译耗时较长（>15 分钟），建议后台终端跑
+## 架构（一句话）
 
-## 部署流程（手机端）
+单个 Python 进程 `agentd`（FastAPI + uvicorn，纯 h11）跑在 Android Termux 上：LLM 只负责推理，
+执行全部落在手机端（termux-api 工具 + shell + 文件），前端是已构建好的 React 静态页，
+数据（会话/记忆/定时任务/checkpoint）全存本机 SQLite。
 
-- `termux/install.sh` 支持分步：clone / build / install-binary / setup-provider / setup-bridge / setup-env / all
-- provider 配置落地到 `~/.config/goose/custom_providers/llm.json`（goose declarative provider 目录）
-- 环境变量模板在 `termux/termux.env`，provider 名 `custom_llm`，API key 变量名 `LLM_API_KEY`（需与 provider.json 的 api_key_env 一致）
-- `termux-bridge` 脚本封装 termux-api（通知/剪贴板/位置/电量/TTS），输出 JSON 供 agent shell 调用
+- 后端：`agentd/main.py`（HTTP/SSE/审批/静态托管）+ `agent.py`（Agent 循环）+
+  `tools/`（phone 25 / files 4 / shell 1 / voice 1）+ `memory.py` + `scheduler.py` +
+  `checkpoints.py` + `config.py`（pydantic 校验 + JSON 落盘）+ `mcp.py` / `telegram_gateway.py`
+- 前端：`agentd/web/`（Vite + React 18 + TS + Zustand），**`dist/` 入库**，手机端不需要 Node
+- 官网：`website/index.html` 自包含单页（非应用，无发布流水线）
+- 预设配方：`config/recipes.json`（`main.py` 按 仓库根/config 读取，Docker 里必须一起 COPY）
 
-## 排障
+## 端口与目录
 
-- goose 二进制找不到：确认 `GOOSE_BIN` 与 install.sh 的 cp 路径一致
-- provider 不生效：检查 `~/.config/goose/custom_providers/llm.json` 的 name 字段是否为 `custom_llm`，且 `GOOSE_PROVIDER=custom_llm`
-- termux-bridge 报 "not available"：手机上先 `pkg install termux-api`，且首次需在 Termux 应用内跑 `termux-setup-storage`
+- agentd 默认 `8787`，只绑 `127.0.0.1`；`--lan` 才绑 `0.0.0.0`
+- Vite 开发 `5173`（代理 `/api` → 8787）；CI 的 e2e mock 服务用 `8799`
+- 数据目录 `AGENT_HOME`，默认 `~/.agent/termux-agent`（config.json / agent.db / jobs.db / checkpoints.db）
+- `AGENT_HOME` 与 `--home`：`settings_mgr` 是模块级单例，路径在 import 时解析，
+  所以 **必须通过环境变量在启动前给定**；CLI `--home` 由 `main()` 显式重定位 path（否则会被静默忽略）
 
-## 环境配置
+## 安全语义（改动前务必读）
 
-- 本开发环境预装了 rustup（stable，minimal profile），路径 `$HOME/.cargo/bin`
-- background terminal 执行 cargo 时要用 `export PATH=$HOME/.cargo/bin:$PATH`（不能用 `source`，sh 不支持）
-- 本容器 8GB 内存无 swap、`swapon` 无内核权限、`drop_caches` 释放不了被 page cache 占满的文件缓存；Flutter APK 构建（gradle 需 4GB+ 连续内存）在本机必 OOM。已装 JDK17/Android SDK/Flutter 到 `$HOME/Android/sdk` 和 `$HOME/flutter`，但出不了包。出 APK 需 8GB+ 内存机器。
+- `server.token` 一旦非空，**所有** `/api/*`（含 127.0.0.1）都必须带 `Authorization: Bearer <token>`；
+  这不是 `--lan` 才生效。前端 401 时会显示令牌输入口，忘记令牌用 `python -m agentd.main --clear-token` 恢复
+- `--lan` 且无令牌 → 直接拒绝启动（`SystemExit(1)`）；容器/服务化用环境变量 `AGENT_TOKEN` 首次注入
+- 响应体外发前统一走 `_masked_settings()`：`api_key`、`server.token`、`server.tg_token` 一律打码；
+  GET 与 PUT 共用同一个函数，避免"GET 打码 / PUT 回明文"的自相矛盾
+- 危险工具走审批门（`permission_mode`: auto/approve/chat）；文件类危险操作有 checkpoint 可 undo
 
-## 网页版前端（web/）
+## 本地跑起来
 
-- 路线：用户放弃 APK，改网页版。Vite + React 18 + TS + Tailwind，聊天 UI 用 `@assistant-ui/react`（OpenAI 官方组件库，不手画）
-- 技术栈映射：ACP（WebSocket 流式 agent 状态）→ `useExternalStoreRuntime`（assistant-ui 的"外部 agent 状态流"runtime），手写薄 adapter 把 `session/update` 通知翻译成 `ThreadMessageLike[]`
-- 文件：`web/src/acp-client.ts`（ACP WS 客户端，按 messageId 累积 agent 文本/推理/工具状态）、`web/src/ChatProvider.tsx`（useExternalStoreRuntime + 状态管理）、`web/src/App.tsx`（ThreadPrimitive 组合的聊天界面 + 连接设置面板）
-- 启动：`cd web && npm install && npx vite --host 0.0.0.0`（5173），Vite 把 `/acp` 代理到 `http://127.0.0.1:3284`（goose serve），浏览器 ws://.../acp 同源无跨域
-- 生产/手机侧：`npm run build` 出 dist/，goose serve 需带 `--allowed-origin <web页面origin>` 才放行浏览器跨域访问；或手机开热点把 3284 转出来
-- 默认连接 `ws://127.0.0.1:3284/acp`，UI 可改地址
+```bash
+python3 -m pip install -r agentd/requirements.txt   # Python 3.11（CI 口径）
+bash tests/setup_faketermux.sh                      # 造 termux-* 桩，否则手机工具全部报"未安装"
+export PATH=/tmp/faketermux:$PATH
+AGENT_HOME=/tmp/pa python3 -m agentd.main --mock --port 8787   # 离线全链路（不耗 API）
+cd agentd/web && npm ci && npm run test && npm run build       # 改前端必须重建 dist 并入库
+```
 
-## ACP 协议关键事实（goose serve 实测 wire）
+Windows 上可以跑后端与测试（`web/start.sh`、`tests/*.sh` 需要 Git Bash），但有平台边界：
+`tests/m5_regression.py` 的 chmod 断言、`tests/p3_perf_leak_test.py` 的进程残留探测是 POSIX 专用，
+非 POSIX 会自动记为「跳过」而不是失败。
 
-- 传输：JSON-RPC 2.0 over WebSocket，`goose serve` 路径 `/acp`，端口默认 3284
-- 握手顺序：`initialize`(protocolVersion:1, clientCapabilities:{}, clientInfo) → `session/new`(cwd, mcpServers:[]) → `session/prompt`
-- `session/prompt` 参数字段名是 **`prompt`**（ContentBlock[]，如 `{prompt:[{type:"text",text:"..."}]}`），**不是** `input`；结果走异步 `session/update` 通知流，最终 result 带 stopReason
-- `session/update` 通知 method 名是 `session/update`（不是 sessionNotification）；`update.sessionUpdate` 判别字段值：`agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `session_info_update` / `usage_update`
-- `agent_message_chunk` 带 `messageId` + `content:{type:"text",text:"..."}`，同 messageId 的 chunk 累积成一条消息（delta 模式）
-- `session_info_update` 的 `_meta.goose.activeRunId` 非 null 表示 run 开始，null 表示 run 结束
-- `requestPermission` 由服务端主动发，响应 `{outcome:{outcome:"selected",optionId:"allow_once"}}`；goose serve 默认 auto 模式可自动批准
-- 探针脚本：`/tmp/acp_probe3.mjs`（node ws 包，需 `cd /tmp && npm i ws`），goose serve 用 background terminal 跑（30s 内会超时退出，要重开）
-- goose serve 启动：`GOOSE_PATH_ROOT=$HOME/.goose-test GOOSE_PROVIDER=custom_llm GOOSE_MODEL=agnes-3.0-flash LLM_API_KEY=... goose serve --dangerously-unauthenticated --host 127.0.0.1 --port 3284`
-- provider json 要拷到 `$GOOSE_PATH_ROOT/custom_providers/custom_llm.json`
+## 测试
 
-## 排障
+脚本式回归（无 pytest，自己统计 passed/failed，非零退出即失败）：
 
-- goose 二进制找不到：确认 `GOOSE_BIN` 与 install.sh 的 cp 路径一致
-- provider 不生效：检查 `~/.config/goose/custom_providers/{name}.json` 的 name 字段与 `GOOSE_PROVIDER` 一致
-- termux-bridge 报 "not available"：手机上先 `pkg install termux-api`，首次需在 Termux 应用内跑 `termux-setup-storage`
-- gradle APK 构建 OOM：`swapon` 容器无权限，`drop_caches` 无效，只能换 8GB+ 内存机器跑 `scripts/build_apk.sh`（脚本已内置低内存 gradle 参数 `-Xmx2g`）
-- web 前端 `session/prompt` 报 "missing field prompt"：参数名要用 `prompt` 不是 `input`
-- web 构建 PostCSS 报错 `module is not defined`：package.json 是 `type:module`，`postcss.config.js`/`tailwind.config.js` 必须改名 `.cjs`
-- `useExternalStoreRuntime` 必须传 `convertMessage`（即使是恒等映射），否则 TS 报 convertMessage missing
-- `ThreadMessageLike.status` 的 complete 态必须带 `reason` 字段：`{type:"complete", reason:"stop"}`，只写 `{type:"complete"}` 会 TS 报错
-- `ThreadPrimitive.Messages` 渲染器接收 `{message}` 对象而非回调参数：`{({message}) => ...}`
-- 本机 Vite 启动后 curl 5173 返回 200，但预览域名 `*.monkeycode-ai.online` 需在 `server.allowedHosts` 加 `.monkeycode-ai.online` 才放行（Vite 5 有 allowedHosts 白名单）
+| 脚本 | 需要服务 | 覆盖 |
+| --- | --- | --- |
+| `p0_regression_test.py` | 否 | 重启恢复 tool_calls、$HOME 展开、FTS5 排除 |
+| `security_test.py` | 否 | 路径穿越 / FTS 注入 / SSRF / chat 模式禁工具 / 打码 |
+| `p3_robustness_unit.py` | 否 | 配置兜底、任务与配方共用校验、审批超时 clamp、undo |
+| `m5_regression.py`、`p0_queue_test.py`、`p1_jobs_test.py`、`p2_plan_recipe_test.py`、`p3_robustness_api.py` | 是（8799） | 端到端 |
+| `test_mcp_server.py`、`test_telegram_gateway.py` | 否 | MCP stdio 清单、TG 网关 |
+| `p3_perf_leak_test.py` | 否 | N+1、索引、子进程回收（POSIX） |
+
+CI 的 backend job 现在把上表**全部**纳入门禁，另含"部署链路自检"（无令牌 `--lan` 拒启 /
+`AGENT_TOKEN` 引导 / `--clear-token`）；frontend job 做 typecheck + vitest + build + `dist/` 新鲜度校验。
+
+## 仓库与镜像
+
+主仓库 `gitcode.com/badhope/pocketmind`；CI 跑在 GitHub 镜像 `github.com/X33834/pocketmind`
+（GitCode 不执行 `.github/workflows`）。**push 到 gitcode 后必须同步镜像**，否则 Actions 检查的是旧代码：
+`git push github main --tags`。

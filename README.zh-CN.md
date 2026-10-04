@@ -3,7 +3,7 @@
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>口袋里能真正操作你手机的 always-on Agent</b> —— 本地优先 · 隐私保护 · Termux 原生</p>
   <img src="https://img.shields.io/github/actions/workflow/status/X33834/pocketmind/ci.yml?branch=main&label=CI" alt="CI" />
-  <img src="https://img.shields.io/badge/tests-131%20backend%20%2B%2025%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-141%20backend%20%2B%2031%20frontend-green" alt="Tests" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
   <br />
@@ -104,7 +104,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React 前端（Vite+TS），构建产物 `dist/` 由 agentd 直接托管 |
 | `termux/` | 手机端：`install.sh` 一键装依赖 / `start.sh` 启动 / `boot.sh` 开机自启 |
 | `config/` | 预设配方 `recipes.json`（定时任务模板）；LLM 厂商预设见 `agentd/config.py` 的 `PRESETS` |
-| `tests/` | 回归测试（排队 / 定时任务 / 安全加固） |
+| `tests/` | 回归测试 11 个套件（排队 / 定时任务 / 安全 / 配方 / MCP / Telegram；POSIX 专用检查在非 Linux 上记为「跳过」而非失败） |
 
 ---
 

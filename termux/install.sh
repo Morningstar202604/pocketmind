@@ -4,7 +4,7 @@
 # 用法（在 Termux 里执行）：
 #   pkg install git
 #   git clone <本仓库地址>
-#   cd termux-agent && bash termux/install.sh
+#   cd pocketmind && bash termux/install.sh
 #
 # 安装内容（约 3-8 分钟；pydantic-core 在 Termux 上需用 Rust 现场编译一次）：
 #   1. Python 3 + 编译工具   pkg install python git rust binutils build-essential

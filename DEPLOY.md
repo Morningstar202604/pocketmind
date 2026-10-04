@@ -5,7 +5,7 @@
 ## 方式一：本机/VPS 一键部署（推荐）
 
 ```bash
-git clone https://github.com/X33834/pocketmind && cd pocketmind
+git clone https://gitcode.com/badhope/pocketmind && cd pocketmind   # 主仓库（GitHub 侧为 CI 镜像）
 # root 用户：
 bash deploy/deploy.sh
 # 非 root：同样执行，自动走 nohup 分支（nginx 反代需 root，非 root 跳过）
@@ -15,7 +15,9 @@ bash deploy/deploy.sh
 
 **部署后：**
 - 访问 `http://<服务器IP>/`（80 端口）
-- 首次打开页面输入访问令牌（脚本输出的那串，或页面 ⚙ 设置里查看/修改）
+- 首次打开若提示「需要访问令牌」，在弹出的令牌输入框里填一次脚本输出的那串即可（会记在本机浏览器）
+- ⚠ 页面上看到的令牌是**打码**的（`sk-1****ef` 这种），拿不回明文；忘了令牌就在服务器上执行
+  `python3 -m agentd.main --clear-token` 清除后重设
 - ⚙ 设置 → 选 LLM 厂商 → 填 API Key → 保存 → 开聊
 
 ## 方式二：Docker（任一有 Docker 的机器）
@@ -28,13 +30,16 @@ docker compose up -d
 # 3. 访问 http://<服务器IP>:8787
 ```
 
+`AGENT_TOKEN` 只在**首次**（数据卷里还没有令牌时）写入 `config.json`；之后以卷里的配置为准，
+改环境变量不会覆盖你已在页面上改过的令牌。
+
 ## 方式三：手动（简单验证）
 
 ```bash
 python3 -m pip install -r agentd/requirements.txt
-# 生成令牌：首次打开页面时设置即可
-python3 -m agentd.main --lan --port 8787
-# 访问 http://127.0.0.1:8787（本机）或 http://<IP>:8787（局域网/公网）
+# --lan 且没有令牌会直接拒绝启动（安全策略），所以要么先注入令牌，要么先本机起服务在页面里设：
+AGENT_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" python3 -m agentd.main --lan --port 8787
+# 访问 http://127.0.0.1:8787（本机）或 http://<IP>:8787（局域网/公网，需带 Bearer 令牌）
 ```
 
 ## 生产环境建议

@@ -19,7 +19,7 @@ QUICKSTART.md           # 本文件
 
 ```bash
 pkg install git python
-git clone <本仓库地址> && cd termux-agent
+git clone https://gitcode.com/badhope/pocketmind.git && cd pocketmind
 bash termux/install.sh          # 装 Python 依赖 + termux-api（无需编译）
 bash termux/start.sh            # 启动服务
 # 浏览器打开 http://127.0.0.1:8787
@@ -30,7 +30,7 @@ bash termux/start.sh            # 启动服务
 
 ```bash
 # 离线演示模式（不消耗 API，可验证完整链路）
-cd termux-agent
+cd pocketmind
 AGENT_HOME=/tmp/pa python3 -m agentd.main --mock --port 8787
 # 浏览器打开 http://127.0.0.1:8787
 # 试试：帮我看看电池 / 读一下最近短信 / 帮我定位 / 发条通知 / 用工具看看

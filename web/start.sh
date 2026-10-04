@@ -16,12 +16,13 @@ PORT="${1:-8787}"
 EXTRA=""
 if [ "${2:-}" = "--lan" ]; then
   EXTRA="--lan"
-  echo "⚠ 局域网模式：请确认已在页面设置里配置访问令牌，否则任何设备都能调用本服务。"
+  echo "⚠ 局域网模式：必须已配置访问令牌，否则服务会拒绝启动（避免整机能力被局域网内任意设备调用）。"
+  echo "  两种方式：本机启动时在页面「设置 → 局域网访问令牌」填好；或直接 AGENT_TOKEN=<令牌> bash web/start.sh $PORT --lan"
 fi
 
 PY="$(command -v python3 || command -v python || true)"
 if [ -z "$PY" ]; then
-  echo "✗ 未找到 python3/python，请先安装 Python 3.10+" >&2
+  echo "✗ 未找到 python3/python，请先安装 Python 3.11+" >&2
   exit 1
 fi
 

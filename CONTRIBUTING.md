@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你对 **termux-agent** 的关注！欢迎以任何形式参与贡献：提 Issue、修 Bug、写文档、加功能都可以。
+感谢你对 **PocketMind（口袋智灵）** 的关注！欢迎以任何形式参与贡献：提 Issue、修 Bug、写文档、加功能都可以。
 
 ## 快速开始
 
@@ -34,7 +34,10 @@
 3. **本地验证**：跑通测试与构建（与 CI 同款命令），全绿才继续
 4. **合并**：以 PR 方式合入 `main`，CI 全绿后合并
 5. **打标签**：`git tag -a vX.Y.Z -m "vX.Y.Z"` 并推送（`git push origin vX.Y.Z`）
-6. **发布**：基于该 tag 创建 GitHub Release，Release Notes 写清本次变更要点
-7. **部署**：确认 GitHub Pages / 站点自动部署完成且可访问
+6. **同步镜像**：主仓库在 GitCode（`gitcode.com/badhope/pocketmind`），CI 跑在 GitHub 镜像
+   （`github.com/X33834/pocketmind`）上。合入后必须把 `main` 与标签推到镜像，否则 Actions
+   检查的是旧代码，门禁形同虚设：`git push github main --tags`
+7. **发布**：基于该 tag 在镜像仓库创建 Release，Release Notes 写清本次变更要点
+   （官网 `website/index.html` 为自包含单页，随仓库静态托管，无独立的 Pages 流水线）
 
-变更记录以 GitHub Releases 与 git log 为准。
+变更记录以 [CHANGELOG.md](CHANGELOG.md)、Releases 与 git log 为准。
