@@ -63,6 +63,47 @@ jobs:
           python tests/p0_queue_test.py
           python tests/p1_jobs_test.py
 
+      # 此前只有上面 4 个套件进门禁：安全专项、配方、健壮性/性能泄漏、MCP、Telegram
+      # 全部"能跑但没人跑"，而问题恰好集中在这些区域（配方校验、令牌打码、部署引导）。
+      - name: Run security / recipe / robustness suites
+        run: |
+          python tests/security_test.py
+          python tests/p2_plan_recipe_test.py
+          python tests/p3_robustness_api.py
+          python tests/p3_robustness_unit.py
+          python tests/p3_perf_leak_test.py
+
+      - name: Run MCP & Telegram gateway tests
+        run: |
+          python tests/test_mcp_server.py
+          python tests/test_telegram_gateway.py
+
+      - name: 部署链路自检（--lan 无令牌拒启 / AGENT_TOKEN 引导 / --clear-token）
+        run: |
+          set -e
+          rm -rf /tmp/pa-lan
+          # 1) 没有令牌时，--lan 必须拒绝启动（否则等于把服务裸露在局域网）
+          if AGENT_HOME=/tmp/pa-lan python -m agentd.main --lan --port 8798 --mock >/tmp/lan1.log 2>&1; then
+            echo "✗ 无令牌却以 --lan 启动了"; cat /tmp/lan1.log; exit 1
+          fi
+          grep -q "必须配置访问令牌" /tmp/lan1.log
+          # 2) 注入 AGENT_TOKEN 后应正常起来，并把令牌写进 config.json
+          rm -rf /tmp/pa-lan
+          AGENT_HOME=/tmp/pa-lan AGENT_TOKEN=ci-smoke-token python -m agentd.main --lan --port 8798 --mock >/tmp/lan2.log 2>&1 &
+          LAN_PID=$!
+          for i in $(seq 1 15); do
+            curl -sf http://127.0.0.1:8798/api/health >/dev/null && break
+            sleep 1
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8798/api/jobs)
+          if [ "$code" != "401" ]; then echo "✗ 未带令牌应 401，实际 $code"; kill $LAN_PID; exit 1; fi
+          curl -sf -H "Authorization: Bearer ci-smoke-token" http://127.0.0.1:8798/api/jobs >/dev/null
+          kill $LAN_PID
+          # 3) 忘记令牌的恢复入口：--clear-token（配合 --home 定位数据目录）后本机免令牌可用
+          python -m agentd.main --home /tmp/pa-lan --clear-token
+          python -c "import json;c=json.load(open('/tmp/pa-lan/config.json'));assert c['server'].get('token','x')=='',c['server'];print('clear-token + --home 定位生效')"
+          rm -rf /tmp/pa-lan
+
       - name: Show server log on failure
         if: failure()
         run: cat /tmp/agentd-ci.log
