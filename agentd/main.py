@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -256,12 +257,72 @@ def _load_recipes() -> None:
         RECIPES = []
 
 
+def _masked_settings(s: dict) -> dict:
+    """对外回传的配置副本：api_key / server.token / server.tg_token 一律打码。
+
+    GET 与 PUT 必须共用本函数——此前 PUT 直接回传原始 settings，等于「保存一次
+    就把明文局域网令牌吐回响应体」，与 GET 刻意打码自相矛盾。
+    """
+    out = dict(s)
+    llm = dict(out.get("llm", {}) or {})
+    llm["api_key"] = mask_key(llm.get("api_key", ""))
+    server = dict(out.get("server", {}) or {})
+    if server.get("token"):
+        server["token"] = mask_key(server["token"])
+    if server.get("tg_token"):
+        server["tg_token"] = mask_key(server["tg_token"])
+    out["llm"] = llm
+    out["server"] = server
+    return out
+
+
+def _validate_job_payload(payload: dict) -> dict:
+    """校验并归一化定时任务字段，非法即 HTTPException(400)。
+
+    放在模块级是为了可单测（p3_robustness_unit 直接喂坏数据），也让
+    「手工建任务」与「配方一键实例化」共用同一份校验——此前 recipes_apply 绕过
+    校验直接 scheduler.create，坏 expr 会在 APScheduler 内部抛 ValueError 变 500。
+    """
+    from .scheduler import TRIGGER_TYPES, parse_condition
+
+    name = str(payload.get("name", "")).strip()[:60]
+    tt = str(payload.get("trigger_type", "")).strip()
+    expr = str(payload.get("expr", "")).strip()
+    message = str(payload.get("message", "")).strip()
+    if not (name and tt in TRIGGER_TYPES and expr and message):
+        raise HTTPException(
+            400, "缺少必要字段：name / trigger_type(cron|interval|date) / expr / message"
+        )
+    if tt == "interval":
+        try:
+            int(float(expr))
+        except ValueError:
+            raise HTTPException(400, "interval 表达式需为秒数（如 3600）") from None
+    if tt == "date":
+        try:
+            __import__("datetime").datetime.strptime(expr, "%Y-%m-%d %H:%M")
+        except ValueError:
+            raise HTTPException(400, "date 表达式格式：YYYY-MM-DD HH:MM") from None
+    cond = str(payload.get("condition", "")).strip()
+    if cond and parse_condition(cond) is None:
+        raise HTTPException(400, "条件格式：battery < 20（仅支持电池电量阈值）")
+    return {
+        "name": name,
+        "trigger_type": tt,
+        "expr": expr,
+        "message": message,
+        "session_id": str(payload.get("session_id", "")).strip(),
+        "condition": cond,
+        "enabled": bool(payload.get("enabled", True)),
+    }
+
+
 def create_app() -> FastAPI:
     global store
     store = Store(settings_mgr.path.parent / "agent.db")
 
     # ---------- 定时/条件触发（SQLAlchemyJobStore 持久化） ----------
-    from .scheduler import TRIGGER_TYPES, SchedulerService, parse_condition
+    from .scheduler import SchedulerService
 
     scheduler_svc = SchedulerService(settings_mgr.path.parent / "jobs.db")
     mcp_clients: list[MCPClient] = []
@@ -572,39 +633,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/jobs", dependencies=[Depends(check_token)])
     async def jobs_create(payload: dict):
-        name = str(payload.get("name", "")).strip()[:60]
-        tt = str(payload.get("trigger_type", "")).strip()
-        expr = str(payload.get("expr", "")).strip()
-        message = str(payload.get("message", "")).strip()
-        if not (name and tt in TRIGGER_TYPES and expr and message):
-            raise HTTPException(
-                400, "缺少必要字段：name / trigger_type(cron|interval|date) / expr / message"
-            )
-        if tt == "interval":
-            try:
-                int(float(expr))
-            except ValueError:
-                raise HTTPException(400, "interval 表达式需为秒数（如 3600）") from None
-        if tt == "date":
-            try:
-                __import__("datetime").datetime.strptime(expr, "%Y-%m-%d %H:%M")
-            except ValueError:
-                raise HTTPException(400, "date 表达式格式：YYYY-MM-DD HH:MM") from None
-        cond = str(payload.get("condition", "")).strip()
-        if cond and parse_condition(cond) is None:
-            raise HTTPException(400, "条件格式：battery < 20（仅支持电池电量阈值）")
+        norm = _validate_job_payload(payload)
         try:
-            job = scheduler_svc.create(
-                {
-                    "name": name,
-                    "trigger_type": tt,
-                    "expr": expr,
-                    "message": message,
-                    "session_id": str(payload.get("session_id", "")).strip(),
-                    "condition": cond,
-                    "enabled": bool(payload.get("enabled", True)),
-                }
-            )
+            job = scheduler_svc.create(norm)
         except ValueError as e:
             # cron 表达式非法 / date 字符串无法解析等：构造 trigger 时抛 ValueError，
             # 统一转成 400 而非 500（健壮性边界：非法输入不应让服务崩）
@@ -652,9 +683,11 @@ def create_app() -> FastAPI:
         matched = _recipe_matched_job(rec.get("message", ""))
         if matched is not None:
             return matched
-        job = scheduler_svc.create(
+        # 配方与手工建任务走同一份校验：此前这里绕过校验，坏 expr/trigger_type 会在
+        # scheduler 内部抛 ValueError → 500（配方来自 config/recipes.json，属于可编辑数据）
+        norm = _validate_job_payload(
             {
-                "name": str(rec.get("name", recipe_id))[:60],
+                "name": str(rec.get("name", recipe_id)),
                 "trigger_type": rec.get("trigger_type", "interval"),
                 "expr": str(rec.get("expr", "")),
                 "message": str(rec.get("message", "")),
@@ -662,6 +695,10 @@ def create_app() -> FastAPI:
                 "enabled": bool(rec.get("enabled", True)),
             }
         )
+        try:
+            job = scheduler_svc.create(norm)
+        except ValueError as e:
+            raise HTTPException(400, f"配方表达式无法解析：{e}") from None
         if job is None:
             raise HTTPException(500, "配方实例化失败")
         return job
@@ -739,18 +776,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/settings", dependencies=[Depends(check_token)])
     async def get_settings():
-        s = settings_mgr.get()
-        llm = dict(s.get("llm", {}))
-        llm["api_key"] = mask_key(llm.get("api_key", ""))
-        # tg_token 与 API Key 同级敏感，回传前打码（put 时同 api_key：打码占位原样写回会被剔除）
-        server = dict(s.get("server", {}))
-        if server.get("tg_token"):
-            server["tg_token"] = mask_key(server["tg_token"])
-        # server.token（局域网访问令牌）与 api_key 同级敏感：GET 一律打码回传，
-        # 否则任何能访问 /api/settings 的人（或 XSS）都能拿到明文令牌完全接管服务。
-        if server.get("token"):
-            server["token"] = mask_key(server["token"])
-        return {**s, "llm": llm, "server": server}
+        # api_key / server.token / tg_token 统一打码（见 _masked_settings）
+        return _masked_settings(settings_mgr.get())
 
     @app.put("/api/settings", dependencies=[Depends(check_token)])
     async def put_settings(payload: dict):
@@ -800,10 +827,8 @@ def create_app() -> FastAPI:
         # 类型强制 / 范围收敛（temperature、max_tokens、approval_timeout、字符串截断等）
         # 全部由 pydantic 模型在 Settings.save() 内完成，不再手写 if/else clamp。
         settings_mgr.save(payload)
-        s = settings_mgr.get()
-        llm_out = dict(s.get("llm", {}))
-        llm_out["api_key"] = mask_key(llm_out.get("api_key", ""))
-        return {"ok": True, "settings": {**s, "llm": llm_out}}
+        # 与 GET 同一份打码逻辑：保存响应不得回传明文 server.token / tg_token
+        return {"ok": True, "settings": _masked_settings(settings_mgr.get())}
 
     # ---------- 静态前端 ----------
     if DIST.exists():
@@ -841,14 +866,36 @@ def main():
         action="store_true",
         help="以 stdio MCP server 模式启动（不启动 FastAPI，供 Claude Desktop/Cline 连接）",
     )
+    parser.add_argument(
+        "--clear-token",
+        action="store_true",
+        help="清除 config.json 里的访问令牌后退出（忘记令牌导致本机被锁死时的恢复入口）",
+    )
     args = parser.parse_args()
 
     MOCK = args.mock
     if args.home:
-        import os
-
         os.environ["AGENT_HOME"] = args.home
+        # settings_mgr 是模块级单例，self.path 在 import 时就按当时的 AGENT_HOME 解析完了；
+        # 只改环境变量不重定位，--home 会静默失效（配置与 *.db 仍写到默认目录）。
+        settings_mgr.path = Path(args.home).expanduser() / "config.json"
     settings_mgr.load()
+
+    # 忘记令牌的恢复入口：本机直接 `python -m agentd.main --clear-token` 清掉后重启，
+    # 不必手工编辑 config.json（此前唯一的出路是手改文件，普通手机用户做不到）。
+    if args.clear_token:
+        settings_mgr.save({"server": {"token": ""}})
+        print("[agentd] 已清除访问令牌（server.token）。重新启动即可无令牌访问；")
+        print("[agentd] 若要对局域网暴露，请重新在「设置」里配置令牌，或用 AGENT_TOKEN 环境变量注入。")
+        return
+
+    # 部署引导：AGENT_TOKEN 仅用于「首次」写入访问令牌（docker/systemd 一键部署场景），
+    # 已有令牌时以 config.json 为准，不覆盖用户改过的值。没有这一步，--lan 会在下面
+    # 的安全校验里直接 SystemExit(1)，容器就会无限重启（DEPLOY.md 承诺的路径走不通）。
+    env_token = os.environ.get("AGENT_TOKEN", "").strip()
+    if env_token and not str(settings_mgr.get().get("server", {}).get("token", "")).strip():
+        settings_mgr.save({"server": {"token": env_token}})
+        print("[agentd] 已从环境变量 AGENT_TOKEN 初始化访问令牌（后续以 config.json 为准）")
 
     # MCP server 独立模式：直接走 stdio，不启动 FastAPI
     if args.mcp_server:
@@ -872,8 +919,9 @@ def main():
                 "✗ 安全策略：--lan 必须配置访问令牌才能启动（否则局域网内任何设备都能调用本服务）。"
             )
             print(
-                "  请先设置 server.token（启动本机模式后，在页面「设置 → 局域网访问令牌」填入），再重试。"
+                "  请先设置 server.token（启动本机模式后，在页面「设置 → 局域网访问令牌」填入），"
             )
+            print("  或为容器/服务注入环境变量 AGENT_TOKEN=<令牌>（首次启动会自动写入 config.json），再重试。")
             raise SystemExit(1)
 
     import uvicorn

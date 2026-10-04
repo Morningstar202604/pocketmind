@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir -r agentd/requirements.txt
 
 COPY agentd/ ./agentd/
 COPY --from=web /src/agentd/web/dist ./agentd/web/dist
+# 预设配方（Jobs 面板）：agentd/main.py 按 仓库根/config/recipes.json 读取，漏了会让配方列表静默为空
+COPY config/ ./config/
 
 # 数据目录（会话/记忆/定时任务/checkpoints）
 VOLUME /data
