@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, setToken, type AppSettings, type Provider, type ToolInfo } from "../api";
+import { api, isUnauthorized, setToken, type AppSettings, type Provider, type ToolInfo } from "../api";
 import { useAgentStore } from "../store/useAgentStore";
 import type { ThemePref } from "../theme";
 import { IconClose } from "./icons";
@@ -95,22 +95,77 @@ export function SettingsPanel({
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [showKey, setShowKey] = useState(false);
+  // 401 时不再无限停在「加载中…」：给出令牌输入口，写入本地后重新拉取
+  const [needToken, setNeedToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   // Plan/Act 模式直接走 store：切换即持久化（局部 PUT，不随「保存」按钮走）
   const agentMode = useAgentStore((s) => s.agentMode);
   const setAgentMode = useAgentStore((s) => s.setAgentMode);
 
+  const load = async () => {
+    setLoadError("");
+    const [s, p, t] = await Promise.allSettled([
+      api.get<AppSettings>("/api/settings"),
+      api.get<{ providers: Provider[] }>("/api/providers"),
+      api.get<{ tools: ToolInfo[] }>("/api/tools"),
+    ]);
+    if (s.status === "fulfilled") {
+      setForm(s.value);
+      setNeedToken(false);
+    } else if (isUnauthorized(s.reason)) {
+      setNeedToken(true);
+    } else {
+      setLoadError((s.reason as Error)?.message || "设置加载失败");
+    }
+    if (p.status === "fulfilled") setProviders(p.value.providers);
+    if (t.status === "fulfilled") setTools(t.value.tools);
+  };
+
   useEffect(() => {
-    void api.get<{ providers: Provider[] }>("/api/providers").then((d) => setProviders(d.providers)).catch(() => {});
-    void api.get<AppSettings>("/api/settings").then(setForm).catch(() => {});
-    void api.get<{ tools: ToolInfo[] }>("/api/tools").then((d) => setTools(d.tools)).catch(() => {});
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!form) {
     return (
       <div className="overlay" onClick={onClose}>
         <div className="sheet" onClick={(e) => e.stopPropagation()}>
-          <p className="center-muted">加载中…</p>
+          <div className="sheet-head">
+            <h2>设置</h2>
+            <button className="icon-btn" onClick={onClose} aria-label="关闭">
+              <IconClose />
+            </button>
+          </div>
+          {needToken ? (
+            <div className="group">
+              <p className="group-title">需要访问令牌</p>
+              <p className="hint">
+                本服务已设置访问令牌（局域网保护）。在这里输入一次令牌即可打开设置；
+                忘记令牌可在设备上执行 <code>python -m agentd.main --clear-token</code> 清除。
+              </p>
+              <div className="field">
+                <label>访问令牌</label>
+                <input
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  placeholder="与设置中一致的服务令牌"
+                />
+              </div>
+              <button
+                className="btn"
+                onClick={async () => {
+                  setToken(tokenInput.trim());
+                  await load();
+                }}
+              >
+                解锁设置
+              </button>
+            </div>
+          ) : (
+            <p className="center-muted">{loadError || "加载中…"}</p>
+          )}
         </div>
       </div>
     );
@@ -132,6 +187,9 @@ export function SettingsPanel({
         server: {
           token: form.server?.token ?? "",
           approval_timeout: Number(form.server?.approval_timeout ?? 120),
+          // MCP 列表必须一起提交：此前只发 token/approval_timeout，
+          // 在面板里改的 MCP 服务器会被静默丢弃（后端其实支持写 mcp）
+          mcp: form.server?.mcp ?? [],
         },
         user_prefs: form.user_prefs ?? "",
       });
@@ -292,7 +350,7 @@ export function SettingsPanel({
               onChange={(e) => setForm((f) => (f ? { ...f, server: { ...f.server, token: e.target.value } } : f))}
               placeholder="留空 = 仅本机可访问"
             />
-            <p className="hint">设置后以 --lan 启动时，请求需带 Authorization: Bearer &lt;令牌&gt;</p>
+            <p className="hint">只要此处非空，所有 /api 请求（含本机）都必须带 Authorization: Bearer &lt;令牌&gt;；忘记令牌可在设备上执行 python -m agentd.main --clear-token 清除。</p>
           </div>
           <div className="field">
             <label>审批超时（秒）</label>
@@ -328,7 +386,13 @@ export function SettingsPanel({
                   .filter(Boolean)
                   .map((l) => {
                     const [name = "", command = "", ...rest] = l.split("|").map((x) => x.trim());
-                    return { name: name || "mcp", command, args: rest };
+                    // 参数段再按空白切开：占位示例写的是「-y pkg /sdcard」这类多参数，
+                    // 整段原样透传会让 MCP 客户端把三个参数当成一个 argv，服务器直接起不来
+                    return {
+                      name: name || "mcp",
+                      command,
+                      args: rest.flatMap((r) => r.split(/\s+/).filter(Boolean)),
+                    };
                   })
                   .filter((m) => m.command);
                 setForm((f) => (f ? { ...f, server: { ...f.server, mcp: rows } } : f));

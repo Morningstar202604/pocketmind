@@ -138,6 +138,19 @@ export const renameSession = (sessionId: string, title: string) =>
 /** 导出全部数据（会话/消息/配置）为 JSON 下载。 */
 export const exportAll = () => api.get<Record<string, unknown>>("/api/export");
 
+/** 带 HTTP 状态码的错误：调用方要能区分「401 需要令牌」与一般失败。 */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export const isUnauthorized = (e: unknown): boolean => e instanceof ApiError && e.status === 401;
+
 async function parse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
@@ -148,7 +161,7 @@ async function parse<T>(res: Response): Promise<T> {
     } catch {
       /* keep http status */
     }
-    throw new Error(msg);
+    throw new ApiError(msg, res.status);
   }
   return (await res.json()) as T;
 }
