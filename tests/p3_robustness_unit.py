@@ -127,6 +127,78 @@ def main():
     check("undo 成功恢复文件", res1.get("ok") is True and after == "v1", f"{res1} after={after}")
     check("二次 undo 报已撤销", "error" in res2, str(res2))
 
+    # ---------- 任务/配方共用校验 + 设置响应打码 ----------
+    from fastapi import HTTPException
+
+    from agentd.main import _masked_settings, _validate_job_payload
+
+    ok = _validate_job_payload(
+        {"name": "n", "trigger_type": "interval", "expr": "60", "message": "m"}
+    )
+    check(
+        "合法任务归一化字段完整",
+        ok["name"] == "n" and ok["enabled"] is True and ok["condition"] == "",
+        str(ok),
+    )
+    for bad, why in [
+        ({"name": "", "trigger_type": "interval", "expr": "60", "message": "m"}, "缺 name"),
+        ({"name": "n", "trigger_type": "weekly", "expr": "60", "message": "m"}, "未知 trigger_type"),
+        ({"name": "n", "trigger_type": "interval", "expr": "", "message": "m"}, "缺 expr"),
+        ({"name": "n", "trigger_type": "interval", "expr": "abc", "message": "m"}, "interval 非数字"),
+        ({"name": "n", "trigger_type": "date", "expr": "2026/01/01", "message": "m"}, "date 格式错"),
+        (
+            {
+                "name": "n",
+                "trigger_type": "cron",
+                "expr": "* * * * *",
+                "message": "m",
+                "condition": "battery @@ 20",
+            },
+            "条件非法",
+        ),
+    ]:
+        try:
+            _validate_job_payload(bad)
+            check(f"坏任务被 400 拒绝（{why}）", False, "未抛异常")
+        except HTTPException as e:
+            check(f"坏任务被 400 拒绝（{why}）", e.status_code == 400, str(e.status_code))
+
+    # 仓库自带配方必须过同一份校验：坏数据在 CI 直接暴露，而不是运行时 500
+    import json as _json
+
+    recipes_path = Path(__file__).resolve().parent.parent / "config" / "recipes.json"
+    recs = _json.loads(recipes_path.read_text(encoding="utf-8"))
+    bad_recipes = []
+    for rec in recs:
+        try:
+            _validate_job_payload(
+                {
+                    "name": str(rec.get("name", "")),
+                    "trigger_type": rec.get("trigger_type", "interval"),
+                    "expr": str(rec.get("expr", "")),
+                    "message": str(rec.get("message", "")),
+                    "condition": rec.get("condition") or "",
+                    "enabled": bool(rec.get("enabled", True)),
+                }
+            )
+        except HTTPException as e:
+            bad_recipes.append(f'{rec.get("id")}: {e.detail}')
+    check(
+        f"config/recipes.json 全部 {len(recs)} 条过校验",
+        not bad_recipes,
+        str(bad_recipes)[:160],
+    )
+
+    raw = {
+        "llm": {"api_key": "sk-abcdefghijklmnopqrstuvwxyz123456", "model": "m"},
+        "server": {"token": "topsecrettoken123456", "tg_token": "123456:AAHeroinKey"},
+        "user_prefs": "x",
+    }
+    masked = _masked_settings(raw)
+    leaked = [s for s in ("abcdefghijklmnopqrstuvwxyz", "secrettoken", "AAHeroinKey") if s in str(masked)]
+    check("GET/PUT 响应打码覆盖 api_key + server.token + tg_token", not leaked, str(leaked))
+    check("打码返回副本，不改写内存中的真实配置", raw["server"]["token"] == "topsecrettoken123456")
+
     print()
     print(f"结果: {len(passed)} 通过 / {len(failed)} 失败")
     if failed:

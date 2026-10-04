@@ -64,6 +64,12 @@ async def t_n_plus_1():
 
 
 async def t_subprocess_kill_on_cancel():
+    if os.name != "posix":
+        # 本用例靠 POSIX 设施探测残留（sleep 30 / ps -eo / shell 脚本），Windows 上
+        # 既造不出这些进程也无法枚举，强行执行只会因 WinError 193 崩掉整个套件。
+        # 结论：非 POSIX 直接跳过，该回归由 Linux/Termux CI 覆盖。
+        print("  ⏭️  外部 cancel 后子进程回收 — 跳过：POSIX 专用探测（ps/sleep）")
+        return
     from agentd.tools.phone import _run
 
     async def runner():

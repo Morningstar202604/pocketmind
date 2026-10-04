@@ -8,7 +8,7 @@ import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8799"
-passed, failed = [], []
+passed, failed, skipped = [], [], []
 
 def req(method, path, body=None, timeout=20):
     data = json.dumps(body).encode() if body is not None else None
@@ -57,6 +57,12 @@ def check(name, cond, detail=""):
     (passed if cond else failed).append(name)
     print(("  ✅ " if cond else "  ❌ ") + name + (f" — {detail}" if detail and not cond else ""))
 
+
+def skip(name, why):
+    """平台/环境不适用的断言记为跳过，不算失败（避免 Windows 本地跑出一堆假红）。"""
+    skipped.append(name)
+    print(f"  ⏭️  {name} — 跳过：{why}")
+
 print("== M5 安全加固回归 ==")
 
 # 1. 打码：设置 32 位 key 后 GET 只回打码
@@ -64,20 +70,33 @@ req("PUT", "/api/settings", {"llm": {"api_key": "sk-abcdefghijklmnopqrstuvwxyz12
 s = req("GET", "/api/settings")
 check("API key 打码", s["llm"]["api_key"] == "sk-a***************************3456" and "sk-abcdefghij" not in s["llm"]["api_key"], s["llm"]["api_key"])
 
-# 2. 数据文件权限（600/700）
+# 2. 数据文件权限（600/700）—— 仅 POSIX 有意义：Windows/NTFS 上 st_mode 不反映
+# chmod（Python 只能近似），断言 0o600 必然是假失败。
 import pathlib
+import shutil
 
-home = pathlib.Path(os.environ.get("AGENT_HOME", "/tmp/pa-test"))
-mode_db = (home / "agent.db").stat().st_mode & 0o777
-mode_dir = home.stat().st_mode & 0o777
-check("数据库 600", mode_db == 0o600, oct(mode_db))
-check("目录 700", mode_dir == 0o700, oct(mode_dir))
+if os.name != "posix":
+    skip("数据文件权限 600/700", f"非 POSIX 平台（{os.name}）无 chmod 语义，交由 Linux/Termux 覆盖")
+else:
+    home = pathlib.Path(os.environ.get("AGENT_HOME", "/tmp/pa-test"))
+    mode_db = (home / "agent.db").stat().st_mode & 0o777
+    mode_dir = home.stat().st_mode & 0o777
+    check("数据库 600", mode_db == 0o600, oct(mode_db))
+    check("目录 700", mode_dir == 0o700, oct(mode_dir))
 
-# 3. 核心流程：电池工具（auto 模式直接跑）
+# 3. 核心流程：电池工具（auto 模式直接跑）—— 依赖 termux-api（或
+# tests/setup_faketermux.sh 造的桩）在 PATH 上；缺依赖属于环境问题，不是代码回归。
 req("PUT", "/api/settings", {"permission_mode": "auto"})
-r = chat("查看电池电量")
-sid = r.get("session_id")
-check("电池工具完成", r.get("status") == "completed" and r.get("tool_ok"), r.get("status", "")[:40])
+battery_ran = shutil.which("termux-battery-status") is not None
+if not battery_ran:
+    skip(
+        "电池工具完成",
+        "PATH 上找不到 termux-battery-status（先 bash tests/setup_faketermux.sh 并导出 PATH）",
+    )
+else:
+    r = chat("查看电池电量")
+    sid = r.get("session_id")
+    check("电池工具完成", r.get("status") == "completed" and r.get("tool_ok"), r.get("status", "")[:40])
 
 # 4. 审批：切回 approve，拨号应弹审批卡，流中回调 deny，随后会话应正常收尾
 req("PUT", "/api/settings", {"permission_mode": "approve"})
@@ -97,14 +116,17 @@ r = chat("给10086打个电话")
 check("审批超时自动拒绝", r.get("status") == "completed" and not r.get("tool_ok"), f"status={r.get('status')} tool_ok={r.get('tool_ok')}")
 req("PUT", "/api/settings", {"server": {"approval_timeout": 120}})
 
-# 5. 会话自动命名
-ss = req("GET", "/api/sessions")
-names = [x.get("title", "") for x in ss if isinstance(x, dict)]
-check("会话自动命名", any("电池" in n or "电量" in n for n in names), str(names)[:80])
+# 5. 会话自动命名（依赖第 3 步真的发起过"电池"会话）
+if not battery_ran:
+    skip("会话自动命名", "第 3 步电池会话未执行，无命名样本可断言")
+else:
+    ss = req("GET", "/api/sessions")
+    names = [x.get("title", "") for x in ss if isinstance(x, dict)]
+    check("会话自动命名", any("电池" in n or "电量" in n for n in names), str(names)[:80])
 
 # 6. 工具清单（31 项：30 内建 + tts_offline 离线语音）
 tools = req("GET", "/api/tools")
 check("工具清单 31 项", tools.get("count", 0) == 31, str(tools.get("count")))
 
-print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
+print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败" + (f" / {len(skipped)} 跳过" if skipped else ""))
 sys.exit(1 if failed else 0)
