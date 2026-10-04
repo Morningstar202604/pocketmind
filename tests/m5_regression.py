@@ -45,6 +45,8 @@ def chat(message, session_id=None, timeout=90, on_approval=None):
                 elif t == "tool_update":
                     if ev.get("status") == "completed" and ev.get("result"):
                         tool_ok = True
+                    if ev.get("result"):
+                        out["tool_result"] = ev.get("result")
                 elif t == "done":
                     out["status"] = "completed" if ev.get("stop_reason") == "end_turn" else ev.get("stop_reason", "done")
     out["session_id"] = sid
@@ -73,7 +75,6 @@ check("API key 打码", s["llm"]["api_key"] == "sk-a***************************3
 # 2. 数据文件权限（600/700）—— 仅 POSIX 有意义：Windows/NTFS 上 st_mode 不反映
 # chmod（Python 只能近似），断言 0o600 必然是假失败。
 import pathlib
-import shutil
 
 if os.name != "posix":
     skip("数据文件权限 600/700", f"非 POSIX 平台（{os.name}）无 chmod 语义，交由 Linux/Termux 覆盖")
@@ -84,18 +85,19 @@ else:
     check("数据库 600", mode_db == 0o600, oct(mode_db))
     check("目录 700", mode_dir == 0o700, oct(mode_dir))
 
-# 3. 核心流程：电池工具（auto 模式直接跑）—— 依赖 termux-api（或
-# tests/setup_faketermux.sh 造的桩）在 PATH 上；缺依赖属于环境问题，不是代码回归。
+# 3. 核心流程：电池工具（auto 模式直接跑）
+#    可用性必须看**服务端**：工具由 agentd 进程执行，客户端 PATH 上有没有桩不作数
+#    （CI 里服务端 PATH 已含 faketermux 桩，测试进程没有）。termux-api 缺失时工具返回
+#    结构化 error，据此记为「跳过」；其他失败照旧算失败。
 req("PUT", "/api/settings", {"permission_mode": "auto"})
-battery_ran = shutil.which("termux-battery-status") is not None
+r = chat("查看电池电量")
+sid = r.get("session_id")
+_res = r.get("tool_result")
+tool_err = str(_res.get("error", "")) if isinstance(_res, dict) else ""
+battery_ran = "termux-api 未安装" not in tool_err
 if not battery_ran:
-    skip(
-        "电池工具完成",
-        "PATH 上找不到 termux-battery-status（先 bash tests/setup_faketermux.sh 并导出 PATH）",
-    )
+    skip("电池工具完成", "服务端未装 termux-api（真机或 tests/setup_faketermux.sh 桩），属环境而非代码")
 else:
-    r = chat("查看电池电量")
-    sid = r.get("session_id")
     check("电池工具完成", r.get("status") == "completed" and r.get("tool_ok"), r.get("status", "")[:40])
 
 # 4. 审批：切回 approve，拨号应弹审批卡，流中回调 deny，随后会话应正常收尾
