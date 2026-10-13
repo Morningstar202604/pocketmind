@@ -57,14 +57,18 @@ async def _check_condition(cond: tuple[str, str, float]) -> bool:
     """条件求值：读手机电量与阈值比较。读不到电池时视为满足（避免任务静默丢失）。"""
     metric, op, value = cond
     try:
-        # phone.py 里函数名是 battery()，注册的工具名才是 "get_battery"；
+        # phone 包里 system 模块函数名是 battery()，注册的工具名才是 "get_battery"；
         # 必须按实际函数名导入，否则 ImportError 会被下面的 except 吞掉、条件恒为 True。
-        from .tools.phone import battery as get_battery
+        from .tools.phone.system import battery as get_battery
 
         info = await get_battery()
         pct = float(info.get("percentage") or 0)
-    except Exception:  # noqa: BLE001
-        return True
+    except Exception as exc:  # noqa: BLE001
+        # Fail-CLOSE：电池读取失败时不运行条件任务（避免低电量时错误运行耗电任务）。
+        # 注意：此前 fail-open 会导致 "battery > 20" 在读取失败时恒 True，反而危险。
+        import logging as _log
+        _log.getLogger(__name__).warning("条件检查读取电池失败（本次不运行）: %s", exc)
+        return False
     return {
         "<": pct < value,
         ">": pct > value,
@@ -117,10 +121,7 @@ class SchedulerService:
     main.py 路由层无需感知底层从「自管 sqlite」换成了「官方 JobStore」。
     """
 
-    def __init__(self, db_path: str | Path, notify_cb: Callable[[str, str], None] | None = None):
-        # notify_cb 仅为兼容旧构造签名保留（当前 _fire_job 直接调 notify）；
-        # 传入时也无害，这里暂存以便将来扩展。
-        self._notify_cb = notify_cb or (lambda t, c: None)
+    def __init__(self, db_path: str | Path):
         # 官方 SQLAlchemyJobStore：url 形式内部自建同步 engine，表 apscheduler_jobs 自动创建
         self._jobstore = SQLAlchemyJobStore(url=f"sqlite:///{db_path}")
         self._sched = AsyncIOScheduler(jobstores={"default": self._jobstore})
@@ -146,9 +147,13 @@ class SchedulerService:
     # ---------- job ↔ dict 转换 ----------
     @staticmethod
     def _job_to_dict(job) -> dict:
-        """把 APScheduler Job 对象转成对外 dict（字段与旧自管 JobStore 对齐）。"""
+        """把 APScheduler Job 对象转成对外 dict（字段与旧自管 JobStore 对齐）。
+
+        APScheduler 3.11：``next_run_time`` 通过 ``job.next_run_time`` 访问；
+        暂停状态 job 该属性可能不存在（用 getattr 兜底）。
+        """
         kw = dict(job.kwargs or {})
-        nrt = job.next_run_time
+        nrt = getattr(job, "next_run_time", None)
         return {
             "id": job.id,
             "name": kw.get("name", job.id),
@@ -196,6 +201,7 @@ class SchedulerService:
             kwargs=kwargs,
             replace_existing=True,
             misfire_grace_time=300,
+            coalesce=True,  # 多个 misfire 触发合并为一次执行，防积压连击
         )
         # 默认停用：立即 pause（next_run_time=None，持久化后重启仍停用）
         if not job.get("enabled", True):
@@ -203,13 +209,48 @@ class SchedulerService:
         return self.get(jid)
 
     def update(self, jid: str, patch: dict) -> dict | None:
+        """更新 job。
+
+        - ``enabled`` 切换：True→resume / False→pause
+        - 调度参数变更（``expr`` / ``trigger_type`` / ``message`` / ``condition``）：
+          通过 APScheduler.reschedule_job 热替换 trigger + 更新 kwargs，无需删了重建。
+        """
         if self._sched.get_job(jid) is None:
             return None
+
+        existing = self.get(jid)
+
+        # ── 调度参数变更（需重建 trigger + 更新 kwargs 缓存） ──
+        if "expr" in patch or "trigger_type" in patch:
+            rebuilt = {
+                "trigger_type": patch.get("trigger_type", existing.get("trigger_type", "interval")),
+                "expr": patch.get("expr", existing.get("expr", "3600")),
+                "message": patch.get("message", existing.get("message", "")),
+                "condition": patch.get("condition", existing.get("condition") or ""),
+                "name": existing.get("name", ""),
+            }
+            trigger = self._make_trigger(rebuilt)
+            self._sched.reschedule_job(jid, trigger=trigger)
+            # 同步更新 kwargs 里的 trigger_type/expr（_job_to_dict 从这里读）
+            job = self._sched.get_job(jid)
+            if job:
+                job.kwargs["trigger_type"] = rebuilt["trigger_type"]
+                job.kwargs["expr"] = rebuilt["expr"]
+
+        # ── 业务字段变更（message / condition） ──
+        job = self._sched.get_job(jid)
+        if job:
+            for k in ("message", "condition"):
+                if k in patch:
+                    job.kwargs[k] = patch[k]
+
+        # ── enabled 切换 ──
         if "enabled" in patch:
             if patch["enabled"]:
                 self._sched.resume_job(jid)
             else:
                 self._sched.pause_job(jid)
+
         return self.get(jid)
 
     def delete(self, jid: str) -> bool:

@@ -130,9 +130,9 @@ def main():
     # ---------- 任务/配方共用校验 + 设置响应打码 ----------
     from fastapi import HTTPException
 
-    from agentd.main import _masked_settings, _validate_job_payload
+    from agentd.routes import masked_settings, validate_job_payload
 
-    ok = _validate_job_payload(
+    ok = validate_job_payload(
         {"name": "n", "trigger_type": "interval", "expr": "60", "message": "m"}
     )
     check(
@@ -158,7 +158,7 @@ def main():
         ),
     ]:
         try:
-            _validate_job_payload(bad)
+            validate_job_payload(bad)
             check(f"坏任务被 400 拒绝（{why}）", False, "未抛异常")
         except HTTPException as e:
             check(f"坏任务被 400 拒绝（{why}）", e.status_code == 400, str(e.status_code))
@@ -171,7 +171,7 @@ def main():
     bad_recipes = []
     for rec in recs:
         try:
-            _validate_job_payload(
+            validate_job_payload(
                 {
                     "name": str(rec.get("name", "")),
                     "trigger_type": rec.get("trigger_type", "interval"),
@@ -194,7 +194,7 @@ def main():
         "server": {"token": "topsecrettoken123456", "tg_token": "123456:AAHeroinKey"},
         "user_prefs": "x",
     }
-    masked = _masked_settings(raw)
+    masked = masked_settings(raw)
     leaked = [s for s in ("abcdefghijklmnopqrstuvwxyz", "secrettoken", "AAHeroinKey") if s in str(masked)]
     check("GET/PUT 响应打码覆盖 api_key + server.token + tg_token", not leaked, str(leaked))
     check("打码返回副本，不改写内存中的真实配置", raw["server"]["token"] == "topsecrettoken123456")

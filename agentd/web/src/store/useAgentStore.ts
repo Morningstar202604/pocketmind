@@ -7,6 +7,8 @@
 // - 所有 action 保持改造前 App.tsx 的行为完全一致。
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import type { StateCreator } from "zustand/vanilla";
 import {
   api,
   exportAll,
@@ -17,121 +19,43 @@ import {
   type StoredMessage,
 } from "../api";
 import { getThemePref, setThemePref, type ThemePref } from "../theme";
-import { uid, type Msg, type Part, type ToolPart } from "../types";
+import { uid, type Msg, type Part } from "../types";
+import { applyEvent, restore, appendTextPart, safeJson } from "./partReducer";
+export { applyEvent, appendTextPart, restore, safeJson } from "./partReducer";
+export type { Msg, Part, ToolPart } from "../types";
+
+/** 连接状态类型 */
+export type ConnectionStatus = "connected" | "disconnected" | "reconnecting";
 
 /* ---------- 事件 → 消息状态（纯函数，可单测） ---------- */
 
 /** 把一段流式文本追加到消息末尾的同类型 part（text/thinking），否则新开一个 part。 */
-export function appendTextPart(msg: Msg, kind: "text" | "thinking", text: string): Msg {
-  const parts = [...msg.parts];
-  const last = parts[parts.length - 1];
-  if (last && last.type === kind) {
-    parts[parts.length - 1] = { ...last, text: last.text + text };
-  } else {
-    parts.push({ type: kind, text });
-  }
-  return { ...msg, parts };
-}
-
-/** 把后端 SSE 事件折叠进一条正在生成的 assistant 消息。 */
-export function applyEvent(msg: Msg, ev: ChatEvent): Msg {
-  switch (ev.type) {
-    case "text":
-      return appendTextPart(msg, "text", ev.text);
-    case "thinking":
-      return appendTextPart(msg, "thinking", ev.text);
-    case "tool_start": {
-      const tool: ToolPart = { id: ev.id, name: ev.name, input: ev.input, status: "running" };
-      return { ...msg, parts: [...msg.parts, { type: "tool", tool }] };
-    }
-    case "approval":
-      return {
-        ...msg,
-        parts: msg.parts.map((p) =>
-          p.type === "tool" && p.tool.id === ev.id
-            ? { ...p, tool: { ...p.tool, status: "waiting", summary: ev.summary, risk: ev.risk } }
-            : p
-        ),
-      };
-    case "tool_update":
-      return {
-        ...msg,
-        parts: msg.parts.map((p) =>
-          p.type === "tool" && p.tool.id === ev.id
-            ? { ...p, tool: { ...p.tool, status: ev.status, result: ev.result, undoable: ev.undoable } }
-            : p
-        ),
-      };
-    case "queued":
-      return { ...msg, done: true, queued: true };
-    case "plan":
-      // Plan 事件：追加一张执行计划卡片（纯展示，等待用户批准后才真正执行）
-      return {
-        ...msg,
-        parts: [
-          ...msg.parts,
-          { type: "plan" as const, plan: ev.plan, tool_calls: ev.tool_calls ?? [] },
-        ],
-      };
-    case "done":
-      return { ...msg, done: true };
-    case "error":
-      return { ...msg, done: true, error: ev.message };
-    default:
-      return msg;
-  }
-}
-
-/* ---------- 历史恢复（纯函数，可单测） ---------- */
-
-/** 宽松 JSON 解析：失败返回空对象，避免坏数据炸掉整屏。 */
-export function safeJson(s: string): Record<string, unknown> {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return {};
-  }
-}
-
-/** 把后端存储的消息序列（user/assistant/tool 交替）重建为前端渲染用的 Msg[]。 */
-export function restore(msgs: StoredMessage[]): Msg[] {
-  const out: Msg[] = [];
-  let currentAsst: Msg | null = null;
-  for (const m of msgs) {
-    if (m.role === "user") {
-      currentAsst = null;
-      out.push({ id: uid("u"), role: "user", parts: [{ type: "text", text: m.content }], done: true });
-    } else if (m.role === "assistant") {
-      const msg: Msg = { id: uid("a"), role: "assistant", parts: [], done: true };
-      if (m.content.trim()) msg.parts.push({ type: "text", text: m.content });
-      const tcs = (m.meta?.tool_calls as Array<{ id: string; name: string; args: string }> | undefined) ?? [];
-      for (const tc of tcs) {
-        msg.parts.push({
-          type: "tool",
-          tool: { id: tc.id, name: tc.name, input: safeJson(tc.args || "{}"), status: "completed" },
-        });
-      }
-      out.push(msg);
-      currentAsst = msg;
-    } else if (m.role === "tool" && currentAsst) {
-      const meta = m.meta as { tool_call_id?: string; status?: string };
-      const target = currentAsst.parts.find((p) => p.type === "tool" && p.tool.id === meta.tool_call_id);
-      if (target && target.type === "tool") {
-        target.tool.result = safeJson(m.content);
-        target.tool.status =
-          meta.status === "denied" ? "denied" : meta.status === "failed" ? "failed" : "completed";
-      }
-    }
-  }
-  return out;
-}
-
 /* ---------- 非响应式运行时句柄（不触发渲染） ---------- */
 
 let abortController: AbortController | null = null;
 // 前端消息队列：同一会话连续发送时排队执行（服务端亦有队列作为 API 层保险）
 let sendQueue: Array<{ text: string; aid: string }> = [];
 let running = false;
+
+// 后端健康检查轮询 id（用于 clearInterval）
+let healthTimer: ReturnType<typeof setInterval> | null = null;
+// 后端断连后的退避秒数（指数增长，上限 30s）
+let backoffSeconds = 1;
+const MAX_BACKOFF = 30;
+const BASE_BACKOFF = 1;
+
+// 厂商 id → 显示标签（与后端 config.PRESETS 对齐）
+function providerName(id: string): string {
+  const map: Record<string, string> = {
+    doubao: "豆包",
+    deepseek: "DeepSeek",
+    qwen: "通义千问",
+    kimi: "Kimi",
+    glm: "智谱",
+    siliconflow: "硅基流动",
+  };
+  return map[id] || id || "";
+}
 
 /* ---------- Store 类型 ---------- */
 
@@ -145,6 +69,10 @@ export interface AgentStore {
   ready: boolean;
   mock: boolean;
   error: string;
+  // 清除顶部错误提示（用户手动关闭）
+  clearError: () => void;
+  // 后端连接状态：connected 正常 / disconnected 断连 / reconnecting 重连中
+  connectionStatus: ConnectionStatus;
   // 浮层开关
   showSessions: boolean;
   showSettings: boolean;
@@ -154,11 +82,20 @@ export interface AgentStore {
   undoingId: string | null;
   // 智能体工作模式：plan = 先出计划待批准；act = 直接执行
   agentMode: "plan" | "act";
+  // 当前 LLM 厂商显示标签（如"豆包"、"DeepSeek"、"custom"），用于 Composer 输入框
+  providerLabel: string;
+  // 权限模式（与后端 permission_mode 同步）
+  permissionMode: "auto" | "approve" | "chat";
+  // 系统设置（脱敏后的快照）
+  settings: Record<string, unknown> | null;
 
   // 生命周期
   init: () => Promise<void>;
   refreshSessions: () => Promise<Session[]>;
   loadSession: (sid: string) => Promise<void>;
+  // 健康检查轮询（指数退避，后端恢复后自动重连）
+  startHealthPolling: () => void;
+  stopHealthPolling: () => void;
 
   // 发送/停止
   send: (text: string) => Promise<void>;
@@ -170,6 +107,8 @@ export interface AgentStore {
   approvePlan: (assistantMsgId: string) => Promise<void>;
   /** 修改计划：切回输入框聚焦，让用户补充/调整后重发。 */
   editPlan: (assistantMsgId: string) => void;
+  /** 忽略计划：不执行，仅在前端收起计划卡片。 */
+  ignorePlan: (assistantMsgId: string) => void;
 
   // 会话操作
   onNewSession: () => Promise<void>;
@@ -188,7 +127,7 @@ export interface AgentStore {
   setTheme: (t: ThemePref) => void;
 }
 
-export const useAgentStore = create<AgentStore>((set, get) => {
+const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
   /** 跑单条 SSE 流式对话：事件折叠进 id=aid 的 assistant 占位消息。 */
   const doRun = async (text: string, aid: string) => {
     const ac = new AbortController();
@@ -235,6 +174,7 @@ export const useAgentStore = create<AgentStore>((set, get) => {
     ready: false,
     mock: false,
     error: "",
+    providerLabel: "",
     showSessions: false,
     showSettings: false,
     showTimers: false,
@@ -242,19 +182,80 @@ export const useAgentStore = create<AgentStore>((set, get) => {
     undoingId: null,
     // 默认 act（直接执行）；init 时若后端保存过 plan 模式会再纠正
     agentMode: "act",
+    // 默认 approve mode；init 时若后端保存过其他值会再纠正
+    permissionMode: "auto" as "auto" | "approve" | "chat",
+    // 后端 settings 快照（脱敏后）
+    settings: null as Record<string, unknown> | null,
+    // 连接状态：初始为 reconnecting，首次健康检查后确定
+    connectionStatus: "reconnecting" as ConnectionStatus,
+
+    // ---------- 健康检查轮询（指数退避） ----------
+    startHealthPolling() {
+      if (healthTimer) return;
+      const poll = async () => {
+        try {
+          const h = await api.get<{ ok: boolean; ready: boolean; mock: boolean }>("/api/health");
+          const prev = useAgentStore.getState().connectionStatus;
+          if (prev === "disconnected" || prev === "reconnecting") {
+            set({ ready: h.ready, mock: h.mock, connectionStatus: "connected" });
+          }
+          // 连接正常时重置退避，并恢复快速轮询
+          if (backoffSeconds !== BASE_BACKOFF) {
+            backoffSeconds = BASE_BACKOFF;
+            if (healthTimer) {
+              clearInterval(healthTimer);
+              healthTimer = setInterval(poll, BASE_BACKOFF * 1000);
+            }
+          }
+        } catch {
+          // 仅在前一次为 connected 时才标记为 disconnected（避免重复 set）
+          const cur = useAgentStore.getState().connectionStatus;
+          if (cur !== "disconnected") {
+            set({ ready: false, connectionStatus: "disconnected" });
+          }
+          // 指数退避：翻倍至上限，并更新轮询间隔
+          const nextBackoff = Math.min(
+            backoffSeconds === 0 ? BASE_BACKOFF : backoffSeconds * 2,
+            MAX_BACKOFF
+          );
+          if (nextBackoff !== backoffSeconds) {
+            backoffSeconds = nextBackoff;
+            if (healthTimer) {
+              clearInterval(healthTimer);
+              healthTimer = setInterval(poll, backoffSeconds * 1000);
+            }
+          }
+        }
+      };
+      // 首次立即执行，之后按当前退避间隔轮询
+      void poll();
+      healthTimer = setInterval(poll, backoffSeconds * 1000);
+    },
+
+    stopHealthPolling() {
+      if (healthTimer) {
+        clearInterval(healthTimer);
+        healthTimer = null;
+      }
+    },
 
     // ---------- 生命周期 ----------
     async init() {
+      set({ connectionStatus: "reconnecting" });
       try {
         const h = await api.get<{ ok: boolean; ready: boolean; mock: boolean }>("/api/health");
-        set({ ready: h.ready, mock: h.mock });
+        set({ ready: h.ready, mock: h.mock, connectionStatus: "connected" });
       } catch {
-        set({ ready: false });
+        set({ ready: false, connectionStatus: "disconnected" });
       }
-      // 读取后端持久化的智能体模式（plan/act），失败则保持默认 act
+      // 启动持续健康检查轮询（在后台持续检测后端是否恢复）
+      get().startHealthPolling();
+      // 读取后端持久化的智能体模式（plan/act）+ 当前 LLM 厂商标签
+      // providerLabel 用于 Composer 输入框左上角显示（如"豆包""DeepSeek"）
       try {
-        const s = await api.get<{ agent_mode?: "plan" | "act" }>("/api/settings");
+        const s = await api.get<{ agent_mode?: "plan" | "act"; llm?: { provider?: string } }>("/api/settings");
         if (s.agent_mode === "plan" || s.agent_mode === "act") set({ agentMode: s.agent_mode });
+        if (s.llm?.provider) set({ providerLabel: providerName(s.llm.provider) });
       } catch {
         /* 后端尚未支持该字段时静默忽略 */
       }
@@ -299,8 +300,8 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       set((s) => ({
         messages: [
           ...s.messages,
-          { id: uid("u"), role: "user", parts: [{ type: "text", text: t }], done: true },
-          { id: aid, role: "assistant", parts: [], done: false, queued },
+          { id: uid("u"), role: "user", parts: [{ type: "text", text: t }], done: true, createdAt: Date.now() / 1000 },
+          { id: aid, role: "assistant", parts: [], done: false, queued, createdAt: Date.now() / 1000 },
         ],
       }));
       sendQueue.push({ text: t, aid });
@@ -422,6 +423,9 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       }
     },
 
+    // ---------- 错误清除 ----------
+    clearError: () => set({ error: "" }),
+
     // ---------- UI 开关 ----------
     setShowSessions: (v) => set({ showSessions: v }),
     setShowSettings: (v) => set({ showSettings: v }),
@@ -470,13 +474,37 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       await get().send(userText);
     },
 
-    editPlan: (assistantMsgId: string) => {
+    editPlan: (_assistantMsgId: string) => {
       // 仅把输入框聚焦回来，让用户补充/修改后重发；卡片保留在历史里
-      void assistantMsgId; // 预留：未来可针对该计划做上下文回填
+      // _assistantMsgId 预留：未来可针对该计划做上下文回填
       window.dispatchEvent(new CustomEvent("agent:focus-composer"));
     },
+    ignorePlan: (assistantMsgId: string) => {
+      set((st) => ({
+        messages: st.messages.map((m) =>
+          m.id === assistantMsgId
+            ? { ...m, parts: m.parts.map((p) => (p.type === "plan" ? { ...p, ignored: true } : p)) }
+            : m
+        ),
+      }));
+    },
   };
-});
+};
 
-// 供组件订阅消息 parts 的小工具（保持原 partsFor(m) 语义）
-export type { Part };
+export const useAgentStore = create<AgentStore>()(
+  persist(_storeCreator, {
+    name: "pocketmind-ui",
+    storage: createJSONStorage(() => localStorage),
+    // 只持久化界面偏好（主题/模式/设置/Provider标签），消息与会话始终从服务端恢复
+    partialize: (s) => ({
+      theme: s.theme,
+      agentMode: s.agentMode,
+      providerLabel: s.providerLabel,
+      permissionMode: s.permissionMode,
+      settings: s.settings,
+    }),
+    version: 1,
+    migrate: (): Partial<AgentStore> => ({ theme: "system", agentMode: "act", providerLabel: "", permissionMode: "approve", settings: null }),
+  })
+);
+

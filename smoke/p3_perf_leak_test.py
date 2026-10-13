@@ -70,7 +70,7 @@ async def t_subprocess_kill_on_cancel():
         # 结论：非 POSIX 直接跳过，该回归由 Linux/Termux CI 覆盖。
         print("  ⏭️  外部 cancel 后子进程回收 — 跳过：POSIX 专用探测（ps/sleep）")
         return
-    from agentd.tools.phone import _run
+    from agentd.tools.phone._termux import _run
 
     async def runner():
         t = asyncio.create_task(_run([_FAKE_LONG], timeout=60))

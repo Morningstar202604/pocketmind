@@ -8,7 +8,15 @@ const TASKS = [
   { icon: <IconClipboard size={18} />, c: "cyan", label: "读取剪贴板", prompt: "读取剪贴板内容" },
 ];
 
-export function EmptyState({ onPick, ready }: { onPick: (t: string) => void; ready: boolean }) {
+export function EmptyState({
+  onPick,
+  ready,
+  onOpenSettings,
+}: {
+  onPick: (t: string) => void;
+  ready: boolean;
+  onOpenSettings: () => void;
+}) {
   return (
     <div className="empty">
       <div className="empty-logo">
@@ -18,16 +26,22 @@ export function EmptyState({ onPick, ready }: { onPick: (t: string) => void; rea
       <p className="empty-sub">
         {ready
           ? "我在你的手机上本地运行，可以读文件、执行命令、调用手机能力。"
-          : "尚未配置 LLM，先到设置里选一个模型厂商填上 API Key。"}
+          : "尚未配置 LLM。配置模型后，我就能调用手机能力帮你干活。"}
       </p>
-      <div className="tasks">
-        {TASKS.map((t) => (
-          <button key={t.label} className="task" onClick={() => onPick(t.prompt)}>
-            <span className={`task-icon ${t.c}`}>{t.icon}</span>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {ready ? (
+        <div className="tasks">
+          {TASKS.map((t) => (
+            <button key={t.label} className="task" onClick={() => onPick(t.prompt)}>
+              <span className={`task-icon ${t.c}`}>{t.icon}</span>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <button className="btn primary empty-setup" onClick={onOpenSettings}>
+          前往设置
+        </button>
+      )}
     </div>
   );
 }

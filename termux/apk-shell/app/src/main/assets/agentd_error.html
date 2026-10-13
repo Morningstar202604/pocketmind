@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>连接本地服务</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #0f1115;
+    color: #e6e8eb;
+    font-family: -apple-system, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+    padding: 32px 24px;
+  }
+  .card { max-width: 360px; width: 100%; }
+  .logo {
+    width: 64px; height: 64px;
+    margin: 0 auto 20px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 12px; }
+  p { font-size: 14px; line-height: 1.6; color: #9ca3af; margin-bottom: 16px; }
+  code {
+    display: block; background: #1a1d24; border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; color: #a5b4fc;
+    margin: 12px 0; word-break: break-all; text-align: left;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .btn {
+    display: inline-block; width: 100%;
+    padding: 14px 0; border-radius: 10px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: #fff; font-size: 15px; font-weight: 500;
+    border: none; cursor: pointer; margin-top: 8px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { opacity: 0.85; }
+  .status { font-size: 12px; color: #6b7280; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">袋</div>
+  <h1>本地服务未启动</h1>
+  <p>口袋智灵需要先在 Termux 中启动后端服务。</p>
+  <code id="cmd">bash ~/poketmind/termux/start.sh</code>
+  <button class="btn" id="retryBtn" onclick="doRetry()">启动完成后，点击重试</button>
+  <button class="btn" style="background:#1f2937;margin-top:8px" onclick="copyCmd()">复制启动命令</button>
+  <button class="btn" style="background:#059669;margin-top:8px" onclick="launchTermux()">启动服务</button>
+  <div class="status" id="statusText"></div>
+</div>
+<script>
+  function doRetry() {
+    document.getElementById('statusText').textContent = '正在尝试连接…';
+    // 通知原生层触发重载
+    if (window.PocketNative && window.PocketNative.reload) {
+      window.PocketNative.reload();
+    } else {
+      location.reload();
+    }
+  }
+  function copyCmd() {
+    var cmd = document.getElementById('cmd').textContent;
+    if (window.PocketNative && window.PocketNative.copyText) {
+      window.PocketNative.copyText(cmd);
+      document.getElementById('statusText').textContent = '已复制到剪贴板';
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(cmd).then(function() {
+        document.getElementById('statusText').textContent = '已复制到剪贴板';
+      }).catch(function() {
+        document.getElementById('statusText').textContent = '复制失败，请手动选择文本';
+      });
+    }
+  }
+  function launchTermux() {
+    if (window.PocketNative && window.PocketNative.launchTermux) {
+      window.PocketNative.launchTermux();
+      document.getElementById('statusText').textContent = '正在唤醒 Termux…';
+    } else {
+      document.getElementById('statusText').textContent = '当前环境无法直接启动 Termux';
+    }
+  }
+</script>
+</body>
+</html>

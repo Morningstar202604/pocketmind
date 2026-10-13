@@ -82,7 +82,7 @@ export const IconSend = (p: P) => (
 );
 
 export const IconStop = (p: P) => (
-  <svg width={p.size ?? 14} height={p.size ?? 14} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+  <svg width={p.size ?? 14} height={p.size ?? 14} viewBox="0 0 24 24" fill="currentColor" className={p.className} aria-hidden="true">
     <rect x="6" y="6" width="12" height="12" rx="2" />
   </svg>
 );
@@ -108,11 +108,5 @@ export const IconTrash = (p: P) => (
 export const IconClose = (p: P) => (
   <Svg {...p}>
     <path d="M6 6l12 12M18 6 6 18" />
-  </Svg>
-);
-
-export const IconCheck = (p: P) => (
-  <Svg {...p}>
-    <path d="M4 12.5 9.5 18 20 6.5" />
   </Svg>
 );

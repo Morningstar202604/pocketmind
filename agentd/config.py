@@ -11,11 +11,16 @@ P1-2：字段类型强制 / 范围收敛改由 pydantic 模型完成（替代 PU
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .paths import home_dir as _home_dir
+
+logger = logging.getLogger(__name__)
 
 # 国产 LLM 厂商预设（OpenAI 兼容协议）。base_url 与 model 均可按需修改。
 PRESETS = [
@@ -81,6 +86,24 @@ DEFAULTS = {
     },
     # auto = 全放行（不推荐） | approve = 写操作与危险操作需确认（推荐） | chat = 纯聊天（不调用工具）
     "permission_mode": "approve",
+    # plan = 先输出计划文本并停止，用户确认后再执行 | act = 直接执行工具（默认）
+    "agent_mode": "act",
+    # LiteLLM 统一网关（可选）：一份代码调用 100+ LLM，自动故障转移，成本追踪
+    "litellm": {},
+    # Mem0 本地记忆（可选）：向量 + 图混合记忆，跨会话语义搜索
+    # 开启前需 pip install mem0ai chromadb fastembed
+    # 完全本地运行（ChromaDB + FastEmbed ONNX + LiteLLM/OpenAI 抽取 LLM），不依赖 mem0 云服务
+    # {
+    #   "mem0": {
+    #     "enabled": true,
+    #     "embedding_model": "BAAI/bge-small-zh-v1.5",  # 中文优先；英文用 BAAI/bge-small-en-v1.5
+    #     "llm_provider": "openai",                      # 抽取 LLM（与 settings.llm 同配置）
+    #     "llm_model": "",                               # 留空则复用 settings.llm.model
+    #     "search_limit": 5,                             # 对话时最多注入几条记忆
+    #     "custom_instructions": "关注用户偏好、固定习惯、长期项目、姓名/联系信息"
+    #   }
+    # }
+    "mem0": {},
     # mcp：可选接入的 MCP 服务器 [{name, command, args}]（零依赖 stdio 客户端）
     # tg_token / tg_chat_id：可选的 Telegram 远程控制（token 属敏感信息，API 回传打码）
     "server": {
@@ -90,10 +113,154 @@ DEFAULTS = {
         "mcp": [],
         "tg_token": "",
         "tg_chat_id": "",
+        "use_litellm": False,
     },
     # 用户长期偏好：跨会话注入 system（存在本机，零依赖）
     "user_prefs": "",
+    # 【可配置】memory：自动摘要分页 + 检索参数
+    "memory": {
+        "auto_summarize": True,        # 每 N 轮自动把早期消息压缩为长期记忆
+        "summarize_every_n_turns": 10,  # 触发摘要的轮数
+        "summary_max_chars": 400,       # 摘要最大字符数
+        "search_limit": 5,              # 对话时最多注入几条检索结果
+        "fts_page_size": 50,            # FTS 回填分页大小（影响启动速度）
+        "retention_days": 90,           # 记忆保留天数（0 = 永久）
+    },
+    # 【可配置】agent：工具执行 / 递归控制
+    "agent": {
+        "tool_timeout": 60,             # 工具执行超时（秒，传给 subprocess）
+        "max_tool_retries": 2,          # 工具失败后最大重试次数
+        "max_tool_chain_depth": 10,     # 单次请求最大工具调用链长度（防死循环）
+    },
+    # 【可配置】context：LLM 上下文 Token 预算控制
+    "context": {
+        "budget_tokens": 0,             # 上下文窗口 Token 预算（0 = 用模型默认值即 max_tokens）
+        "auto_compress": True,          # 接近 budget 时自动压缩早期消息为摘要
+        "compress_threshold": 0.8,      # 触发自动压缩的 budget 占用比例
+    },
+    # 【可配置】mcp_client：让 PocketMind 作为 MCP Client 接入外部 MCP Server
+    "mcp_client": {
+        "enabled": False,               # 是否启用 MCP 客户端角色
+        "servers": [],                  # [{name, command, args, auto_connect}]
+        "timeout": 15,                  # MCP 调用超时（秒）
+    },
+    # 【可配置】eval：promptfoo 评测偏好
+    "eval": {
+        "provider": "litellm",           # 评测使用的 provider（litellm / custom）
+        "auto_run_on_startup": False,   # 启动时自动运行评测（需配置真实 API key）
+    },
 }
+
+# ---------- pydantic 配置子模型 ----------
+
+
+class MemorySettings(BaseModel):
+    """记忆管理配置"""
+    auto_summarize: bool = True
+    summarize_every_n_turns: int = 10
+    summary_max_chars: int = 400
+    search_limit: int = 5
+    fts_page_size: int = 50
+    retention_days: int = 90
+
+    @field_validator("summarize_every_n_turns", mode="before")
+    @classmethod
+    def _clamp_turns(cls, v):
+        try:
+            return max(3, min(50, int(v)))
+        except (TypeError, ValueError):
+            return 10
+
+    @field_validator("summary_max_chars", mode="before")
+    @classmethod
+    def _clamp_chars(cls, v):
+        try:
+            return max(100, min(2000, int(v)))
+        except (TypeError, ValueError):
+            return 400
+
+    @field_validator("retention_days", mode="before")
+    @classmethod
+    def _clamp_retention(cls, v):
+        try:
+            return max(0, min(3650, int(v)))
+        except (TypeError, ValueError):
+            return 90
+
+
+class AgentSettings(BaseModel):
+    """Agent 执行配置"""
+    tool_timeout: int = 60
+    max_tool_retries: int = 2
+    max_tool_chain_depth: int = 10
+
+    @field_validator("tool_timeout", mode="before")
+    @classmethod
+    def _clamp_timeout(cls, v):
+        try:
+            return max(5, min(300, int(v)))
+        except (TypeError, ValueError):
+            return 60
+
+    @field_validator("max_tool_retries", mode="before")
+    @classmethod
+    def _clamp_retries(cls, v):
+        try:
+            return max(0, min(5, int(v)))
+        except (TypeError, ValueError):
+            return 2
+
+    @field_validator("max_tool_chain_depth", mode="before")
+    @classmethod
+    def _clamp_depth(cls, v):
+        try:
+            return max(3, min(50, int(v)))
+        except (TypeError, ValueError):
+            return 10
+
+
+class ContextSettings(BaseModel):
+    """上下文 Token 预算控制"""
+    budget_tokens: int = 0
+    auto_compress: bool = True
+    compress_threshold: float = 0.8
+
+    @field_validator("budget_tokens", mode="before")
+    @classmethod
+    def _clamp_budget(cls, v):
+        try:
+            return max(0, min(200000, int(v)))
+        except (TypeError, ValueError):
+            return 0
+
+    @field_validator("compress_threshold", mode="before")
+    @classmethod
+    def _clamp_threshold(cls, v):
+        try:
+            return max(0.5, min(0.95, float(v)))
+        except (TypeError, ValueError):
+            return 0.8
+
+
+class MCPClientSettings(BaseModel):
+    """MCP 客户端配置（让 PocketMind 接入外部 MCP Server）"""
+    enabled: bool = False
+    servers: list = []
+    timeout: int = 15
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _clamp_timeout(cls, v):
+        try:
+            return max(3, min(120, int(v)))
+        except (TypeError, ValueError):
+            return 15
+
+
+class EvalSettings(BaseModel):
+    """PromptFoo 评测偏好"""
+    provider: str = "litellm"
+    auto_run_on_startup: bool = False
 
 
 # ---------- pydantic 配置模型（P1-2：类型强制 + 范围收敛） ----------
@@ -145,6 +312,8 @@ class ServerSettings(BaseModel):
     # Telegram 远程控制：bot token 与允许访问的 chat_id 白名单（均留空即不启用）
     tg_token: str = ""
     tg_chat_id: str = ""
+    # LiteLLM 网关：开启后所有 LLM 调用走 litellm.acompletion()
+    use_litellm: bool = False
 
     @field_validator("approval_timeout", mode="before")
     @classmethod
@@ -187,10 +356,7 @@ class AppSettings(BaseSettings):
         return v if v in ("plan", "act") else "act"
 
 
-def home_dir() -> Path:
-    """数据目录（配置 + 数据库）。"""
-    h = os.environ.get("AGENT_HOME")
-    return Path(h).expanduser() if h else Path.home() / ".agent" / "termux-agent"
+home_dir = _home_dir  # 复用 paths.home_dir 单一实现
 
 
 class Settings:
@@ -235,8 +401,28 @@ class Settings:
         具体字段的合法性在调用处（如 permission_mode()）仍有兜底。
         """
         try:
-            return AppSettings.model_validate(data).model_dump()
-        except ValidationError:
+            validated = AppSettings.model_validate(data).model_dump()
+            # 合并而非整体替换：AppSettings 只覆盖核心字段，
+            # 扩展配置块（memory/agent/context/mcp_client/litellm/mem0/eval）
+            # 不在模型内，必须原样保留，否则用户配置会被默认值覆盖。
+            for k, v in validated.items():
+                data[k] = v
+            return data
+        except ValidationError as e:
+            logger.warning("Config validation failed, using raw fallback: %s", e)
+            # 安全兜底：即使整体校验失败，收敛关键数值字段，防止极端值破坏服务
+            llm = data.get("llm") if isinstance(data, dict) else {}
+            if isinstance(llm, dict):
+                try:
+                    llm["temperature"] = max(0.0, min(2.0, float(llm.get("temperature", 0.3))))
+                except (TypeError, ValueError):
+                    llm["temperature"] = 0.3
+            server = data.get("server") if isinstance(data, dict) else {}
+            if isinstance(server, dict):
+                try:
+                    server["approval_timeout"] = max(0, min(3600, int(server.get("approval_timeout", 120))))
+                except (TypeError, ValueError):
+                    server["approval_timeout"] = 120
             return data
 
     def get(self) -> dict:
@@ -259,6 +445,35 @@ class Settings:
     def llm(self) -> dict:
         return self.data["llm"]
 
+    def litellm_cfg(self) -> dict:
+        """LiteLLM 专用配置。返回 {} 表示未启用。"""
+        return self.data.get("litellm", {})
+
+    def use_litellm(self) -> bool:
+        """是否走 LiteLLM 统一网关。"""
+        return bool(
+            self.data.get("server", {}).get("use_litellm", False)
+            and self.data.get("litellm", {})
+        )
+
+    # ---------- Mem0 本地记忆 ----------
+    def mem0_cfg(self) -> dict:
+        """Mem0 配置块。返回 {} 表示未启用。"""
+        return self.data.get("mem0", {})
+
+    def use_mem0(self) -> bool:
+        """是否启用 Mem0 本地记忆。需同时配置了 enabled=true 与可用的 LLM。"""
+        m = self.data.get("mem0", {})
+        if not isinstance(m, dict):
+            return False
+        if not m.get("enabled", False):
+            return False
+        # 抽取 LLM 必须可用：要么用户配置了 llm_model，要么 settings.llm 有 api_key
+        if m.get("llm_model"):
+            return True
+        llm = self.data.get("llm", {})
+        return bool(llm.get("api_key") and llm.get("model") and llm.get("base_url"))
+
     def permission_mode(self) -> str:
         m = self.data.get("permission_mode", "approve")
         return m if m in ("auto", "approve", "chat") else "approve"
@@ -267,6 +482,38 @@ class Settings:
         """plan / act；非法值回退到 act（直接执行，保持现状不阻塞）。"""
         m = self.data.get("agent_mode", "act")
         return m if m in ("plan", "act") else "act"
+
+    # ---------- 新增可配置 section 访问器 ----------
+
+    def memory_cfg(self) -> dict:
+        """记忆管理配置（auto_summarize / summarize_every_n_turns / fts_page_size / retention_days）。"""
+        base = DEFAULTS.get("memory", {}).copy()
+        base.update(self.data.get("memory", {}))
+        return MemorySettings(**base).model_dump()
+
+    def agent_cfg(self) -> dict:
+        """Agent 执行配置（tool_timeout / max_tool_retries / max_tool_chain_depth）。"""
+        base = DEFAULTS.get("agent", {}).copy()
+        base.update(self.data.get("agent", {}))
+        return AgentSettings(**base).model_dump()
+
+    def context_cfg(self) -> dict:
+        """上下文 Token 预算控制（budget_tokens / auto_compress / compress_threshold）。"""
+        base = DEFAULTS.get("context", {}).copy()
+        base.update(self.data.get("context", {}))
+        return ContextSettings(**base).model_dump()
+
+    def mcp_client_cfg(self) -> dict:
+        """MCP 客户端配置。dict 始终返回 enabled / servers / timeout。"""
+        base = DEFAULTS.get("mcp_client", {}).copy()
+        base.update(self.data.get("mcp_client", {}))
+        return MCPClientSettings(**base).model_dump()
+
+    def eval_cfg(self) -> dict:
+        """评测偏好（provider / auto_run）。"""
+        base = DEFAULTS.get("eval", {}).copy()
+        base.update(self.data.get("eval", {}))
+        return EvalSettings(**base).model_dump()
 
 
 def mask_key(key: str) -> str:

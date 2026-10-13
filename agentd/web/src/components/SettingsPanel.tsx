@@ -94,6 +94,8 @@ export function SettingsPanel({
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState("");
   const [showKey, setShowKey] = useState(false);
   // 401 时不再无限停在「加载中…」：给出令牌输入口，写入本地后重新拉取
   const [needToken, setNeedToken] = useState(false);
@@ -177,6 +179,25 @@ export function SettingsPanel({
     setForm((f) => (f ? { ...f, llm: { ...f.llm, provider: id, base_url: p.base_url, model: p.model } } : f));
   };
 
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult("");
+    try {
+      const r = await api.post<{ ok: boolean; mode?: string; model?: string; error?: string }>(
+        "/api/llm/test"
+      );
+      if (r.ok) {
+        setTestResult(r.model ? `连接成功（${r.model}）` : "连接成功");
+      } else {
+        setTestResult(`连接失败：${r.error || "未知错误"}`);
+      }
+    } catch (e) {
+      setTestResult(`请求失败：${(e as Error).message || "未知错误"}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     setMsg("");
@@ -191,6 +212,7 @@ export function SettingsPanel({
           // 在面板里改的 MCP 服务器会被静默丢弃（后端其实支持写 mcp）
           mcp: form.server?.mcp ?? [],
         },
+        mcp_client: form.mcp_client ?? { enabled: false, servers: [], timeout: 15 },
         user_prefs: form.user_prefs ?? "",
       });
       // 局域网令牌同步到本地，后续请求自动携带
@@ -320,6 +342,16 @@ export function SettingsPanel({
               }
             />
             <p className="hint">低 = 更稳定听话，高 = 更有创意</p>
+            <div className="llm-test-row">
+              <button className="btn sm" onClick={() => void testConnection()} disabled={testing}>
+                {testing ? "测试中…" : "测试连接"}
+              </button>
+              {testResult && (
+                <span className={testResult.startsWith("连接成功") ? "llm-test-ok" : "llm-test-err"}>
+                  {testResult}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -405,6 +437,53 @@ export function SettingsPanel({
           </div>
         </div>
 
+        {/* MCP Client（PocketMind 调用外部 MCP 服务器） */}
+        <div className="group">
+          <p className="group-title">MCP Client（调用外部 MCP）</p>
+          <div className="field">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.mcp_client?.enabled ?? false}
+                onChange={(e) =>
+                  setForm((f) =>
+                    f ? { ...f, mcp_client: { ...(f.mcp_client || {}), enabled: e.target.checked } } : f
+                  )
+                }
+              />
+              启用 MCP Client（让 PocketMind 调用外部 MCP Server）
+            </label>
+            <p className="hint">
+              服务器列表每行一个：名称 | 命令 | 参数。保存后需重启服务生效，连接成功后其工具会出现在「MCP 扩展」分组（默认需审批）。
+            </p>
+            <textarea
+              rows={3}
+              value={(form.mcp_client?.servers ?? [])
+                .map((s) => [s.name, s.command, ...(s.args || [])].join(" | "))
+                .join("\n")}
+              onChange={(e) => {
+                const rows = e.target.value
+                  .split("\n")
+                  .map((l) => l.trim())
+                  .filter(Boolean)
+                  .map((l) => {
+                    const [name = "", command = "", ...rest] = l.split("|").map((x) => x.trim());
+                    return {
+                      name: name || "mcp",
+                      command,
+                      args: rest.flatMap((r) => r.split(/\s+/).filter(Boolean)),
+                      auto_connect: true,
+                    };
+                  })
+                  .filter((s) => s.command);
+                setForm((f) => (f ? { ...f, mcp_client: { ...(f.mcp_client || {}), servers: rows } } : f));
+              }}
+              placeholder={"github | npx | -y @modelcontextprotocol/server-github"}
+            />
+            <p className="hint">需先安装对应 MCP Server 依赖（如 npx 包），且外部服务器需可从手机访问。</p>
+          </div>
+        </div>
+
         {/* 长期偏好（跨会话记忆） */}
         <div className="group">
           <p className="group-title">长期偏好</p>
@@ -456,7 +535,7 @@ export function SettingsPanel({
           <p className="group-title">数据备份</p>
           <div className="field">
             <p className="hint">
-              一键把全部会话与设置导出为 JSON 文件（不含 API 密钥）。之后在设置里可以凭文件恢复；文件保存在你下载的位置。
+              一键把全部会话与设置导出为 JSON 文件（不含 API 密钥），用于本地备份留存；文件保存在你下载的位置。
             </p>
             <button className="btn" onClick={onExport}>导出全部数据</button>
           </div>

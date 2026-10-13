@@ -29,17 +29,18 @@ async def main():
     print("== P0 修复回归 ==")
 
     # ---------- P0-4：$HOME 展开 ----------
-    from agentd.tools import phone as phone_mod
+    from agentd.tools.phone import media as phone_media
 
-    src = await asyncio.to_thread(Path(phone_mod.__file__).read_text, encoding="utf-8")
+    # take_photo 在 media.py（用 time.time() + Path.home() 拼接路径）
+    src = await asyncio.to_thread(Path(phone_media.__file__).read_text, encoding="utf-8")
     check("P0-4 take_photo 默认路径无字面 $HOME",
           '"$HOME"' not in src and "'$HOME'" not in src,
-          "phone.py 中仍存在 $HOME 字面量")
-    check("P0-4 phone.py 导入了 Path",
+          "phone/media.py 中仍存在 $HOME 字面量")
+    check("P0-4 phone/media.py 导入了 Path",
           "from pathlib import Path" in src or "import pathlib" in src)
 
     # ---------- P0-5：share_text -t 语义 ----------
-    share_src = inspect.getsource(phone_mod.share_text) if hasattr(phone_mod, "share_text") else ""
+    share_src = inspect.getsource(phone_media.share_text) if hasattr(phone_media, "share_text") else ""
     check("P0-5 share_text 不硬编码 text/plain 为 -t",
           '"text/plain"' not in share_src or "-t" not in share_src,
           "share_text 仍将 text/plain 传给 -t 参数")

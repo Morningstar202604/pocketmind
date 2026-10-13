@@ -20,6 +20,14 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 
+[tool.pytest.ini_options]
+# pytest-asyncio 1.x 默认 strict 模式，async 测试需逐个加标记；
+# 本仓库测试统一为 async 风格，用 auto 模式免去重复样板。
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# 默认只收集 test_*.py / *_test.py；eval_*.py 是 promptfoo 风格的评测脚本，也一并收集
+python_files = ["test_*.py", "*_test.py", "eval_*.py"]
+
 # mypy 渐进式基线：
 #   - 目标 Python 3.11（与 CI / Termux 对齐）；
 #   - ignore_missing_imports：三方库（mcp / python-telegram-bot）未提供完整类型；

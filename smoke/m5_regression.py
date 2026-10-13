@@ -2,9 +2,8 @@
 """M5 回归：审批/命名/级联/未知工具/打码/权限 —— 直连 API 验证"""
 import json
 import os
-import subprocess
+import pathlib
 import sys
-import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8799"
@@ -74,8 +73,6 @@ check("API key 打码", s["llm"]["api_key"] == "sk-a***************************3
 
 # 2. 数据文件权限（600/700）—— 仅 POSIX 有意义：Windows/NTFS 上 st_mode 不反映
 # chmod（Python 只能近似），断言 0o600 必然是假失败。
-import pathlib
-
 if os.name != "posix":
     skip("数据文件权限 600/700", f"非 POSIX 平台（{os.name}）无 chmod 语义，交由 Linux/Termux 覆盖")
 else:

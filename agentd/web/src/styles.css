@@ -213,6 +213,42 @@ body {
   flex-direction: column;
   gap: 18px;
 }
+/* 消息条目定位（供 hover 操作按钮） */
+.row {
+  position: relative;
+}
+/* 操作按钮（复制等）— hover 时淡入 */
+.msg-action {
+  position: absolute;
+  top: -10px;
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.15s, transform 0.15s;
+  z-index: 2;
+  white-space: nowrap;
+}
+.row.user .msg-action {
+  right: 4px;
+}
+.row.agent .msg-action {
+  left: 4px;
+}
+.row:hover .msg-action,
+.row:focus-within .msg-action {
+  opacity: 1;
+  transform: translateY(0);
+}
+.msg-action:hover {
+  color: var(--text);
+  border-color: var(--brand);
+}
 .row.user {
   display: flex;
   justify-content: flex-end;
@@ -542,6 +578,43 @@ body {
   font-size: 11px;
   color: var(--text-3);
 }
+.approval-countdown {
+  color: var(--warn);
+  font-weight: 600;
+}
+.msg-time {
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-1);
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.checkbox-row input {
+  accent-color: var(--brand);
+}
+.llm-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.llm-test-ok {
+  font-size: 12px;
+  color: var(--brand);
+}
+.llm-test-err {
+  font-size: 12px;
+  color: var(--err);
+  word-break: break-all;
+}
 
 /* ===== 按钮 ===== */
 .btn {
@@ -593,17 +666,48 @@ body {
   max-width: 760px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-2xl);
   background: var(--panel);
-  padding: 8px;
+  padding: 6px 8px 8px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .composer-box:focus-within {
   border-color: color-mix(in srgb, var(--brand) 55%, var(--border));
   box-shadow: var(--ring);
+}
+/* 元信息行：左厂商标签 + 右字符计数 */
+.composer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  min-height: 16px;
+}
+.composer-provider {
+  font-size: 10px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  padding: 1px 8px;
+  border-radius: 999px;
+  line-height: 1.4;
+}
+.composer-count {
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.composer-count.over {
+  color: var(--warn);
+}
+
+/* textarea + send button row */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
 }
 .composer textarea {
   flex: 1;
@@ -652,8 +756,28 @@ body {
 .composer-err {
   max-width: 760px;
   margin: 0 auto 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--err) 12%, transparent);
   color: var(--err);
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.composer-err-close {
+  border: none;
+  background: transparent;
+  color: var(--err);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.composer-err-close:hover {
+  background: color-mix(in srgb, var(--err) 20%, transparent);
 }
 .composer-hint {
   max-width: 760px;
@@ -699,6 +823,10 @@ body {
   max-width: 320px;
   color: var(--text-2);
   font-size: 13px;
+}
+.empty-setup {
+  margin-top: 18px;
+  min-width: 200px;
 }
 .tasks {
   display: grid;
@@ -860,6 +988,23 @@ body {
 }
 
 /* ===== 会话列表 ===== */
+.drawer-search {
+  padding: 10px 14px 4px;
+}
+.drawer-search input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 13px;
+  outline: none;
+}
+.drawer-search input:focus {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--border));
+  box-shadow: var(--ring);
+}
 .sessions {
   list-style: none;
   margin: 0;

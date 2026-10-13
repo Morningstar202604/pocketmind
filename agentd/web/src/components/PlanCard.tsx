@@ -16,14 +16,18 @@ export function PlanCard({
   plan,
   toolCalls,
   approved,
+  ignored,
   onApprove,
   onEdit,
+  onIgnore,
 }: {
   plan: string;
   toolCalls: PlannedToolCall[];
   approved?: boolean;
+  ignored?: boolean;
   onApprove: () => void;
   onEdit: () => void;
+  onIgnore: () => void;
 }) {
   return (
     <div className="plan-card">
@@ -53,13 +57,18 @@ export function PlanCard({
 
       {approved ? (
         <p className="plan-approved">已批准，正在切换到执行模式并开始运行…</p>
+      ) : ignored ? (
+        <p className="plan-ignored">已忽略该计划。你可以继续发送新指令。</p>
       ) : (
         <div className="plan-actions">
-          <button className="btn primary" onClick={onApprove}>
+          <button className="btn primary" onClick={onApprove} aria-label="批准计划并执行">
             批准并执行
           </button>
-          <button className="btn" onClick={onEdit}>
+          <button className="btn" onClick={onEdit} aria-label="修改计划后重新提交">
             修改计划
+          </button>
+          <button className="btn" onClick={onIgnore} aria-label="忽略该计划">
+            忽略计划
           </button>
         </div>
       )}

@@ -1,18 +1,20 @@
 """离线 Mock LLM：不消耗 API 额度，用于端到端自测与演示。
 
 用法：python -m agentd.main --mock。
-触发规则（对测试友好且可预期）：用户消息含关键词 → 调用对应工具 → 下一轮返回收尾文本。
-  电池→get_battery  短信→read_sms  定位/位置→get_location  剪贴板→get_clipboard
-  传感器→list_sensors  通知→send_notification  工具→run_shell
-无关键词 → 直接回显一段 mock 文本。
+触发规则：用户消息含前缀/关键词 → 调用对应工具（流式 reasoning → tool_call）→ 下一轮返回收尾文本。
+  支持正则 prefix 匹配（"查一下电池电量" 匹配 "电池"前缀），减少漏触发。
+流式输出：文本按字/词逐步 yield（模拟真实 LLM 打字效果），思考步骤先输出 reasoning 再 tool_call。
 """
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 
 class _Delta:
+    __slots__ = ("content", "reasoning_content", "tool_calls")
+
     def __init__(self, content: str | None = None, reasoning: str | None = None, tool_calls: list | None = None):
         self.content = content
         self.reasoning_content = reasoning
@@ -20,6 +22,8 @@ class _Delta:
 
 
 class _Chunk:
+    __slots__ = ("choices",)
+
     def __init__(self, delta: _Delta):
         self.choices = [SimpleNamespace(delta=delta)]
 
@@ -32,52 +36,78 @@ def _tool_call(index: int, call_id: str, name: str, args: dict) -> SimpleNamespa
     )
 
 
+def _stream_text(text: str):
+    """把一段文本按「词」粒度切片，逐个 yield 以提供流式打字效果。
+
+    简单分词：中文逐字、英文按空格、标点独立。
+    """
+    # 按 tokenize：中文字符独立、英文单词整体、标点独立
+    tokens = re.findall(r"[\u4e00-\u9fff]|[a-zA-Z0-9_]+|[^\s\u4e00-\u9fff\w]|\s+", text)
+    yield from tokens
+
+
 class MockLLM:
     def __init__(self, settings: dict):
         self.settings = settings
-        # (触发词, 工具名, 参数)：用于端到端演示与自测，顺序即优先级
-        self._TOOLS = [
+        # (匹配模式, 工具名, 参数)：支持 str（含.Contains）或 compiled regex
+        # 顺序即优先级；第一个命中的工具被调用
+        self._TOOLS: list[tuple, str, dict] = [
             ("电池", "get_battery", {}),
             ("短信", "read_sms", {"limit": 5}),
-            ("定位", "get_location", {"provider": "network"}),
-            ("位置", "get_location", {"provider": "network"}),
+            (re.compile(r"定位|位置|在哪"), "get_location", {"provider": "network"}),
             ("剪贴板", "get_clipboard", {}),
             ("传感器", "list_sensors", {}),
-            ("通知", "send_notification", {"title": "口袋智灵 测试通知", "message": "这是 mock 演示"}),
-            ("打电话", "make_call", {"number": "10086"}),
-            ("打个电话", "make_call", {"number": "10086"}),
-            ("发短信", "send_sms", {"numbers": ["13800000000"], "text": "测试短信"}),
-            ("发条短信", "send_sms", {"numbers": ["13800000000"], "text": "测试短信"}),
-            ("语音", "tts_speak", {"text": "你好，我是口袋智灵"}),
+            (re.compile(r"通知|提醒|notify"), "send_notification", {"title": "口袋智灵", "message": "这是一条演示通知"}),
+            (re.compile(r"打电话|打个电话|呼叫"), "make_call", {"number": "10086"}),
+            (re.compile(r"发短信|发条短信"), "send_sms", {"numbers": ["13800000000"], "text": "测试短信"}),
+            (re.compile(r"语音|朗读|读出来"), "tts_speak", {"text": "你好，我是口袋智灵，这是语音演示"}),
             ("离线朗读", "tts_offline", {"text": "明天早上八点提醒我开会"}),
-            ("拍照", "take_photo", {}),
-            ("WiFi", "get_wifi_info", {}),
-            ("wifi", "get_wifi_info", {}),
-            ("工具", "run_shell", {"command": "echo 口袋智灵工具链路OK"}),
+            (re.compile(r"拍照|拍张|camera"), "take_photo", {}),
+            (re.compile(r"wifi|WiFi|网络"), "get_wifi_info", {}),
+            (re.compile(r"工具|执行|运行"), "run_shell", {"command": "echo 口袋智灵工具链路OK"}),
         ]
+
+    def _match_tool(self, text: str):
+        """返回 (name, args) 或 None。支持 str（contains）和 regex（search）。"""
+        for pattern, name, args in self._TOOLS:
+            if isinstance(pattern, re.Pattern):
+                if pattern.search(text):
+                    return name, args
+            elif pattern in text:
+                return name, args
+        return None
 
     async def chat(self, messages: list[dict], tools: list[dict] | None):
         last_user = next(
-            (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+            (str(m.get("content") or "") for m in reversed(messages) if m["role"] == "user"), ""
         )
         has_tool_result = any(m["role"] == "tool" for m in messages)
 
         if not has_tool_result and tools:
-            for kw, name, args in self._TOOLS:
-                if kw in str(last_user):
-                    yield _Chunk(_Delta(reasoning=f"我先调用 {name} 获取结果，再给你答复。"))
-                    yield _Chunk(_Delta(tool_calls=[_tool_call(0, "call_mock_1", name, args)]))
-                    return
+            matched = self._match_tool(last_user)
+            if matched:
+                name, args = matched
+                # 先输出思考过程
+                for tok in _stream_text(f"需要调用 {name} 来回答这个问题。"):
+                    yield _Chunk(_Delta(reasoning=tok))
+                # 再发出 tool call
+                yield _Chunk(_Delta(tool_calls=[_tool_call(0, "call_mock_1", name, args)]))
+                return
 
         if has_tool_result:
-            yield _Chunk(_Delta(content=(
+            reply = (
                 "工具已执行完毕（mock 演示）：结果已返回并回填。"
                 "这条消息说明「流式输出 → 工具调用 → 审批 → 结果回填」链路是通的，"
                 "配置真实 LLM 后我会真正干活。"
-            )))
+            )
+            for tok in _stream_text(reply):
+                yield _Chunk(_Delta(content=tok))
             return
 
-        yield _Chunk(_Delta(content=f"（mock 模式）收到：{str(last_user)[:200]}。配置真实 LLM（见设置）后我会真正执行任务。"))
+        # 默认回显（流式）
+        reply = f"（mock 模式）收到：{last_user[:200]}。配置真实 LLM（见设置）后我会真正执行任务。"
+        for tok in _stream_text(reply):
+            yield _Chunk(_Delta(content=tok))
 
     # ---------- 会话自动命名 / 记忆摘要（mock 规则版） ----------
 

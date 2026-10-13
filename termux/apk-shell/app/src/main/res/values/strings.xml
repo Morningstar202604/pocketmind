@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">口袋智灵</string>
+    <string name="monitor_fgs_subtype">监控本地 agentd 服务 (http://127.0.0.1:8787) 存活状态，离线时通知用户</string>
+</resources>

@@ -22,7 +22,7 @@ export type Part =
   | { type: "thinking"; text: string }
   | { type: "tool"; tool: ToolPart }
   // Plan 模式产出的执行计划卡片（不是普通消息气泡）
-  | { type: "plan"; plan: string; tool_calls: PlannedToolCall[]; approved?: boolean };
+  | { type: "plan"; plan: string; tool_calls: PlannedToolCall[]; approved?: boolean; ignored?: boolean };
 
 export interface Msg {
   id: string;
@@ -31,6 +31,8 @@ export interface Msg {
   done: boolean;
   error?: string;
   queued?: boolean;
+  // 消息创建时间（秒级时间戳，来自后端 created_at 或本地创建时刻）
+  createdAt?: number;
 }
 
 export function uid(prefix: string): string {

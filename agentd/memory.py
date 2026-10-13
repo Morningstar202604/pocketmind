@@ -11,8 +11,10 @@ P1-5 迁移说明：
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -33,6 +35,7 @@ class Store:
         self.engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
         self._conn: AsyncConnection | None = None
         self._fts = False  # FTS5 是否可用（编译进 sqlite 且建表成功才为 True）
+        self._write_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """建立异步连接、开启 WAL、建表/回填（在 FastAPI startup 中调用）。"""
@@ -129,19 +132,27 @@ class Store:
             self._fts = False
 
     async def _backfill_fts(self) -> None:
-        """把 memory 表里已存在、但尚未进 FTS 索引的摘要补进去（幂等）。"""
+        """把 memory 表里已存在、但尚未进 FTS 索引的摘要补进去（幂等 + 限速）。
+
+        小批提交：避免大数据集一次性回填阻塞启动。
+        """
         try:
             assert self._conn is not None
-            await self._conn.execute(text(
-                """
-                INSERT INTO memories_fts(rowid, content, session_id, kind, created_at)
-                SELECT m.id, m.content, m.session_id, m.kind, m.created_at
-                FROM memory m
-                WHERE m.kind='summary'
-                  AND NOT EXISTS (SELECT 1 FROM memories_fts f WHERE f.rowid = m.id)
-                """
-            ))
-            await self._conn.commit()
+            BATCH = 50
+            while True:
+                result = await self._conn.execute(text(
+                    f"""
+                    INSERT INTO memories_fts(rowid, content, session_id, kind, created_at)
+                    SELECT m.id, m.content, m.session_id, m.kind, m.created_at
+                    FROM memory m
+                    WHERE m.kind='summary'
+                      AND NOT EXISTS (SELECT 1 FROM memories_fts f WHERE f.rowid = m.id)
+                    LIMIT {BATCH}
+                    """
+                ))
+                await self._conn.commit()
+                if result.rowcount < BATCH:
+                    break
         except Exception:  # noqa: BLE001
             self._fts = False
 
@@ -150,10 +161,11 @@ class Store:
         sid = uuid.uuid4().hex[:12]
         t = _now()
         assert self._conn is not None
-        await self._conn.execute(text(
-            "INSERT INTO sessions(id, title, created_at, updated_at) VALUES (:id,:t,:c,:u)"
-        ), {"id": sid, "t": title, "c": t, "u": t})
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(text(
+                "INSERT INTO sessions(id, title, created_at, updated_at) VALUES (:id,:t,:c,:u)"
+            ), {"id": sid, "t": title, "c": t, "u": t})
+            await self._conn.commit()
         return sid
 
     async def list_sessions(self, limit: int = 50) -> list[dict]:
@@ -181,7 +193,8 @@ class Store:
         ), {"s": sid})).fetchone()
         return dict(r._mapping) if r else None
 
-    async def touch_session(self, sid: str, title: str | None = None) -> None:
+    async def _touch_session_unlocked(self, sid: str, title: str | None = None) -> None:
+        """touch_session 的无锁内部实现（供 add_message 在已持有锁时调用）。"""
         assert self._conn is not None
         if title is not None:
             await self._conn.execute(text(
@@ -193,40 +206,104 @@ class Store:
             ), {"u": _now(), "s": sid})
         await self._conn.commit()
 
+    async def touch_session(self, sid: str, title: str | None = None) -> None:
+        async with self._write_lock:
+            await self._touch_session_unlocked(sid, title)
+
     async def delete_session(self, sid: str) -> bool:
         assert self._conn is not None
-        await self._conn.execute(text("DELETE FROM messages WHERE session_id=:s"), {"s": sid})
-        await self._conn.execute(text("DELETE FROM memory WHERE session_id=:s"), {"s": sid})
-        if self._fts:
-            await self._conn.execute(text("DELETE FROM memories_fts WHERE session_id=:s"), {"s": sid})
-        cur = await self._conn.execute(text("DELETE FROM sessions WHERE id=:s"), {"s": sid})
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(text("DELETE FROM messages WHERE session_id=:s"), {"s": sid})
+            await self._conn.execute(text("DELETE FROM memory WHERE session_id=:s"), {"s": sid})
+            if self._fts:
+                await self._conn.execute(text("DELETE FROM memories_fts WHERE session_id=:s"), {"s": sid})
+            cur = await self._conn.execute(text("DELETE FROM sessions WHERE id=:s"), {"s": sid})
+            await self._conn.commit()
         return cur.rowcount > 0
 
     async def clear_all(self) -> None:
         assert self._conn is not None
-        await self._conn.execute(text("DELETE FROM messages"))
-        await self._conn.execute(text("DELETE FROM sessions"))
-        await self._conn.execute(text("DELETE FROM memory"))
-        if self._fts:
-            await self._conn.execute(text("DELETE FROM memories_fts"))
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(text("DELETE FROM messages"))
+            await self._conn.execute(text("DELETE FROM sessions"))
+            await self._conn.execute(text("DELETE FROM memory"))
+            if self._fts:
+                await self._conn.execute(text("DELETE FROM memories_fts"))
+            await self._conn.commit()
+
+    async def cleanup_expired(self, retention_days: int = 0) -> int:
+        """清理超过 retention_days 的旧 memory 与 messages。retention_days<=0 则跳过。"""
+        if retention_days <= 0:
+            return 0
+        assert self._conn is not None
+        cutoff = time.time() - retention_days * 86400
+        async with self._write_lock:
+            r1 = (await self._conn.execute(text("DELETE FROM memory WHERE created_at < :c"), {"c": cutoff})).rowcount
+            r2 = (await self._conn.execute(text("DELETE FROM messages WHERE created_at < :c"), {"c": cutoff})).rowcount
+            if self._fts:
+                await self._conn.execute(text(
+                    "DELETE FROM memories_fts WHERE rowid NOT IN (SELECT id FROM memory)"
+                ))
+            await self._conn.commit()
+        return r1 + r2
+
+    async def count_memory(self, session_id: str | None = None) -> int:
+        """统计记忆条数（用于决定是否触发摘要分页）。"""
+        assert self._conn is not None
+        if session_id:
+            r = (await self._conn.execute(
+                text("SELECT COUNT(*) FROM memory WHERE session_id=:s"), {"s": session_id}
+            )).scalar()
+        else:
+            r = (await self._conn.execute(text("SELECT COUNT(*) FROM memory"))).scalar()
+        return int(r or 0)
+
+    async def auto_summarize_if_needed(self, sid: str, cfg: dict, llm_client=None) -> str | None:
+        """当会话消息数超过阈值时，自动把早期消息压缩为摘要写回 memory。
+
+        是否需要摘要由 settings.memory.auto_summarize / summarize_every_n_turns 控制。
+        返回生成的摘要文本，或 None（未触发）。
+        """
+        if not cfg.get("auto_summarize", True):
+            return None
+        every_n = max(3, cfg.get("summarize_every_n_turns", 10))
+        if llm_client is None:
+            return None
+        # 取当前会话消息数（纯读，不加锁）
+        assert self._conn is not None
+        msg_count = (await self._conn.execute(
+            text("SELECT COUNT(*) FROM messages WHERE session_id=:s AND role IN ('user','assistant')"),
+            {"s": sid},
+        ).scalar()) or 0
+        if msg_count > every_n * 2:
+            old_msgs = await self.get_messages(sid, limit=every_n)
+            if not old_msgs:
+                return None
+            summary = await llm_client.summarize(
+                old_msgs, max_chars=cfg.get("summary_max_chars", 400)
+            )
+            if summary:
+                # set_summary 内部已加锁，此处无需重复
+                await self.set_summary(sid, summary)
+            return summary
+        return None
 
     # ---------- 消息 ----------
     async def add_message(self, sid: str, role: str, content: str, meta: dict | None = None) -> dict:
         t = _now()
         assert self._conn is not None
-        cur = await self._conn.execute(text(
-            "INSERT INTO messages(session_id, role, content, meta, created_at) VALUES (:s,:r,:c,:m,:t)"
-        ), {"s": sid, "r": role, "c": content, "m": json.dumps(meta or {}, ensure_ascii=False), "t": t})
-        await self._conn.commit()
-        await self.touch_session(sid)
+        async with self._write_lock:
+            cur = await self._conn.execute(text(
+                "INSERT INTO messages(session_id, role, content, meta, created_at) VALUES (:s,:r,:c,:m,:t)"
+            ), {"s": sid, "r": role, "c": content, "m": json.dumps(meta or {}, ensure_ascii=False), "t": t})
+            await self._conn.commit()
+            await self._touch_session_unlocked(sid)
         return {"id": cur.lastrowid, "role": role, "content": content, "meta": meta or {}}
 
     async def get_messages(self, sid: str, limit: int = 200) -> list[dict]:
         assert self._conn is not None
         rows = (await self._conn.execute(text(
-            "SELECT role, content, meta FROM messages WHERE session_id=:s ORDER BY id LIMIT :l"
+            "SELECT role, content, meta, created_at FROM messages WHERE session_id=:s ORDER BY id LIMIT :l"
         ), {"s": sid, "l": limit})).fetchall()
         out = []
         for r in rows:
@@ -251,23 +328,24 @@ class Store:
         if not summary:
             return
         assert self._conn is not None
-        await self._conn.execute(text(
-            "DELETE FROM memory WHERE session_id=:s AND kind='summary'"
-        ), {"s": sid})
-        if self._fts:
-            # 同步清掉该会话旧摘要的 FTS 索引（rowid 即将变化）
+        async with self._write_lock:
             await self._conn.execute(text(
-                "DELETE FROM memories_fts WHERE session_id=:s AND kind='summary'"
+                "DELETE FROM memory WHERE session_id=:s AND kind='summary'"
             ), {"s": sid})
-        cur = await self._conn.execute(text(
-            "INSERT INTO memory(session_id, kind, content, created_at) VALUES (:s,:k,:c,:t)"
-        ), {"s": sid, "k": "summary", "c": summary, "t": _now()})
-        if self._fts:
-            # 写入记忆时同步写 FTS 索引（rowid 与 memory.id 对齐）
-            await self._conn.execute(text(
-                "INSERT INTO memories_fts(rowid, content, session_id, kind, created_at) VALUES (:r,:c,:s,:k,:t)"
-            ), {"r": cur.lastrowid, "c": summary, "s": sid, "k": "summary", "t": _now()})
-        await self._conn.commit()
+            if self._fts:
+                # 同步清掉该会话旧摘要的 FTS 索引（rowid 即将变化）
+                await self._conn.execute(text(
+                    "DELETE FROM memories_fts WHERE session_id=:s AND kind='summary'"
+                ), {"s": sid})
+            cur = await self._conn.execute(text(
+                "INSERT INTO memory(session_id, kind, content, created_at) VALUES (:s,:k,:c,:t)"
+            ), {"s": sid, "k": "summary", "c": summary, "t": _now()})
+            if self._fts:
+                # 写入记忆时同步写 FTS 索引（rowid 与 memory.id 对齐）
+                await self._conn.execute(text(
+                    "INSERT INTO memories_fts(rowid, content, session_id, kind, created_at) VALUES (:r,:c,:s,:k,:t)"
+                ), {"r": cur.lastrowid, "c": summary, "s": sid, "k": "summary", "t": _now()})
+            await self._conn.commit()
 
     async def get_summary(self, sid: str) -> str | None:
         assert self._conn is not None
@@ -275,6 +353,61 @@ class Store:
             "SELECT content FROM memory WHERE session_id=:s AND kind='summary' ORDER BY id DESC LIMIT 1"
         ), {"s": sid})).fetchone()
         return r._mapping["content"] if r else None
+
+    # ---------- 滚动摘要归档（P0 长程记忆分页） ----------
+    async def append_archive(self, sid: str, content: str) -> None:
+        """追加一段滚动摘要归档（kind='archive'），供虚拟上下文分页注入。
+
+        与 set_summary（单份最近摘要）互补：archive 是多段历史归档，
+        按时间追加，上下文组装时按旧→新注入。
+        """
+        content = (content or "").strip()
+        if not content:
+            return
+        assert self._conn is not None
+        async with self._write_lock:
+            cur = await self._conn.execute(text(
+                "INSERT INTO memory(session_id, kind, content, created_at) VALUES (:s,:k,:c,:t)"
+            ), {"s": sid, "k": "archive", "c": content, "t": _now()})
+            if self._fts:
+                await self._conn.execute(text(
+                    "INSERT INTO memories_fts(rowid, content, session_id, kind, created_at) VALUES (:r,:c,:s,:k,:t)"
+                ), {"r": cur.lastrowid, "c": content, "s": sid, "k": "archive", "t": _now()})
+            await self._conn.commit()
+
+    async def get_archives(self, sid: str, limit: int = 5) -> list[dict]:
+        """获取该会话最近几段滚动摘要归档（按 id 倒序，即新的在前）。"""
+        assert self._conn is not None
+        rows = (await self._conn.execute(text(
+            "SELECT content, created_at FROM memory WHERE session_id=:s AND kind='archive' ORDER BY id DESC LIMIT :l"
+        ), {"s": sid, "l": limit})).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    async def archive_messages(self, sid: str, old_msgs: list[dict], cfg: dict, llm_client=None) -> str | None:
+        """把最早的一批消息压缩为滚动摘要并归档。返回摘要文本或 None。
+
+        old_msgs 是超过近期窗口的历史消息（按时间正序）。优先用 LLM 压缩；
+        LLM 不可用时降级为「最后一条用户消息摘要占位」，保证分页后仍有记忆。
+        """
+        if not old_msgs:
+            return None
+        summary = None
+        if llm_client is not None:
+            try:
+                summary = await llm_client.summarize(
+                    old_msgs, max_chars=int(cfg.get("summary_max_chars", 400) or 400)
+                )
+            except Exception:  # noqa: BLE001
+                summary = None
+        if not summary:
+            for m in reversed(old_msgs):
+                if m.get("role") == "user" and m.get("content"):
+                    summary = "（早期对话摘要）" + str(m["content"])[:200]
+                    break
+        if summary:
+            await self.append_archive(sid, summary)
+        return summary
+
 
     # ---------- 相关历史记忆（P1：跨会话回忆） ----------
     @staticmethod
@@ -335,7 +468,6 @@ class Store:
 
     @staticmethod
     def _keywords(text: str, max_words: int = 8) -> list[str]:
-        import re
 
         words: list[str] = []
         # 英文/数字词

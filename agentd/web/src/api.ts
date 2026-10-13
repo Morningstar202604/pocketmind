@@ -30,6 +30,7 @@ export interface StoredMessage {
   role: "user" | "assistant" | "tool" | "system";
   content: string;
   meta: Record<string, unknown>;
+  created_at?: number;
 }
 
 export interface Provider {
@@ -59,6 +60,12 @@ export interface AppSettings {
     token?: string;
     approval_timeout?: number;
     mcp?: Array<{ name: string; command: string; args: string[] }>;
+  };
+  // MCP Client：PocketMind 作为客户端调用外部 MCP Server
+  mcp_client?: {
+    enabled?: boolean;
+    timeout?: number;
+    servers?: Array<{ name: string; command: string; args: string[]; auto_connect?: boolean }>;
   };
   user_prefs?: string;
 }

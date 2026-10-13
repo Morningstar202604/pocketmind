@@ -51,17 +51,42 @@ def _kill_group(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
+def _rlimit_preexec(max_as_mb: int = 512, max_cpu_s: int = 60, max_nproc: int = 64) -> None:
+    """子进程 exec 前设置 resource limit（仅 Unix/Linux/Termux，Windows 无效）。
+
+    - RLIMIT_AS：地址空间（内存）上限，超量 OOM 杀而非整体 Termux 崩溃
+    - RLIMIT_CPU：CPU 秒数上限（已含子进程）
+    - RLIMIT_NPROC：子进程数上限，防 fork bomb
+    """
+    try:
+        import resource
+        soft_as, hard_as = resource.getrlimit(resource.RLIMIT_AS)
+        target_as = min(hard_as, max_as_mb * 1024 * 1024) if hard_as != resource.RLIM_INFINITY else max_as_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (target_as, hard_as))
+        soft_cpu, hard_cpu = resource.getrlimit(resource.RLIMIT_CPU)
+        target_cpu = min(hard_cpu, max_cpu_s) if hard_cpu != resource.RLIM_INFINITY else max_cpu_s
+        resource.setrlimit(resource.RLIMIT_CPU, (target_cpu, hard_cpu))
+        soft_nproc, hard_nproc = resource.getrlimit(resource.RLIMIT_NPROC)
+        target_nproc = min(hard_nproc, max_nproc) if hard_nproc != resource.RLIM_INFINITY else max_nproc
+        resource.setrlimit(resource.RLIMIT_NPROC, (target_nproc, hard_nproc))
+    except (ImportError, ValueError, OSError):
+        pass  # Windows / 权限不足时静默跳过
+
+
 async def run_shell(command: str, timeout: int = 60) -> dict:
     if not isinstance(command, str) or not command.strip():
         return {"error": "命令不能为空"}
     shell = shutil.which("bash") or "/bin/sh"
     timeout = max(1, min(int(timeout or 60), 300))
     # start_new_session：独立进程组，便于超时/取消时整组回收
+    # preexec_fn：在子进程 exec 前设置 resource limit（内存/CPU/进程数），防越权
+    # bash -c 而非 -lc：避免 login shell 加载 profile/rc，减少注入面
     proc = await asyncio.create_subprocess_exec(
-        shell, "-lc", command,
+        shell, "-c", command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
+        preexec_fn=_rlimit_preexec,
     )
     timed_out = False
     try:

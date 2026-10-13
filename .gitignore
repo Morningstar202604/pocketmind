@@ -140,7 +140,21 @@
 *.lzma
 *.iso
 
+# Android / Gradle（termux/apk-shell 构建产物与本机配置）
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+**/apk-shell/.gradle/
+**/apk-shell/app/build/
+**/apk-shell/build/
+
 # 口袋 Agent：web/dist 需随仓库分发（手机端纯 pip 安装，不构建前端）
 !agentd/web/dist/
 !agentd/web/dist/**
 website/_shots/
+
+# AutoClaw 运行目录（本地代理工作区，不入库）
+.zwork/
+

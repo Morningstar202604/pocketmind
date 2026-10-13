@@ -18,10 +18,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-
-def home_dir() -> Path:
-    return Path(os.environ.get("AGENT_HOME") or Path.home() / ".agent" / "termux-agent")
-
+from .paths import home_dir
 
 # 进程内共享的 CheckpointStore 单例：避免每次文件工具落 checkpoint / 每次 undo /
 # 每次删会话都新建一条 aiosqlite 连接（CREATE TABLE + commit + dispose 很贵）。

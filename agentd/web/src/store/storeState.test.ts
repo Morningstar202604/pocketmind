@@ -17,6 +17,7 @@ describe("useAgentStore 初始状态", () => {
       showSettings: false,
       showTimers: false,
       undoingId: null,
+      connectionStatus: "reconnecting",
     });
   });
 

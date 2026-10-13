@@ -47,6 +47,20 @@ export function humanizeTrigger(t: { trigger_type: string; expr: string }): stri
   return `到点 ${t.expr}`;
 }
 
+/** 把 ISO 时间格式化为本地完整时间（含年份），非法输入返回空串。 */
+function formatNextRun(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function TimerPanel({ onClose }: { onClose: () => void }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
@@ -130,6 +144,7 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
   };
 
   const remove = async (j: Job) => {
+    if (!window.confirm(`确定删除任务「${j.name}」吗？`)) return;
     try {
       await deleteJob(j.id);
       await load();
@@ -207,7 +222,7 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
                     {TRIGGER_LABEL[j.trigger_type]}
                     {j.expr}
                     {j.condition ? ` · 条件 ${j.condition}` : ""}
-                    {j.next_run ? ` · 下次 ${j.next_run.replace("T", " ").slice(5, 16)}` : ""}
+                    {j.next_run ? ` · 下次 ${formatNextRun(j.next_run)}` : ""}
                   </p>
                   <div className="job-actions">
                     <button className="btn sm" onClick={() => void toggle(j)}>

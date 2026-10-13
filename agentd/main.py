@@ -16,16 +16,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from .agent import Agent
+from .approval import ApprovalCenter
 from .config import PRESETS, Settings, mask_key
 from .mcp import MCPClient
 from .memory import Store
@@ -49,74 +54,32 @@ APP_NAME = "口袋智灵"
 DIST = Path(__file__).parent / "web" / "dist"
 
 
-# ---------- 审批中心 ----------
-class ApprovalCenter:
-    """每个待审批工具调用一个 asyncio.Event；超时默认拒绝（安全优先）。"""
-
-    def __init__(self):
-        self._gates: dict[tuple[str, str], dict] = {}
-        self._always: dict[str, set] = {}
-
-    async def ask(self, session_id: str, tool_call_id: str, tool_name: str) -> str:
-        if tool_name in self._always.setdefault(session_id, set()):
-            return "allow"
-        timeout = 120
-        try:
-            timeout = int(settings_mgr.get().get("server", {}).get("approval_timeout", 120))
-        except (TypeError, ValueError):
-            pass
-        gate = {"event": asyncio.Event(), "decision": None}
-        self._gates[(session_id, tool_call_id)] = gate
-        try:
-            await asyncio.wait_for(gate["event"].wait(), timeout=timeout)
-        except TimeoutError:
-            return "timeout"  # 超时默认拒绝（安全优先）
-        finally:
-            self._gates.pop((session_id, tool_call_id), None)
-        d = gate["decision"]
-        if d == "allow_always":
-            self._always.setdefault(session_id, set()).add(tool_name)
-            return "allow"
-        if d == "allow_once":
-            return "allow"
-        return "deny"
-
-    def is_auto_allowed(self, session_id: str, tool_name: str) -> bool:
-        """该工具是否已被用户「始终允许」。
-
-        供 ask 闭包在弹审批卡之前查询：已始终允许的工具直接放行，不再向前端
-        emit 一张「其实已自动批准」的幽灵审批卡（否则用户会看到一张点了就 404 的卡）。
-        """
-        return tool_name in self._always.get(session_id, set())
-
-    def decide(self, session_id: str, tool_call_id: str, decision: str) -> bool:
-        gate = self._gates.get((session_id, tool_call_id))
-        if not gate:
-            return False
-        gate["decision"] = decision
-        gate["event"].set()
-        return True
-
-    def forget(self, session_id: str) -> None:
-        """会话删除时清理：未决审批 + 「始终允许」记忆。
-
-        对仍在 await 的 gate 直接置「deny」并 set event，让 ask() 立刻返回，
-        而不是干等到 120s 超时（删会话后审批卡片已经没了，用户永远点不到）。
-        """
-        for k, gate in self._gates.items():
-            if k[0] == session_id and not gate["event"].is_set():
-                gate["decision"] = "deny"
-                gate["event"].set()
-        self._gates = {k: v for k, v in self._gates.items() if k[0] != session_id}
-        self._always.pop(session_id, None)
-
-
 # ---------- 应用全局状态 ----------
 # 这些是模块级单例：run_agent / run_agent_for_job 必须是模块级函数（scheduler 触发时
 # 经延迟导入调用），因此它们依赖的 store / runs / approval 也必须是模块级全局。
 settings_mgr = Settings()
 store: Store | None = None
-approval = ApprovalCenter()
+mem0: Any = None  # Mem0Memory 实例（Optional，不启用时为 None）
+_scheduler: Any = None  # SchedulerService 实例
+
+
+def _approval_timeout() -> int:
+    """从 settings_mgr 读取审批超时（秒）。"""
+    try:
+        return int(settings_mgr.get().get("server", {}).get("approval_timeout", 120))
+    except (TypeError, ValueError):
+        return 120
+
+
+def _approval_always_path() -> Path | None:
+    """返回审批白名单持久化路径（agent 数据目录下）。"""
+    try:
+        return settings_mgr.path.parent / "approval_always.json"
+    except Exception:
+        return None
+
+
+approval = ApprovalCenter(timeout_cb=_approval_timeout, persist_path=_approval_always_path())
 runs: dict[str, dict] = {}  # session_id -> {task, queue, pending}
 MOCK = False
 # Telegram 远程控制：CLI 覆盖值（为空则回落到 settings.server.tg_*）
@@ -159,7 +122,7 @@ async def run_agent(session_id: str, message: str) -> None:
         # 新会话（尚无 user 消息）自动命名
         if await store.first_user_message(session_id) is None:
             try:
-                title_agent = Agent(store, settings_mgr, mock=MOCK)
+                title_agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0)
                 try:
                     title = await title_agent.title_for(message)
                 finally:
@@ -167,7 +130,7 @@ async def run_agent(session_id: str, message: str) -> None:
                 await store.touch_session(session_id, title or "新会话")
             except Exception:  # noqa: BLE001 —— 命名失败不阻塞
                 pass
-        agent = Agent(store, settings_mgr, mock=MOCK)
+        agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0)
 
         async def ask(tid: str, name: str, summary: str, risk: str) -> str:
             # 已「始终允许」的工具：不再弹审批卡、不注册 gate，直接放行。
@@ -198,7 +161,12 @@ async def run_agent(session_id: str, message: str) -> None:
         q = runs.get(session_id, {}).get("queue")
         if q:
             q.put_nowait({"type": "error", "message": str(e)})
-        _notify_bg("口袋智灵 · 出错", str(e)[:80])
+        # 异常信息可能含 API Key/内部路径，须脱敏后再通知
+        err_raw = str(e)[:120]
+        err_safe = re.sub(r'(api_key|token|secret|password)=[^\s&]+', r'\1=***', err_raw, flags=re.IGNORECASE)
+        err_safe = re.sub(r'/data/[^\s]+', '/data/***', err_safe)
+        err_safe = err_safe[:80]
+        _notify_bg("口袋智灵 · 出错", err_safe)
     finally:
         # 关闭本 chat 的 LLM 连接池（AsyncOpenAI 内部 httpx client，防 FD 泄漏）
         if agent is not None:
@@ -257,66 +225,8 @@ def _load_recipes() -> None:
         RECIPES = []
 
 
-def _masked_settings(s: dict) -> dict:
-    """对外回传的配置副本：api_key / server.token / server.tg_token 一律打码。
-
-    GET 与 PUT 必须共用本函数——此前 PUT 直接回传原始 settings，等于「保存一次
-    就把明文局域网令牌吐回响应体」，与 GET 刻意打码自相矛盾。
-    """
-    out = dict(s)
-    llm = dict(out.get("llm", {}) or {})
-    llm["api_key"] = mask_key(llm.get("api_key", ""))
-    server = dict(out.get("server", {}) or {})
-    if server.get("token"):
-        server["token"] = mask_key(server["token"])
-    if server.get("tg_token"):
-        server["tg_token"] = mask_key(server["tg_token"])
-    out["llm"] = llm
-    out["server"] = server
-    return out
-
-
-def _validate_job_payload(payload: dict) -> dict:
-    """校验并归一化定时任务字段，非法即 HTTPException(400)。
-
-    放在模块级是为了可单测（p3_robustness_unit 直接喂坏数据），也让
-    「手工建任务」与「配方一键实例化」共用同一份校验——此前 recipes_apply 绕过
-    校验直接 scheduler.create，坏 expr 会在 APScheduler 内部抛 ValueError 变 500。
-    """
-    from .scheduler import TRIGGER_TYPES, parse_condition
-
-    name = str(payload.get("name", "")).strip()[:60]
-    tt = str(payload.get("trigger_type", "")).strip()
-    expr = str(payload.get("expr", "")).strip()
-    message = str(payload.get("message", "")).strip()
-    if not (name and tt in TRIGGER_TYPES and expr and message):
-        raise HTTPException(
-            400, "缺少必要字段：name / trigger_type(cron|interval|date) / expr / message"
-        )
-    if tt == "interval":
-        try:
-            int(float(expr))
-        except ValueError:
-            raise HTTPException(400, "interval 表达式需为秒数（如 3600）") from None
-    if tt == "date":
-        try:
-            __import__("datetime").datetime.strptime(expr, "%Y-%m-%d %H:%M")
-        except ValueError:
-            raise HTTPException(400, "date 表达式格式：YYYY-MM-DD HH:MM") from None
-    cond = str(payload.get("condition", "")).strip()
-    if cond and parse_condition(cond) is None:
-        raise HTTPException(400, "条件格式：battery < 20（仅支持电池电量阈值）")
-    return {
-        "name": name,
-        "trigger_type": tt,
-        "expr": expr,
-        "message": message,
-        "session_id": str(payload.get("session_id", "")).strip(),
-        "condition": cond,
-        "enabled": bool(payload.get("enabled", True)),
-    }
-
-
+# 从 settings 导入的 validate_job_payload / masked_settings 不再在本文件定义，
+# 而是退居 routes 子包（可被独立单测直接 import）。
 def create_app() -> FastAPI:
     global store
     store = Store(settings_mgr.path.parent / "agent.db")
@@ -325,6 +235,9 @@ def create_app() -> FastAPI:
     from .scheduler import SchedulerService
 
     scheduler_svc = SchedulerService(settings_mgr.path.parent / "jobs.db")
+    # 同时注册到模块全局（供 /api/health 探活）
+    global _scheduler
+    _scheduler = scheduler_svc
     mcp_clients: list[MCPClient] = []
 
     @asynccontextmanager
@@ -335,6 +248,25 @@ def create_app() -> FastAPI:
         关闭顺序：停调度 → 断 MCP → 关异步存储。
         """
         await store.start()  # P1-5：异步引擎建连 + WAL + 建表/回填
+        # 按 memory.retention_days 清理过期记忆/消息（0 = 永久保留）
+        try:
+            mem_cfg = settings_mgr.memory_cfg()
+            await store.cleanup_expired(int(mem_cfg.get("retention_days", 0) or 0))
+        except Exception:  # noqa: BLE001 —— 清理失败不影响启动
+            pass
+        # ---- Mem0 本地记忆（可选：未配置/依赖缺失时静默跳过）----
+        global mem0
+        try:
+            from .mem0_memory import create_mem0
+            mem0 = create_mem0(settings_mgr, settings_mgr.path.parent / "mem0")
+            if mem0 is not None and mem0.enabled():
+                print(f"[agentd] Mem0 本地记忆已启用（embed={mem0._embedding_model}）")
+            else:
+                mem0 = None
+                print("[agentd] Mem0 未启用（pip install mem0ai chromadb fastembed；或在 settings.mem0.enabled=true）")
+        except Exception as e:  # noqa: BLE001 —— 不影响主服务
+            mem0 = None
+            print(f"[agentd] Mem0 初始化失败（不影响主服务）: {e}")
         # 共享 CheckpointStore：整个进程复用一条连接，避免每次文件工具/undo/删会话
         # 都新建 aiosqlite 连接（CREATE TABLE + commit + dispose 的开销）
         from .checkpoints import CheckpointStore, set_shared
@@ -384,7 +316,38 @@ def create_app() -> FastAPI:
                 client.tools = [str(t.get("name", "")) for t in tools if t.get("name")]
                 mcp_clients.append(client)
 
-        # ---- Telegram 远程控制（可选：无 token 时优雅跳过，不影响主服务）----
+        # ---- MCP Client Hub（让 PocketMind 能调用外部 MCP Server）----
+        try:
+            from .mcp_client import init_mcp_client  # noqa: E402 — 失败时不阻塞启动
+            hub = init_mcp_client(settings_mgr.mcp_client_cfg())
+            if hub is not None:
+                connected = await hub.connect_all()
+                logging.getLogger(__name__).info("MCP 客户端已连接 %d/%d 个外部服务", connected, len(hub._clients))
+                # 把外部 MCP Server 的工具注册进工具注册表（统一纳入审批）
+                for tool in await hub.collect_tools():
+                    tname = str(tool.get("name", ""))
+                    if "." not in tname:
+                        continue
+                    server, tool_real = tname.split(".", 1)
+                    full = f"mcp__{server}__{tool_real}"
+
+                    async def _mcp_client_handler(server=server, tool_real=tool_real, **kwargs):
+                        return await hub.call(f"{server}.{tool_real}", kwargs)
+
+                    register(Tool(
+                        name=full,
+                        description=f"[MCP Client:{server}] {(tool.get('description') or tool_real)[:160]}",
+                        parameters=tool.get("input_schema") or {"type": "object", "properties": {}},
+                        risk="write",  # 第三方工具默认需审批
+                        handler=_mcp_client_handler,
+                        summary=f"MCP {server} · {tool_real}",
+                        timeout=60,
+                        group="mcp",
+                    ))
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("MCP 客户端初始化失败（%s）", exc)
+
+        # ---- Telegraph ----
         global tg_gateway
         try:
             from .telegram_gateway import TelegramGateway, should_start
@@ -419,6 +382,12 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
         scheduler_svc.shutdown()
+        # MCP Client 关闭
+        try:
+            from .mcp_client import shutdown_mcp_client
+            await shutdown_mcp_client()
+        except Exception:  # noqa: BLE001
+            pass
         for c in mcp_clients:
             try:
                 await c.close()
@@ -433,6 +402,14 @@ def create_app() -> FastAPI:
             await store.close()  # P1-5：关闭异步引擎连接
 
     app = FastAPI(title=APP_NAME, version=VERSION, lifespan=lifespan)
+
+    # ---------- 速率限制（保护高频写端点） ----------
+    from .rate_limit import mount_rate_limit
+    mount_rate_limit(app)  # default 30 次/分钟，超 429
+
+    # ---------- OpenTelemetry 可观测性（插桩 + tracer） ----------
+    from .telemetry import setup_telemetry
+    setup_telemetry(app, service_name=APP_NAME, version=VERSION)
 
     # ---------- 鉴权（局域网开启后强制） ----------
     def check_token(request: Request) -> None:
@@ -452,16 +429,46 @@ def create_app() -> FastAPI:
     # ---------- API ----------
     @app.get("/api/health")
     async def health():
-        llm = settings_mgr.llm()
-        ready = MOCK or bool(llm.get("api_key") and llm.get("model"))
-        return {
-            "ok": True,
-            "app": APP_NAME,
-            "version": VERSION,
-            "ready": ready,
-            "mock": MOCK,
-            "active_runs": len(runs),
+        """Deep health：探活 DB 连通性 + LLM 配置 + Mem0 状态。
+
+        - severity:"ok": 全部可用
+        - severity:"degraded": DB 可读但 Mem0 未启用/LLM 未配置（仍可聊天降级）
+        - severity:"error": DB 不可读或组件异常
+        """
+        health_info: dict = {
+            "ok": True, "app": APP_NAME, "version": VERSION,
+            "mock": MOCK, "active_runs": len(runs), "components": {},
         }
+        # 1. DB 探活
+        try:
+            if store is not None:
+                async with store.engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))  # deep health: 实际 DB 连通性
+                health_info["components"]["db"] = "ok"
+            else:
+                health_info["components"]["db"] = "not_initialized"
+        except Exception as e:  # noqa: BLE001
+            health_info["components"]["db"] = f"error: {type(e).__name__}"
+            health_info["ok"] = False
+
+        # 2. LLM 连接性（仅检查配置有效性，不实际调 LLM）
+        llm = settings_mgr.llm()
+        health_info["components"]["llm"] = "ready" if (MOCK or (llm.get("api_key") and llm.get("model"))) else "not_configured"
+
+        # 3. Mem0 状态
+        if mem0 is not None:
+            ms = mem0.status()
+            health_info["components"]["mem0"] = "ok" if ms.get("initialized") else f"degraded: {ms.get('error', 'not_initialized')}"
+        else:
+            health_info["components"]["mem0"] = "disabled"
+
+        # 4. Scheduler（探活 via main.py 保存的服务实例）
+        try:
+            health_info["components"]["scheduler"] = "ok" if _scheduler is not None else "not_initialized"
+        except Exception:  # noqa: BLE001
+            health_info["components"]["scheduler"] = "not_initialized"
+
+        return health_info
 
     @app.post("/api/chat", dependencies=[Depends(check_token)])
     async def chat(payload: dict, request: Request):
@@ -633,7 +640,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/jobs", dependencies=[Depends(check_token)])
     async def jobs_create(payload: dict):
-        norm = _validate_job_payload(payload)
+        from .routes import validate_job_payload
+        norm = validate_job_payload(payload)
         try:
             job = scheduler_svc.create(norm)
         except ValueError as e:
@@ -644,10 +652,31 @@ def create_app() -> FastAPI:
 
     @app.put("/api/jobs/{jid}", dependencies=[Depends(check_token)])
     async def jobs_update(jid: str, payload: dict):
-        enabled = payload.get("enabled")
-        if not isinstance(enabled, bool):
-            raise HTTPException(400, "只需传 enabled: true/false")
-        job = scheduler_svc.update(jid, {"enabled": enabled})
+        """更新定时任务。
+
+        支持 ``enabled`` 切换 + 调度参数热更新（expr / trigger_type / message / condition），
+        服务内部通过 APScheduler.reschedule_job 热替换，无需删了重建。
+        校验复用 _validate_job_payload，确保格式合法再写入。
+        """
+        if not payload:
+            raise HTTPException(400, "请求体不能为空")
+        # 构建 patch：只取 scheduler.update 认的字段
+        patch = {}
+        for k in ("enabled", "expr", "trigger_type", "message", "condition"):
+            if k in payload:
+                patch[k] = payload[k]
+        # 如果有调度参数变更，复用统一校验（trigger_type + expr 格式）
+        if "expr" in patch or "trigger_type" in patch:
+            from .routes import validate_job_payload
+            validate_job_payload({
+                "name": "reschedule",
+                "trigger_type": patch.get("trigger_type", "interval"),
+                "expr": str(patch.get("expr", "")),
+                "message": str(patch.get("message", "")),
+                "condition": patch.get("condition") or "",
+                "enabled": True,
+            })
+        job = scheduler_svc.update(jid, patch)
         if job is None:
             raise HTTPException(404, "任务不存在")
         return job
@@ -685,7 +714,11 @@ def create_app() -> FastAPI:
             return matched
         # 配方与手工建任务走同一份校验：此前这里绕过校验，坏 expr/trigger_type 会在
         # scheduler 内部抛 ValueError → 500（配方来自 config/recipes.json，属于可编辑数据）
-        norm = _validate_job_payload(
+        #
+        # enabled 必须透传：此前未传，scheduler.create 默认 pause（next_run_time=None），
+        # 导致 config/recipes.json 里 enabled=true 的配方被创建后实际是停用状态。
+        from .routes import validate_job_payload as _vjp
+        norm = _vjp(
             {
                 "name": str(rec.get("name", recipe_id)),
                 "trigger_type": rec.get("trigger_type", "interval"),
@@ -703,9 +736,100 @@ def create_app() -> FastAPI:
             raise HTTPException(500, "配方实例化失败")
         return job
 
-    @app.get("/api/providers")
+    @app.get("/api/providers", dependencies=[Depends(check_token)])
     async def providers():
+        # 如果开了 LiteLLM：动态补充「liteLLM 统一网关」选项
+        if settings_mgr.use_litellm():
+            return {
+                "providers": PRESETS,
+                "litellm": {
+                    "enabled": True,
+                    "primary_model": settings_mgr.litellm_cfg().get("model", ""),
+                    "note": "已启用 LiteLLM 统一网关，可在设置中配置任意模型（provider/model 格式）",
+                },
+            }
         return {"providers": PRESETS}
+
+    @app.post("/api/llm/test", dependencies=[Depends(check_token)])
+    async def llm_test():
+        """测试 LLM 连接：用当前配置发一个最小请求，返回 ok 或错误信息（用于设置面板「测试连接」）。"""
+        llm = settings_mgr.llm()
+        if MOCK:
+            return {"ok": True, "mode": "mock", "model": llm.get("model", "")}
+        if not (llm.get("api_key") and llm.get("model") and llm.get("base_url")):
+            raise HTTPException(400, "请先填写 Base URL、模型名与 API Key")
+        client = None
+        try:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(
+                api_key=llm.get("api_key") or "empty",
+                base_url=llm.get("base_url") or None,
+                timeout=15,
+                max_retries=1,
+            )
+            resp = await client.chat.completions.create(
+                model=llm.get("model") or "unknown",
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            )
+            return {"ok": True, "model": llm.get("model"), "reply": (resp.choices[0].message.content or "")[:50]}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+        finally:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+
+    @app.get("/api/stats", dependencies=[Depends(check_token)])
+    async def stats():
+        """运行统计：LiteLLM 调用次数 + 成本 + token 消耗。"""
+        # 从当前活跃 Agent 实例收集 LiteLLM 统计（如果有）
+        # stats 收集是可选的——非 LiteLLM 模式下返回空统计
+        return {
+            "use_litellm": settings_mgr.use_litellm(),
+            "litellm_cfg": {
+                k: v for k, v in settings_mgr.litellm_cfg().items()
+                if k != "api_key"
+            },
+            "use_mem0": settings_mgr.use_mem0(),
+            "mem0_status": mem0.status() if mem0 is not None else None,
+        }
+
+    # ---------- Mem0 记忆管理 ----------
+    @app.get("/api/memory", dependencies=[Depends(check_token)])
+    async def memory_list():
+        """列出全部长期记忆（管理页面用）。"""
+        if mem0 is None or not mem0.enabled():
+            return {"enabled": False, "memories": []}
+        items = await mem0.aget_all()
+        return {"enabled": True, "memories": items, "status": mem0.status()}
+
+    @app.get("/api/memory/search", dependencies=[Depends(check_token)])
+    async def memory_search(q: str = "", limit: int = 10):
+        """语义搜索记忆（前端调试用）。"""
+        if mem0 is None or not mem0.enabled():
+            return {"enabled": False, "results": []}
+        items = await mem0.asearch(q, limit=limit)
+        return {"enabled": True, "results": items}
+
+    @app.delete("/api/memory/{memory_id}", dependencies=[Depends(check_token)])
+    async def memory_delete(memory_id: str):
+        """删除指定记忆。"""
+        if mem0 is None or not mem0.enabled():
+            raise HTTPException(503, "Mem0 未启用")
+        ok = await mem0.adelete(memory_id)
+        return {"ok": ok, "id": memory_id}
+
+    @app.post("/api/memory/reset", dependencies=[Depends(check_token)])
+    async def memory_reset():
+        """清除所有记忆（危险操作）。"""
+        if mem0 is None or not mem0.enabled():
+            raise HTTPException(503, "Mem0 未启用")
+        ok = await mem0.areset()
+        return {"ok": ok}
 
     @app.get("/api/tools", dependencies=[Depends(check_token)])
     async def tools():
@@ -777,7 +901,8 @@ def create_app() -> FastAPI:
     @app.get("/api/settings", dependencies=[Depends(check_token)])
     async def get_settings():
         # api_key / server.token / tg_token 统一打码（见 _masked_settings）
-        return _masked_settings(settings_mgr.get())
+        from .routes import masked_settings
+        return masked_settings(settings_mgr.get())
 
     @app.put("/api/settings", dependencies=[Depends(check_token)])
     async def put_settings(payload: dict):
@@ -828,7 +953,8 @@ def create_app() -> FastAPI:
         # 全部由 pydantic 模型在 Settings.save() 内完成，不再手写 if/else clamp。
         settings_mgr.save(payload)
         # 与 GET 同一份打码逻辑：保存响应不得回传明文 server.token / tg_token
-        return {"ok": True, "settings": _masked_settings(settings_mgr.get())}
+        from .routes import masked_settings
+        return {"ok": True, "settings": masked_settings(settings_mgr.get())}
 
     # ---------- 静态前端 ----------
     if DIST.exists():
@@ -846,6 +972,25 @@ def create_app() -> FastAPI:
             )
 
     return app
+
+
+def _rebuild_app_for_home() -> None:
+    """--home 重定位：重建 approval 与 app，使 store/scheduler/checkpoints 跟随新数据目录。"""
+    global approval, app, _scheduler
+    if store is not None:
+        try:
+            asyncio.run(store.close())
+        except Exception:
+            pass
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown()
+        except Exception:
+            pass
+    approval = ApprovalCenter(timeout_cb=_approval_timeout, persist_path=_approval_always_path())
+    app = create_app()
+    import sys
+    sys.modules[__name__].app = app
 
 
 def main():
@@ -880,6 +1025,10 @@ def main():
         # 只改环境变量不重定位，--home 会静默失效（配置与 *.db 仍写到默认目录）。
         settings_mgr.path = Path(args.home).expanduser() / "config.json"
     settings_mgr.load()
+    # --home 重定位：模块底部 app = create_app() 已在 import 时用默认目录创建，
+    # 这里重建 approval 与 app，使 store / scheduler / checkpoints 全部跟随新数据目录。
+    if args.home:
+        _rebuild_app_for_home()
 
     # 忘记令牌的恢复入口：本机直接 `python -m agentd.main --clear-token` 清掉后重启，
     # 不必手工编辑 config.json（此前唯一的出路是手改文件，普通手机用户做不到）。
@@ -931,7 +1080,14 @@ def main():
         print(
             "[agentd] mock 模式：消息含 电池/短信/定位/剪贴板/传感器/通知/工具 等词会走工具链路，便于自测"
         )
-    uvicorn.run(create_app(), host=host, port=args.port, log_level="warning")
+    # 复用模块级 app（已由 uvicorn 导入时创建）；避免在 main() 里再次 create_app()
+    # 导致 store / runs 等全局状态重复初始化（Python 会把 agentd.main 当新模块再跑一遍）。
+    import __main__
+    if hasattr(__main__, "app"):
+        runner_app = __main__.app
+    else:
+        runner_app = create_app()
+    uvicorn.run(runner_app, host=host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
@@ -943,3 +1099,7 @@ if __name__ == "__main__":
 
     sys.modules["agentd.main"] = sys.modules[__name__]
     main()
+
+
+# uvicorn agentd.main:app 入口（生产/开发服务器）
+app = create_app()

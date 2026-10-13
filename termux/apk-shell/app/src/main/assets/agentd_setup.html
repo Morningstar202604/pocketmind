@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>口袋智灵 · 初始化</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; min-height: 100%;
+    background: #0f1115;
+    color: #e6e8eb;
+    font-family: -apple-system, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .card { max-width: 420px; width: 100%; }
+  .logo {
+    width: 64px; height: 64px;
+    margin: 0 auto 16px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+  }
+  h1 { font-size: 19px; font-weight: 600; text-align: center; margin-bottom: 8px; }
+  .sub { font-size: 13px; color: #9ca3af; text-align: center; line-height: 1.6; margin-bottom: 20px; }
+  .step {
+    display: flex;
+    gap: 12px;
+    background: #161922;
+    border: 1px solid #232733;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .step .num {
+    flex: 0 0 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #6366f1;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step .body { flex: 1; }
+  .step .title { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+  .step .desc { font-size: 12px; color: #9ca3af; line-height: 1.5; }
+  .field { margin: 14px 0 10px; }
+  .field label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 6px; }
+  .field input {
+    width: 100%;
+    padding: 11px 12px;
+    border-radius: 10px;
+    border: 1px solid #2a2f3a;
+    background: #161922;
+    color: #e6e8eb;
+    font-size: 13px;
+  }
+  .btn {
+    display: block; width: 100%;
+    padding: 14px 0; border-radius: 10px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: #fff; font-size: 15px; font-weight: 500;
+    border: none; cursor: pointer; margin-top: 8px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn.secondary { background: #1f2937; color: #d1d5db; }
+  .btn.green { background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
+  .btn:active { opacity: 0.85; }
+  .status { font-size: 12px; color: #6b7280; text-align: center; margin-top: 14px; min-height: 18px; word-break: break-all; }
+  .note { font-size: 11px; color: #6b7280; text-align: center; line-height: 1.6; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">袋</div>
+  <h1>口袋智灵 · 初始化</h1>
+  <p class="sub">本应用需要一个本地后端（agentd）才能工作。以下步骤只需首次执行一次，之后打开应用即可直接使用。</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <div class="title">安装 Termux</div>
+      <div class="desc">如果你还没有 Termux，请先安装（F-Droid 版）。点击下方「打开 Termux 下载页」。</div>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <div class="title">一键部署</div>
+      <div class="desc">点击「一键部署」会自动在 Termux 中安装依赖、克隆口袋智灵仓库并启动后端（约 3-8 分钟）。</div>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <div class="title">连接</div>
+      <div class="desc">部署完成后点击「检查连接」，就绪后自动进入应用界面。</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>仓库地址（一般无需修改）</label>
+    <input type="text" id="repoUrl" value="https://github.com/X33834/pocketmind.git" />
+  </div>
+
+  <button class="btn green" id="deployBtn" onclick="doDeploy()">一键部署</button>
+  <button class="btn secondary" id="startBtn" onclick="doStart()">已部署过，仅启动服务</button>
+  <button class="btn secondary" id="retryBtn" onclick="doCheck()">检查连接</button>
+  <button class="btn secondary" style="background:#111827" id="fdroidBtn" onclick="openFdroid()">打开 Termux 下载页（F-Droid）</button>
+
+  <div class="status" id="statusText"></div>
+  <div class="note">部署需要两步授权：① 首次点击一键部署时，允许系统弹出的「在 Termux 环境中运行命令」权限请求；② 在 Termux 中开启「允许外部应用运行命令」（allow-external-apps）。数据全部保存在你的设备本地。</div>
+</div>
+<script>
+  function setStatus(t) {
+    document.getElementById('statusText').textContent = t;
+  }
+  function doDeploy() {
+    var url = document.getElementById('repoUrl').value.trim();
+    setStatus('已发送部署指令，请到 Termux 查看进度…');
+    if (window.PocketNative && window.PocketNative.deployAgent) {
+      window.PocketNative.deployAgent(url);
+    } else {
+      setStatus('当前环境不支持一键部署，请复制命令手动执行');
+    }
+  }
+  function doStart() {
+    setStatus('正在唤醒 Termux 启动服务…');
+    if (window.PocketNative && window.PocketNative.startAgent) {
+      window.PocketNative.startAgent();
+    } else {
+      setStatus('当前环境不支持自动启动');
+    }
+  }
+  function doCheck() {
+    setStatus('正在检查连接…');
+    if (window.PocketNative && window.PocketNative.checkAgain) {
+      window.PocketNative.checkAgain();
+    } else {
+      location.reload();
+    }
+  }
+  function openFdroid() {
+    if (window.PocketNative && window.PocketNative.openFdroid) {
+      window.PocketNative.openFdroid();
+    } else {
+      setStatus('请在浏览器中访问 https://f-droid.org/packages/com.termux/');
+    }
+  }
+</script>
+</body>
+</html>

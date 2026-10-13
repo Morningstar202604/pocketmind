@@ -42,18 +42,30 @@ def all_tools() -> list[Tool]:
 
 
 def schemas() -> list[dict]:
-    """转成 OpenAI function calling 需要的 tools 参数。"""
-    return [
-        {
+    """转成 OpenAI function calling 需要的 tools 参数。
+
+    parameters 强制加 additionalProperties:false（strict mode），
+    让 LLM 幻觉出的多余参数在 API 层报错而非静默忽略，
+    OpenAI/DeepSeek/Kimi 均支持此属性。
+    """
+    out: list[dict] = []
+    for t in all_tools():
+        params = dict(t.parameters or {})
+        # object 级别严格：禁止未知属性（LLM 幻觉参数在此层拦截）
+        params["additionalProperties"] = False
+        # properties 下每个子对象也禁止（嵌套 object 场景）
+        for prop in (params.get("properties") or {}).values():
+            if isinstance(prop, dict) and prop.get("type") == "object":
+                prop["additionalProperties"] = False
+        out.append({
             "type": "function",
             "function": {
                 "name": t.name,
                 "description": t.description,
-                "parameters": t.parameters,
+                "parameters": params,
             },
-        }
-        for t in all_tools()
-    ]
+        })
+    return out
 
 
 async def call_tool(name: str, args: dict) -> dict:
@@ -126,7 +138,10 @@ def validate_args(tool: Tool, args: dict) -> str:
 
 
 # 导入子模块完成注册（必须在 _REGISTRY 定义之后）
-from . import files, phone, shell  # noqa: E402,F401
+from . import files, shell  # noqa: E402,F401
+from . import (  # noqa: E402,F401  # phone 是子包，统一注册 system/comm/sensors/network/media
+    phone as _phone_pkg,
+)
 
 # 可选能力：离线语音（sherpa-onnx 未安装时注册仍成功，调用时返回安装指引）
 from . import voice as _voice  # noqa: E402

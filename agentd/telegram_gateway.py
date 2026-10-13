@@ -236,6 +236,9 @@ class TelegramGateway:
             raise
         except Exception as e:  # noqa: BLE001 —— 兜底，不能让一条消息拖垮 bot
             await send_split(f"⚠️ 处理失败：{e}")
+        finally:
+            # 确保每个消息的 Agent 连接池都被关闭（防 FD / 连接泄漏）
+            await agent.aclose()
 
     # ---------------- 审批按钮回调 ----------------
     async def _on_callback(self, update, context) -> None:

@@ -5,25 +5,38 @@ plugins {
 
 android {
     namespace 'com.pocket.agent'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.pocket.agent"
-        minSdk 26          // Android 8.0+，覆盖绝大多数在用设备
-        targetSdk 34
+        minSdk 26
+        targetSdk 35
         versionCode 1
         versionName "1.0.0"
+
+        // 本机 agentd 服务端口——改这里即可切换，不需动 Java
+        buildConfigField "int", "AGENTD_PORT", "8787"
+        resValue "string", "agentd_host", "127.0.0.1"
+        resValue "string", "agentd_protocol", "http"
     }
 
     buildTypes {
+        debug {
+            minifyEnabled false
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 }
 

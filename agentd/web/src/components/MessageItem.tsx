@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { Msg, Part, ToolPart } from "../types";
@@ -35,20 +35,41 @@ export function Markdown({ text }: { text: string }) {
 
 function ThinkingBlock({ text, streaming, forceOpen }: { text: string; streaming: boolean; forceOpen?: boolean }) {
   const [open, setOpen] = useState<boolean>(streaming || forceOpen || false);
+  const bodyId = useMemo(() => `think-${Math.random().toString(36).slice(2, 8)}`, []);
   if (!text.trim()) return null;
   return (
     <div className={`thinking ${open ? "open" : ""}`}>
-      <button className="thinking-head" onClick={() => setOpen((v) => !v)}>
+      <button
+        className="thinking-head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={bodyId}
+      >
         {streaming && !open ? <span className="dot-blink" /> : <span className="dot" />}
         <span>{open ? "思考过程" : "思考过程 · 已收起"}</span>
         <IconChevron open={open} />
       </button>
-      {open && <div className="thinking-body">{text}</div>}
+      {open && (
+        <div className="thinking-body" id={bodyId}>
+          {text}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ---------- 工具卡片（含审批） ---------- */
+
+// 审批默认超时（秒），与后端 server.approval_timeout 默认值一致；仅用于前端倒计时展示
+const APPROVAL_TIMEOUT = 120;
+
+// 把秒级时间戳格式化为 HH:MM（历史消息缺时间时返回空串）
+function formatTime(ts?: number): string {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
 
 const STATUS_LABEL: Record<ToolPart["status"], string> = {
   running: "运行中",
@@ -70,21 +91,39 @@ function ToolCard({
   undoing?: boolean;
 }) {
   const [open, setOpen] = useState(tool.status === "waiting");
+  const bodyId = useMemo(() => `tool-${tool.id}-${Math.random().toString(36).slice(2, 6)}`, [tool.id]);
   const inputText =
     typeof tool.input === "string"
       ? tool.input
       : JSON.stringify(tool.input ?? {}, null, 2);
   const waiting = tool.status === "waiting";
+  const [countdown, setCountdown] = useState(APPROVAL_TIMEOUT);
+
+  // 审批等待倒计时：status 变为 waiting 时从 APPROVAL_TIMEOUT 递减，超时后服务端会自动拒绝
+  useEffect(() => {
+    if (tool.status !== "waiting") return;
+    setCountdown(APPROVAL_TIMEOUT);
+    const timer = window.setInterval(() => {
+      setCountdown((c) => (c > 0 ? c - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [tool.status, tool.id]);
+
   return (
     <div className={`tool ${tool.status}`}>
-      <button className="tool-head" onClick={() => setOpen((v) => !v)}>
+      <button
+        className="tool-head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={bodyId}
+      >
         <span className={`tool-dot ${tool.status}`} />
         <span className="tool-name">{tool.name}</span>
         <span className={`tool-status ${tool.status}`}>{STATUS_LABEL[tool.status]}</span>
         <IconChevron open={open} />
       </button>
       {open && (
-        <div className="tool-body">
+        <div className="tool-body" id={bodyId}>
           <pre className="tool-input">$ {inputText}</pre>
           {waiting && (
             <div className="approval">
@@ -97,7 +136,14 @@ function ToolCard({
                 <button className="btn" onClick={() => onApproval(tool.id, "allow_always")}>始终允许</button>
                 <button className="btn danger" onClick={() => onApproval(tool.id, "deny")}>拒绝</button>
               </div>
-              <p className="approval-note">「始终允许」只对当前会话的同类操作生效；不点击会在超时后自动拒绝。</p>
+              <p className="approval-note">
+                {countdown > 0 ? (
+                  <span className="approval-countdown">不点击将在 {countdown} 秒后自动拒绝。</span>
+                ) : (
+                  "已超时，正在自动拒绝。"
+                )}{' '}
+                「始终允许」只对当前会话的同类操作生效。
+              </p>
             </div>
           )}
           {!waiting && tool.result && (
@@ -127,6 +173,7 @@ export function MessageItem({
   undoingId,
   onApprovePlan,
   onEditPlan,
+  onIgnorePlan,
 }: {
   msg: Msg;
   parts: Part[];
@@ -135,7 +182,33 @@ export function MessageItem({
   undoingId?: string | null;
   onApprovePlan: (assistantMsgId: string) => void;
   onEditPlan: (assistantMsgId: string) => void;
+  onIgnorePlan: (assistantMsgId: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 卸载时清理「已复制」延迟，避免 setState on unmounted component
+  useEffect(() => {
+    return () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    const raw = parts
+      .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
+      .map((p) => p.text)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(raw);
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard 需要 HTTPS 或用户手势，失败时静默 */
+    }
+  };
+
   if (msg.role === "user") {
     const text = parts
       .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
@@ -144,6 +217,10 @@ export function MessageItem({
     return (
       <div className="row user">
         <div className="bubble user">{text}</div>
+        {formatTime(msg.createdAt) && <span className="msg-time">{formatTime(msg.createdAt)}</span>}
+        <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制用户消息">
+          {copied ? "已复制" : "复制"}
+        </button>
       </div>
     );
   }
@@ -157,6 +234,7 @@ export function MessageItem({
           <PocketLogo size={26} />
         </span>
         <span className="agent-name">{msg.done ? "口袋智灵" : "正在思考…"}</span>
+        {formatTime(msg.createdAt) && <span className="msg-time">{formatTime(msg.createdAt)}</span>}
       </div>
       {msg.error && <div className="err-banner">{msg.error}</div>}
       {msg.queued && <div className="err-banner queued-banner">已排队：上一轮回复还在进行中，这条将在完成后自动执行。</div>}
@@ -177,14 +255,21 @@ export function MessageItem({
             plan={p.plan}
             toolCalls={p.tool_calls}
             approved={p.approved}
+            ignored={p.ignored}
             onApprove={() => onApprovePlan(msg.id)}
             onEdit={() => onEditPlan(msg.id)}
+            onIgnore={() => onIgnorePlan(msg.id)}
           />
         ) : p.text.trim() ? (
           <div className="bubble agent" key={i}>
             <Markdown text={p.text} />
           </div>
         ) : null
+      )}
+      {hasContent && msg.done && (
+        <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制助手消息">
+          {copied ? "已复制" : "复制"}
+        </button>
       )}
       {!hasContent && !msg.done && (
         <div className="dots">

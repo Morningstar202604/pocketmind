@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { ChatErrorBoundary } from "./components/ChatErrorBoundary";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
 import { IconGear, IconSessions, IconTimer } from "./components/icons";
@@ -9,6 +10,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { TimerPanel } from "./components/TimerPanel";
 import { useAgentStore } from "./store/useAgentStore";
 import { applyTheme } from "./theme";
+import { reloadPage } from "./native";
 
 /* ---------- App ---------- */
 
@@ -21,11 +23,13 @@ export default function App() {
   const ready = useAgentStore((s) => s.ready);
   const mock = useAgentStore((s) => s.mock);
   const error = useAgentStore((s) => s.error);
+  const clearError = useAgentStore((s) => s.clearError);
   const showSessions = useAgentStore((s) => s.showSessions);
   const showSettings = useAgentStore((s) => s.showSettings);
   const showTimers = useAgentStore((s) => s.showTimers);
   const theme = useAgentStore((s) => s.theme);
   const undoingId = useAgentStore((s) => s.undoingId);
+  const connectionStatus = useAgentStore((s) => s.connectionStatus);
 
   const init = useAgentStore((s) => s.init);
   const loadSession = useAgentStore((s) => s.loadSession);
@@ -39,7 +43,9 @@ export default function App() {
   const onRenameSession = useAgentStore((s) => s.onRenameSession);
   const approvePlan = useAgentStore((s) => s.approvePlan);
   const editPlan = useAgentStore((s) => s.editPlan);
+  const ignorePlan = useAgentStore((s) => s.ignorePlan);
   const agentMode = useAgentStore((s) => s.agentMode);
+  const providerLabel = useAgentStore((s) => s.providerLabel);
   const setShowSessions = useAgentStore((s) => s.setShowSessions);
   const setShowSettings = useAgentStore((s) => s.setShowSettings);
   const setShowTimers = useAgentStore((s) => s.setShowTimers);
@@ -93,32 +99,57 @@ export default function App() {
 
       <main className="chat">
         {messages.length === 0 ? (
-          <EmptyState onPick={(t) => void send(t)} ready={ready} />
+          <EmptyState
+            onPick={(t) => void send(t)}
+            ready={ready}
+            onOpenSettings={() => setShowSettings(true)}
+          />
         ) : (
-          <div className="msgs" ref={msgsRef}>
-            {messages.map((m) => (
-              <MessageItem
-                key={m.id}
-                msg={m}
-                parts={m.parts}
-                onApproval={onApproval}
-                onUndo={onUndo}
-                undoingId={undoingId}
-                onApprovePlan={(aid) => void approvePlan(aid)}
-                onEditPlan={editPlan}
-              />
-            ))}
-          </div>
+          <ChatErrorBoundary
+            onReset={() => {
+              // 错误恢复后重新加载当前会话
+              if (sessionId) void loadSession(sessionId);
+            }}
+          >
+            <div className="msgs" ref={msgsRef}>
+              {messages.map((m) => (
+                <MessageItem
+                  key={m.id}
+                  msg={m}
+                  parts={m.parts}
+                  onApproval={onApproval}
+                  onUndo={onUndo}
+                  undoingId={undoingId}
+                  onApprovePlan={(aid) => void approvePlan(aid)}
+                  onEditPlan={editPlan}
+                  onIgnorePlan={(aid) => void ignorePlan(aid)}
+                />
+              ))}
+            </div>
+          </ChatErrorBoundary>
         )}
       </main>
+      {connectionStatus === "disconnected" && (
+        <div className="conn-banner" role="status">
+          <span>后端已断开，正在重试连接…</span>
+          <button className="btn sm" onClick={reloadPage}>刷新页面</button>
+        </div>
+      )}
+      {connectionStatus === "reconnecting" && (
+        <div className="conn-banner warn" role="status">
+          <span>正在连接后端…</span>
+        </div>
+      )}
 
       <Composer
         busy={busy}
         ready={ready}
         agentMode={agentMode}
+        providerLabel={providerLabel}
         onSend={(t) => void send(t)}
         onStop={stop}
         error={error}
+        onClearError={clearError}
       />
 
       {showSessions && (

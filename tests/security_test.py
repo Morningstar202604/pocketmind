@@ -102,7 +102,7 @@ async def test_fts_injection():
 
 async def test_ssrf_scheme():
     print("== 安全-3: download/open URL scheme 白名单 ==")
-    from agentd.tools.phone import _safe_http_url
+    from agentd.tools.phone._termux import _safe_http_url
 
     check("拒绝 file://", _safe_http_url("file:///etc/passwd") is None)
     check("拒绝 javascript:", _safe_http_url("javascript:alert(1)") is None)
@@ -133,6 +133,12 @@ async def test_chat_mode_no_tool_exec():
             return []
 
         async def get_summary(self, sid):
+            return None
+
+        async def get_archives(self, sid, limit=5):
+            return []
+
+        async def archive_messages(self, sid, old_msgs, cfg, llm_client=None):
             return None
 
         async def get_messages(self, sid):
@@ -207,8 +213,24 @@ async def test_token_masking():
     check("mask_key 空串返回空", mask_key("") == "")
 
 
+async def test_memory_search_auth():
+    print("== 安全-6: memory/search 路由鉴权依赖存在 ==")
+    from agentd.main import app as _app
+
+    target = None
+    for r in _app.routes:
+        if getattr(r, "path", None) == "/api/memory/search":
+            target = r
+            break
+    check("找到 /api/memory/search 路由", target is not None)
+    if target is not None:
+        names = [getattr(d.dependency, "__name__", "") for d in target.dependencies]
+        check("memory/search 带 check_token 依赖", "check_token" in names, str(names))
+
+
 async def main():
     await test_path_traversal()
+    await test_memory_search_auth()
     await test_fts_injection()
     await test_ssrf_scheme()
     await test_chat_mode_no_tool_exec()
