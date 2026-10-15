@@ -3,16 +3,25 @@
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>口袋里能真正操作你手机的 always-on Agent</b> —— 本地优先 · 隐私保护 · Termux 原生</p>
   <img src="https://img.shields.io/github/actions/workflow/status/X33834/pocketmind/ci.yml?branch=main&label=CI" alt="CI" />
-  <img src="https://img.shields.io/badge/tests-11%20backend%20suites%20%2B%2031%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-11%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
   <br />
-  <sub>Web UI · PWA · MCP Server · Telegram 网关 · 定时配方 · Plan/Act 双模式</sub>
+  <sub>Web UI · PWA · APK · MCP Server · Telegram 网关 · 定时配方 · Plan/Act 双模式</sub>
 </div>
 
 [English](README.md) | **简体中文**
 
 ---
+
+## 亮点
+
+- **住在手机里，数据不出本机**：会话、记忆、定时任务、文件备份全部落在本地 SQLite（600/700 权限），只有推理请求发到你配置的 LLM 端点；
+- **38 个手机工具**：电量 / 短信 / 拨号 / 定位 / 传感器 / shell / 文件（termux-api），外加任务清单、FTS5 知识库、档案记忆与技能；
+- **审批是安全模型，不是 UI 点缀**：三级授权（允许一次 / 本会话始终 / 全局）+ 全局拒绝名单，服务端强制执行；超时自动拒绝，外部 MCP 工具永远跳不过审批；
+- **桌面 / Telegram 远程遥控**：内置 stdio MCP Server 把 38 个工具暴露给 Claude Desktop / Cline / Codex；Telegram 网关可让 agent 从任何设备驱动与审批；
+- **手机端零 Node**：构建好的 `dist/` 直接入库，Termux 里只跑 `install.sh`；可装成 PWA，也可打 WebView 壳 APK（`termux/apk-shell/`）；
+- **验证而非口号**：CI 跑 11 个后端回归套件 + 前端类型检查、64 个单测、生产构建与 dist 新鲜度检查。
 
 ## 架构
 
@@ -199,6 +208,22 @@ args=`["-m", "agentd.mcp_server"]`、cwd 指向本仓库根目录。
 **工具说明**：动态读取 `agentd/tools/` 注册表，工具名与网页端一致（`get_battery`、
 `read_sms`、`run_shell` 等）；每个工具的 description 带风险前缀——
 `[safe]` 只读直跑，`[write]` / `[danger]` 桌面端模型应谨慎、高危操作需确认。
+
+## 验证（测试与 CI）
+
+GitHub CI（镜像 `github.com/X33834/pocketmind`）每次 push 自动跑：
+
+- **后端**——11 个回归套件：compileall、ruff、p0/p4/eval_approval（不需起服务），
+  m5/p0_queue/p1_jobs/p5（对活动 mock 服务 + faketermux 桩），
+  security/p2/p3 健壮性/p3 性能泄漏、MCP 与 Telegram 网关、
+  部署链路自检（`--lan` 无令牌拒启 / `AGENT_TOKEN` 引导 / `--clear-token` 恢复）、
+  p6 首次使用（未配模型）与 p7 横向审计套件。
+- **前端**——`tsc -b --noEmit` + 64 个 Vitest 单测 + 生产构建 +
+  dist 新鲜度检查（提交的 `dist/` 必须与当前源码一致，因为手机不做构建）。
+- **E2E**——Playwright（8 视口移动适配矩阵）仅手动触发。
+
+本机自验：`cd agentd/web && npx tsc -b --noEmit && npm test`，
+以及按 `smoke/README.md` 逐个跑 `smoke/` 套件。
 
 ## License
 

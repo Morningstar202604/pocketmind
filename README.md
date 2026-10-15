@@ -3,16 +3,25 @@
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b> Local-first · Privacy-first · Native on Termux</p>
   <img src="https://img.shields.io/github/actions/workflow/status/X33834/pocketmind/ci.yml?branch=main&label=CI" alt="CI" />
-  <img src="https://img.shields.io/badge/tests-11%20backend%20suites%20%2B%2031%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-11%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
   <br />
-  <sub>Web UI · PWA · MCP Server · Telegram Gateway · Recipes · Plan/Act Modes</sub>
+  <sub>Web UI · PWA · APK · MCP Server · Telegram Gateway · Recipes · Plan/Act Modes</sub>
 </div>
 
 **[English](README.md)** | [简体中文](README.zh-CN.md)
 
 ---
+
+## Highlights
+
+- **Lives on your phone, data stays on-device** — sessions, memory, jobs and file backups are all in local SQLite (600/700 perms); only inference goes to the LLM endpoint you configure.
+- **38 phone tools** — battery / SMS / dial / location / sensors / shell / files via termux-api, plus task lists, an FTS5 knowledge base, profile memory and skills.
+- **Approval is a security model, not a UI nicety** — three-level grants (once / always-this-session / global) plus a global deny list, all enforced server-side; timeouts auto-deny, and external MCP tools can never skip approval.
+- **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 38 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
+- **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
+- **Verified, not just claimed** — CI runs 11 backend regression suites, frontend typecheck + 64 unit tests + build + dist-freshness check.
 
 ## Architecture
 
@@ -196,6 +205,23 @@ Same for Cline / Codex: add a stdio server entry — `command=python3`,
 **Tool annotations**: dynamically read from the `agentd/tools/` registry; names match the web UI (`get_battery`,
 `read_sms`, `run_shell`…). Every tool description carries a risk prefix —
 `[safe]` read-only, run freely; `[write]` / `[danger]` desktop-side models should be cautious and require confirmation for high-risk actions.
+
+## Verification
+
+GitHub CI (mirror `github.com/X33834/pocketmind`) runs on every push:
+
+- **Backend** — 11 regression suites: compileall, ruff, p0/p4/eval_approval (no-server),
+  m5/p0_queue/p1_jobs/p5 (against a live mock server + faketermux stubs),
+  security/p2/p3-robustness/p3-perf, MCP & Telegram gateways, deploy-path self-check
+  (`--lan` refuses to boot without a token, `AGENT_TOKEN` bootstrap, `--clear-token`),
+  p6 first-run (unconfigured) and p7 cross-audit suites.
+- **Frontend** — `tsc -b --noEmit` + 64 Vitest unit tests + production build +
+  a dist-freshness check (the committed `dist/` must match the current source,
+  since phones build nothing).
+- **E2E** — Playwright (8-viewport mobile matrix) runs on manual dispatch only.
+
+Locally: `cd agentd/web && npx tsc -b --noEmit && npm test`, and the `smoke/`
+suites per `smoke/README.md`.
 
 ## License
 
