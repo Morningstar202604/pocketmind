@@ -78,16 +78,19 @@ async def run_shell(command: str, timeout: int = 60) -> dict:
         return {"error": "命令不能为空"}
     shell = shutil.which("bash") or "/bin/sh"
     timeout = max(1, min(int(timeout or 60), 300))
-    # start_new_session：独立进程组，便于超时/取消时整组回收
-    # preexec_fn：在子进程 exec 前设置 resource limit（内存/CPU/进程数），防越权
+    # start_new_session：独立进程组，便于超时/取消时整组回收（POSIX/Windows 都接受）
+    # preexec_fn：在子进程 exec 前设置 resource limit（内存/CPU/进程数），防越权。
+    #   它是 POSIX 专属参数——Windows 上传入会直接 ValueError（本工具在 Windows 上必然失败，
+    #   实测报 "preexec_fn is not supported on Windows platforms"），因此按平台条件传入。
     # bash -c 而非 -lc：避免 login shell 加载 profile/rc，减少注入面
-    proc = await asyncio.create_subprocess_exec(
-        shell, "-c", command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-        preexec_fn=_rlimit_preexec,
-    )
+    spawn_kwargs: dict = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "start_new_session": True,
+    }
+    if os.name == "posix":
+        spawn_kwargs["preexec_fn"] = _rlimit_preexec
+    proc = await asyncio.create_subprocess_exec(shell, "-c", command, **spawn_kwargs)
     timed_out = False
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -110,6 +113,13 @@ async def run_shell(command: str, timeout: int = 60) -> dict:
     }
     if len(stdout) > MAX_OUTPUT:
         result["truncated"] = True
+    # 非零退出 / 超时必须带 error 字段：agent 的状态判定只看 result["error"] 或
+    # "error_code"，旧实现只给 exit_code，于是失败命令在前端与落库状态里都是「完成」，
+    # 定时任务与条件判断也会把失败当成功往下走。
+    if timed_out:
+        result["error"] = f"命令超时（{timeout}s）：{stderr[:200] or command[:120]}"
+    elif proc.returncode != 0:
+        result["error"] = f"命令以非零状态退出（exit {proc.returncode}）：{stderr[:200] or stdout[:120]}"
     return result
 
 

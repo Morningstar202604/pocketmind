@@ -64,3 +64,21 @@ def _safe_http_url(url: str) -> str | None:
     if u.scheme not in ("http", "https") or not u.netloc:
         return None
     return url.strip()
+
+async def _run_checked(
+    args: list[str], label: str, input_text: str | None = None, timeout: int = 20
+) -> dict | None:
+    """执行 termux 命令并校验退出码：成功返回 None，失败返回可直接 return 的失败 dict。
+
+    为什么需要它：一批写操作（发短信、拨号、开 WiFi、手电筒、通知…）此前是
+    「调用完就 _ok()」，完全不看退出码 —— termux-api 没装、权限被拒、参数非法时
+    命令其实失败了，前端却显示「已完成」。用户在定时任务里挂的「到点发短信」
+    就这样静默失败过。统一走这个助手，让失败真的表现为失败。
+    """
+    try:
+        code, _out, err = await _run(args, input_text=input_text, timeout=timeout)
+    except TimeoutError:
+        return _fail(f"{label}超时")
+    if code != 0:
+        return _fail(f"{label}失败：{err or f'exit {code}'}")
+    return None

@@ -22,11 +22,48 @@ def _roots() -> list[Path]:
     return roots
 
 
+def _denied_dirs() -> list[Path]:
+    """明确拒绝的目录：这些位置的读取本身就是凭据泄露。
+
+    为什么需要单独一份黑名单：白名单是 `$HOME`，而 agent 自己的数据目录、
+    SSH 私钥、GPG 密钥环都在 `$HOME` 里。read_file/list_dir 是 safe 级（永不弹审批），
+    意味着一条被注入的短信就能让模型静默读走 config.json（含 API Key 与局域网令牌）
+    或 id_rsa —— 内容随下一次 LLM 请求就离开设备了。
+    """
+    home = Path.home()
+    denied = [home / ".agent", home / ".ssh", home / ".gnupg"]
+    try:
+        from ..paths import home_dir  # 数据目录可能被 AGENT_HOME 覆盖
+        denied.append(home_dir())
+    # aqg: top-level boundary —— 解析数据目录失败仅降级为「不带该项的默认集合」，
+    # 不能因为路径解析异常就把整个文件工具的访问控制放开
+    except Exception:  # noqa: BLE001 —— 取不到就用默认集合
+        pass
+    out: list[Path] = []
+    for d in denied:
+        try:
+            out.append(d.resolve())
+        except OSError:
+            continue
+    # 去重（AGENT_HOME 默认就在 ~/.agent 下）
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for d in out:
+        k = str(d)
+        if k not in seen:
+            seen.add(k)
+            uniq.append(d)
+    return uniq
+
+
 def _resolve(raw: str) -> Path:
     p = Path(raw).expanduser()
     if not p.is_absolute():
         p = Path.home() / p
     p = p.resolve()
+    for d in _denied_dirs():
+        if p == d or d in p.parents:
+            raise ValueError(f"该路径存放密钥/凭据或智能体数据，不允许访问：{p}")
     for r in _roots():
         rp = r.resolve()
         if p == rp or rp in p.parents:

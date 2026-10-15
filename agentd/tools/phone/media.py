@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from . import _t
-from ._termux import _bin, _fail, _ok, _run, _safe_http_url, _unavailable
+from ._termux import _bin, _fail, _ok, _run, _run_checked, _safe_http_url, _unavailable
 
 
 async def take_photo(output: str = "") -> dict:
@@ -29,11 +29,10 @@ async def share_text(text: str, title: str = "") -> dict:
     args = [b, "-a", "send"]
     if title:
         args += ["-t", str(title)]
-    try:
-        await _run(args, input_text=str(text))
-        return _ok()
-    except TimeoutError:
-        return _fail("调起分享超时")
+    failed = await _run_checked(args, "调起分享", input_text=str(text))
+    if failed:
+        return failed
+    return _ok()
 
 
 async def download_file(url: str, output: str = "") -> dict:
@@ -44,11 +43,10 @@ async def download_file(url: str, output: str = "") -> dict:
     if safe is None:
         return _fail("URL 非法：仅支持 http/https 链接（拒绝 file:/javascript:/data: 等）")
     path = output or str(Path.home() / "storage" / "downloads")
-    try:
-        await _run([b, "-p", str(path), safe], timeout=60)
-        return _ok(url=safe, saved_to=str(path))
-    except TimeoutError:
-        return _fail("下载超时（网络慢或文件大）")
+    failed = await _run_checked([b, "-p", str(path), safe], "下载", timeout=60)
+    if failed:
+        return failed
+    return _ok(url=safe, saved_to=str(path))
 
 
 async def open_target(target: str) -> dict:
@@ -59,11 +57,10 @@ async def open_target(target: str) -> dict:
     if "://" in t or ":" in t.split("/", 1)[0]:
         if _safe_http_url(t) is None:
             return _fail("仅支持 http/https 链接或本地路径（拒绝 file:/javascript:/data: 等）")
-    try:
-        await _run([b, t], timeout=15)
-        return _ok(opened=t)
-    except TimeoutError:
-        return _fail("打开超时")
+    failed = await _run_checked([b, t], "打开", timeout=15)
+    if failed:
+        return failed
+    return _ok(opened=t)
 
 
 # ---------- 注册表 ----------

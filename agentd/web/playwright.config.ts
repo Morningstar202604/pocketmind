@@ -19,7 +19,7 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: "http://127.0.0.1:8799",
+    baseURL: "http://127.0.0.1:8793",
     trace: "on-first-retry",
   },
   projects: [
@@ -30,15 +30,19 @@ export default defineConfig({
   ],
   webServer: {
     // mock 模式后端：不消耗 LLM 额度，发"你好"会回固定文案，适合确定性 E2E
-    command: "python3 -m agentd.main --mock --port 8799",
+    // 解释器按平台选：Windows 上通常只有 python（没有 python3），否则本地跑 E2E 会卡在
+    // "Timed out waiting from config.webServer"（CI 的 ubuntu 用 python3）
+    command: `${process.platform === "win32" ? "python" : "python3"} -m agentd.main --mock --port 8793`,
     cwd: repoRoot,
-    url: "http://127.0.0.1:8799/api/health",
+    url: "http://127.0.0.1:8793/api/health",
     timeout: 60_000,
     reuseExistingServer: !process.env.CI,
     env: {
       // AGENT_HOME 指向隔离目录，避免污染真实数据；
       // PATH 前置 faketermux 桩（CI 由 tests/setup_faketermux.sh 生成到 /tmp/faketermux）
-      AGENT_HOME: process.env.AGENT_HOME || "/tmp/agentd-e2e",
+      // 专用数据目录：其他套件（m5/p2）会把 permission_mode 改成 auto，
+    // 若复用它们的实例，审批就不会弹出（实测导致手机矩阵全线误报失败）
+    AGENT_HOME: process.env.AGENT_HOME || "/tmp/agentd-e2e",
       PATH: `/tmp/faketermux:${process.env.PATH || ""}`,
     },
   },

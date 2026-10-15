@@ -127,10 +127,11 @@ DEFAULTS = {
         "retention_days": 90,           # 记忆保留天数（0 = 永久）
     },
     # 【可配置】agent：工具执行 / 递归控制
+    # 注：单次工具超时由各工具自带（Tool.timeout，shell 300s / phone 20s / 默认 120s），
+    # 不做全局覆盖——早期版本的 agent.tool_timeout 从未被消费，已删除。
     "agent": {
-        "tool_timeout": 60,             # 工具执行超时（秒，传给 subprocess）
-        "max_tool_retries": 2,          # 工具失败后最大重试次数
-        "max_tool_chain_depth": 10,     # 单次请求最大工具调用链长度（防死循环）
+        "max_tool_retries": 2,          # 只读(safe)工具瞬时失败后的最大重试次数；写/危险工具绝不重试
+        "max_tool_chain_depth": 20,     # 单次请求最大工具调用链长度（防死循环）
     },
     # 【可配置】context：LLM 上下文 Token 预算控制
     "context": {
@@ -143,11 +144,6 @@ DEFAULTS = {
         "enabled": False,               # 是否启用 MCP 客户端角色
         "servers": [],                  # [{name, command, args, auto_connect}]
         "timeout": 15,                  # MCP 调用超时（秒）
-    },
-    # 【可配置】eval：promptfoo 评测偏好
-    "eval": {
-        "provider": "litellm",           # 评测使用的 provider（litellm / custom）
-        "auto_run_on_startup": False,   # 启动时自动运行评测（需配置真实 API key）
     },
 }
 
@@ -190,17 +186,8 @@ class MemorySettings(BaseModel):
 
 class AgentSettings(BaseModel):
     """Agent 执行配置"""
-    tool_timeout: int = 60
     max_tool_retries: int = 2
-    max_tool_chain_depth: int = 10
-
-    @field_validator("tool_timeout", mode="before")
-    @classmethod
-    def _clamp_timeout(cls, v):
-        try:
-            return max(5, min(300, int(v)))
-        except (TypeError, ValueError):
-            return 60
+    max_tool_chain_depth: int = 20
 
     @field_validator("max_tool_retries", mode="before")
     @classmethod
@@ -216,7 +203,7 @@ class AgentSettings(BaseModel):
         try:
             return max(3, min(50, int(v)))
         except (TypeError, ValueError):
-            return 10
+            return 20
 
 
 class ContextSettings(BaseModel):
@@ -255,12 +242,6 @@ class MCPClientSettings(BaseModel):
             return max(3, min(120, int(v)))
         except (TypeError, ValueError):
             return 15
-
-
-class EvalSettings(BaseModel):
-    """PromptFoo 评测偏好"""
-    provider: str = "litellm"
-    auto_run_on_startup: bool = False
 
 
 # ---------- pydantic 配置模型（P1-2：类型强制 + 范围收敛） ----------
@@ -395,21 +376,53 @@ class Settings:
 
     @staticmethod
     def _coerce(data: dict) -> dict:
-        """用 AppSettings 模型做类型强制 / 范围收敛（替代手写字段 clamp）。
+        """用 pydantic 模型做类型强制 / 范围收敛（替代手写字段 clamp）。
 
         校验失败时回退到合并后的原始 dict，保证坏配置不会让服务起不来；
         具体字段的合法性在调用处（如 permission_mode()）仍有兜底。
+
+        扩展块（agent/context/memory/mcp_client）同样收敛：此前只在访问器里 clamp，
+        结果是 config.json 存着 999 而运行时按 50 生效——设置面板显示的值与实际
+        生效值不一致（面板可编辑这些旋钮后尤其误导）。
         """
         try:
             validated = AppSettings.model_validate(data).model_dump()
             # 合并而非整体替换：AppSettings 只覆盖核心字段，
-            # 扩展配置块（memory/agent/context/mcp_client/litellm/mem0/eval）
+            # 扩展配置块（memory/agent/context/mcp_client/litellm/mem0）
             # 不在模型内，必须原样保留，否则用户配置会被默认值覆盖。
             for k, v in validated.items():
                 data[k] = v
-            return data
         except ValidationError as e:
-            logger.warning("Config validation failed, using raw fallback: %s", e)
+            logger.warning("Config validation failed, sanitizing bad fields: %s", e)
+            # 坏字段必须被剔除，不能原样保留：
+            # 旧实现整体回退到「合并后的原始 dict」，于是一个 {"llm": "text"} 会落盘，
+            # 而所有读取路径（masked_settings 的 merged.update、llm()、export）都假定
+            # 这些键是 dict —— 结果 GET /api/settings 永久 500，设置面板打不开、导出失败，
+            # 用户只能手改 config.json。这里改为「按块丢弃非法值、保留合法块」。
+            for key in ("llm", "server"):
+                if key in data and not isinstance(data[key], dict):
+                    logger.warning("丢弃类型非法的配置块 %s=%r", key, data[key])
+                    data[key] = dict(DEFAULTS.get(key, {}))
+            # 块本身是 dict、但内部字段类型错（如 server.token=123）同样会让下游
+            # mask_key/len() 抛错，需要逐字段回退到默认值
+            for key in ("llm", "server"):
+                blk = data.get(key)
+                if not isinstance(blk, dict):
+                    continue
+                defaults = dict(DEFAULTS.get(key, {}))
+                for fname, dflt in defaults.items():
+                    raw = blk.get(fname, dflt)
+                    if isinstance(dflt, str) and not isinstance(raw, str):
+                        logger.warning("字段 %s.%s 类型非法(%r)，回退默认", key, fname, raw)
+                        blk[fname] = dflt
+                    elif isinstance(dflt, bool) and not isinstance(raw, bool):
+                        blk[fname] = dflt
+                    elif isinstance(dflt, int) and not isinstance(dflt, bool) and not isinstance(raw, int):
+                        # 直接回退默认值而不是 int(float(raw))：后者对 "-100"/"999999"
+                        # 这类合法字符串数字会成功，绕过成功分支里 ServerSettings 的
+                        # clamp（approval_timeout 会被写成越界值）
+                        logger.warning("字段 %s.%s 类型非法(%r)，回退默认", key, fname, raw)
+                        blk[fname] = dflt
             # 安全兜底：即使整体校验失败，收敛关键数值字段，防止极端值破坏服务
             llm = data.get("llm") if isinstance(data, dict) else {}
             if isinstance(llm, dict):
@@ -424,6 +437,24 @@ class Settings:
                 except (TypeError, ValueError):
                     server["approval_timeout"] = 120
             return data
+        # 扩展块收敛（失败则保留原值，访问器仍会兜底）
+        for key, model in (
+            ("agent", AgentSettings),
+            ("context", ContextSettings),
+            ("memory", MemorySettings),
+            ("mcp_client", MCPClientSettings),
+        ):
+            raw = data.get(key)
+            if not isinstance(raw, dict):
+                continue
+            base = dict(DEFAULTS.get(key, {}))
+            base.update(raw)
+            try:
+                data[key] = model(**base).model_dump()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception:  # noqa: BLE001 —— 收敛失败不阻塞加载/保存
+                pass
+        return data
 
     def get(self) -> dict:
         return self.data
@@ -444,6 +475,23 @@ class Settings:
 
     def llm(self) -> dict:
         return self.data["llm"]
+
+    # ---------- LLM 可用性判据（health 与对话前置检查共用同一份逻辑） ----------
+
+    _LLM_FIELDS = (("base_url", "Base URL"), ("model", "模型名"), ("api_key", "API Key"))
+
+    def llm_missing(self) -> list[str]:
+        """返回缺失的 LLM 配置项中文名；空列表 = 已配置。
+
+        开启 LiteLLM 网关时以网关配置为准（其 api_key 可来自环境变量）。
+        """
+        if self.use_litellm():
+            return []
+        llm = self.data.get("llm", {}) or {}
+        return [label for key, label in self._LLM_FIELDS if not str(llm.get(key) or "").strip()]
+
+    def llm_ready(self) -> bool:
+        return not self.llm_missing()
 
     def litellm_cfg(self) -> dict:
         """LiteLLM 专用配置。返回 {} 表示未启用。"""
@@ -508,12 +556,6 @@ class Settings:
         base = DEFAULTS.get("mcp_client", {}).copy()
         base.update(self.data.get("mcp_client", {}))
         return MCPClientSettings(**base).model_dump()
-
-    def eval_cfg(self) -> dict:
-        """评测偏好（provider / auto_run）。"""
-        base = DEFAULTS.get("eval", {}).copy()
-        base.update(self.data.get("eval", {}))
-        return EvalSettings(**base).model_dump()
 
 
 def mask_key(key: str) -> str:

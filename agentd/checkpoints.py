@@ -115,9 +115,27 @@ class CheckpointStore:
         await self._conn.commit()
 
     async def delete_session(self, session_id: str) -> None:
+        """删除该会话的撤销记录，并**一并删掉备份文件本体**。
+
+        旧实现只删表里的行，`.bak` 留在磁盘上永不回收：用户撤销窗口过后，
+        自己文件的副本（可能含隐私内容）仍永久躺在数据目录里，磁盘只增不减。
+        """
         assert self._conn is not None
+        rows = (await self._conn.execute(
+            text("SELECT backup FROM checkpoints WHERE session_id=:s"), {"s": session_id}
+        )).fetchall()
         await self._conn.execute(text("DELETE FROM checkpoints WHERE session_id=:s"), {"s": session_id})
         await self._conn.commit()
+        backups = [str(dict(r._mapping).get("backup") or "").strip() for r in rows]
+        for backup in backups:
+            if not backup:
+                continue
+            try:
+                # 走线程：同步 unlink 会阻塞事件循环（ASYNC240）
+                await asyncio.to_thread(Path(backup).unlink, missing_ok=True)
+            except OSError:
+                # 备份文件删不掉（占用/权限）不应让删会话失败，但记录已清
+                pass
 
     async def close(self) -> None:
         try:

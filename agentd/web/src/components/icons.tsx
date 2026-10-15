@@ -38,6 +38,21 @@ export const IconFolder = (p: P) => (
   </Svg>
 );
 
+/** 记忆/事实：书签形（与"存一条长期事实"对应）。 */
+export const IconBookmark = (p: P) => (
+  <Svg {...p}>
+    <path d="M6 4h12v16l-6-4-6 4z" />
+  </Svg>
+);
+
+/** 知识库：书册形（与"用户策展资料"对应）。 */
+export const IconBook = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z" />
+    <path d="M8 7h7M8 11h7" />
+  </Svg>
+);
+
 export const IconBell = (p: P) => (
   <Svg {...p}>
     <path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6" />

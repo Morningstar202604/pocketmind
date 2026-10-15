@@ -108,8 +108,10 @@ async def _fire_job(
     await notify_async("口袋智灵 · 定时任务", f"正在执行：{name}", persistent=False)
     try:
         from .main import run_agent_for_job  # 延迟导入：避免与 main.py 循环依赖
+        from .telemetry import scheduler_span
 
-        await run_agent_for_job(session_id, message)
+        with scheduler_span(job_id):
+            await run_agent_for_job(session_id, message)
     except Exception:  # noqa: BLE001 —— 定时任务异常不能影响调度器
         await notify_async("口袋智灵 · 定时任务出错", name, persistent=False)
 

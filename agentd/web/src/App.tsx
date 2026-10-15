@@ -1,13 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatErrorBoundary } from "./components/ChatErrorBoundary";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
-import { IconGear, IconSessions, IconTimer } from "./components/icons";
+import { IconChevron, IconGear, IconSessions, IconTimer } from "./components/icons";
 import { MessageItem } from "./components/MessageItem";
+import { PendingApprovalBanner } from "./components/PendingApprovalBanner";
 import { PocketLogo } from "./components/PocketLogo";
 import { SessionList } from "./components/SessionList";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TimerPanel } from "./components/TimerPanel";
+import { TodoPanel } from "./components/TodoPanel";
 import { useAgentStore } from "./store/useAgentStore";
 import { applyTheme } from "./theme";
 import { reloadPage } from "./native";
@@ -30,6 +32,18 @@ export default function App() {
   const theme = useAgentStore((s) => s.theme);
   const undoingId = useAgentStore((s) => s.undoingId);
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
+  const todos = useAgentStore((s) => s.todos);
+  const clearTodos = useAgentStore((s) => s.clearTodos);
+  const settings = useAgentStore((s) => s.settings);
+
+  // 审批倒计时跟随后端配置（server.approval_timeout），拿不到时兜底 120s
+  const approvalTimeout =
+    Number((settings?.server as { approval_timeout?: number } | undefined)?.approval_timeout) || 120;
+
+  // 顶栏状态灯：一个颜色只回答"现在能不能用"——绿=可用、琥珀=待配置、红=断开
+  const statusKind = connectionStatus !== "connected" ? "err" : ready ? "ok" : "warn";
+  const statusText =
+    connectionStatus === "disconnected" ? "已断开" : connectionStatus === "reconnecting" ? "连接中" : ready ? "已就绪" : "未配置";
 
   const init = useAgentStore((s) => s.init);
   const loadSession = useAgentStore((s) => s.loadSession);
@@ -51,7 +65,21 @@ export default function App() {
   const setShowTimers = useAgentStore((s) => s.setShowTimers);
   const setTheme = useAgentStore((s) => s.setTheme);
 
-  const msgsRef = useRef<HTMLDivElement>(null);
+  // 滚动容器是 <main className="chat">（overflow-y:auto）；
+  // 注意：不是 .msgs —— 它没有 overflow，改它的 scrollTop 毫无效果（此前的老 bug）。
+  const chatRef = useRef<HTMLElement>(null);
+  // 「用户正在看历史」= 距底部还有一段距离。此时新内容不再把他拽回底部。
+  const [pinnedUp, setPinnedUp] = useState(false);
+
+  /** 距底部是否算"贴底"：留 80px 容差，手指微抖不至于判定成翻历史。 */
+  const nearBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+
+  const scrollToBottom = (smooth = true) => {
+    const el = chatRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setPinnedUp(false);
+  };
 
   // 启动：拉健康状态 + 会话列表，没有会话则新建一个
   useEffect(() => {
@@ -67,11 +95,14 @@ export default function App() {
     return () => mq.removeEventListener("change", fn);
   }, [theme]);
 
-  // 消息列表自动滚动到底部（流式输出时跟随）
+  // 消息更新时跟随到底部——但只在用户本来就贴底时。
+  // 旧实现无条件 scrollTop = scrollHeight：用户在流式输出期间往上翻看历史，
+  // 每来一个字就被拽回底部，根本读不了（手机聊天最常见的恼人行为）。
   useEffect(() => {
-    const el = msgsRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    const el = chatRef.current;
+    if (!el) return;
+    if (!pinnedUp) el.scrollTop = el.scrollHeight;
+  }, [messages, pinnedUp]);
 
   return (
     <div className="app">
@@ -87,7 +118,10 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-right">
-          <span className={`pill ${ready ? "ok" : "warn"}`}>{ready ? "已就绪" : "未配置"}</span>
+          <span className={`pill ${statusKind}`} title={`后端状态：${statusText}`}>
+            <i className={`pill-dot ${statusKind}`} aria-hidden="true" />
+            {statusText}
+          </span>
           <button className="icon-btn" onClick={() => setShowTimers(true)} title="定时任务" aria-label="定时任务">
             <IconTimer />
           </button>
@@ -97,38 +131,55 @@ export default function App() {
         </div>
       </header>
 
-      <main className="chat">
-        {messages.length === 0 ? (
-          <EmptyState
-            onPick={(t) => void send(t)}
-            ready={ready}
-            onOpenSettings={() => setShowSettings(true)}
-          />
-        ) : (
-          <ChatErrorBoundary
-            onReset={() => {
-              // 错误恢复后重新加载当前会话
-              if (sessionId) void loadSession(sessionId);
-            }}
-          >
-            <div className="msgs" ref={msgsRef}>
-              {messages.map((m) => (
-                <MessageItem
-                  key={m.id}
-                  msg={m}
-                  parts={m.parts}
-                  onApproval={onApproval}
-                  onUndo={onUndo}
-                  undoingId={undoingId}
-                  onApprovePlan={(aid) => void approvePlan(aid)}
-                  onEditPlan={editPlan}
-                  onIgnorePlan={(aid) => void ignorePlan(aid)}
-                />
-              ))}
-            </div>
-          </ChatErrorBoundary>
+      <div className="chat-wrap">
+        <main
+          className="chat"
+          ref={chatRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const up = !nearBottom(el);
+            if (up !== pinnedUp) setPinnedUp(up);
+          }}
+        >
+          {messages.length === 0 ? (
+            <EmptyState
+              onPick={(t) => void send(t)}
+              ready={ready}
+              onOpenSettings={() => setShowSettings(true)}
+            />
+          ) : (
+            <ChatErrorBoundary
+              onReset={() => {
+                // 错误恢复后重新加载当前会话
+                if (sessionId) void loadSession(sessionId);
+              }}
+            >
+              <div className="msgs">
+                {messages.map((m) => (
+                  <MessageItem
+                    key={m.id}
+                    msg={m}
+                    parts={m.parts}
+                    onApproval={onApproval}
+                    onUndo={onUndo}
+                    undoingId={undoingId}
+                    onApprovePlan={(aid) => void approvePlan(aid)}
+                    onEditPlan={editPlan}
+                    onIgnorePlan={(aid) => void ignorePlan(aid)}
+                    approvalTimeout={approvalTimeout}
+                  />
+                ))}
+              </div>
+            </ChatErrorBoundary>
+          )}
+        </main>
+        {pinnedUp && messages.length > 0 && (
+          <button className="to-bottom" onClick={() => scrollToBottom()} aria-label="回到最新消息">
+            <IconChevron open={false} />
+            最新
+          </button>
         )}
-      </main>
+      </div>
       {connectionStatus === "disconnected" && (
         <div className="conn-banner" role="status">
           <span>后端已断开，正在重试连接…</span>
@@ -140,6 +191,10 @@ export default function App() {
           <span>正在连接后端…</span>
         </div>
       )}
+
+      <PendingApprovalBanner />
+
+      <TodoPanel todos={todos} onClear={clearTodos} />
 
       <Composer
         busy={busy}

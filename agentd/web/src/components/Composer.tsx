@@ -83,8 +83,9 @@ export function Composer({
           {providerLabel && ready && (
             <span className="composer-provider">{providerLabel}</span>
           )}
+          {/* 只在接近上限时提示，且说人话（还差多少字），不在平时用裸数字占位 */}
           <span className={`composer-count ${overLimit ? "over" : ""}`}>
-            {charCount > 0 && `${charCount}`}
+            {charCount >= 3200 && (overLimit ? `已超出 ${charCount - 4000} 字` : `还可输入 ${4000 - charCount} 字`)}
           </span>
         </div>
         <div className="composer-row">
@@ -100,6 +101,11 @@ export function Composer({
             }}
             placeholder={placeholder}
             rows={1}
+            // 手机软键盘的「发送」键（Enter 即发送，Shift+Enter 换行）+ 关闭自动大写/纠错
+            enterKeyHint="send"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
           />
           {busy && !text.trim() ? (
             <button className="send stop" onClick={onStop} title="停止生成（Esc）" aria-label="停止">

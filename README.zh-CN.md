@@ -104,7 +104,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React 前端（Vite+TS），构建产物 `dist/` 由 agentd 直接托管 |
 | `termux/` | 手机端：`install.sh` 一键装依赖 / `start.sh` 启动 / `boot.sh` 开机自启 |
 | `config/` | 预设配方 `recipes.json`（定时任务模板）；LLM 厂商预设见 `agentd/config.py` 的 `PRESETS` |
-| `tests/` | 回归测试 11 个套件（排队 / 定时任务 / 安全 / 配方 / MCP / Telegram；POSIX 专用检查在非 Linux 上记为「跳过」而非失败） |
+| `smoke/` | 回归测试 15 个套件（agent 深度 / 排队 / 定时任务 / 安全 / 配方 / MCP / Telegram / 横向审计 / 审批单测；POSIX 专用检查在非 Linux 上记为「跳过」而非失败） |
 
 ---
 
@@ -170,7 +170,7 @@ Plan 模式下 SSE 会发 `{"type": "plan", "plan": "...", "tool_calls": [...]}`
 
 ## MCP Server（远程控制手机）
 
-把手机上的工具（电量 / 短信 / 定位 / 文件 / shell 等 31 个）暴露成标准 MCP tools，
+把手机上的工具（电量 / 短信 / 定位 / 文件 / shell / 任务清单 / 知识库 / 技能等 38 个）暴露成标准 MCP tools，
 让桌面端的 **Claude Desktop / Cline / Codex** 通过 stdio 直接调用，等于用桌面大模型远程操控这台手机。
 
 **启动（独立模式，不启 FastAPI）**：

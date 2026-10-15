@@ -16,9 +16,15 @@ def validate_job_payload(payload: dict) -> dict:
         raise HTTPException(400, "缺少必要字段：name / trigger_type(cron|interval|date) / expr / message")
     if tt == "interval":
         try:
-            int(float(expr))
-        except ValueError:
-            raise HTTPException(400, "interval 表达式需为秒数（如 3600）") from None
+            val = float(expr)
+            # inf/nan 会让 int() 抛 OverflowError（不是 ValueError），
+            # 旧实现只捕 ValueError，于是 "inf"/"1e999" 直接 500 而不是 400
+            if val != val or val in (float("inf"), float("-inf")):
+                raise ValueError("非有限数")
+            if val <= 0 or val > 365 * 86400:
+                raise ValueError("超出范围")
+        except (ValueError, OverflowError):
+            raise HTTPException(400, "interval 表达式需为 1~31536000 之间的秒数（如 3600）") from None
     if tt == "date":
         try:
             __import__("datetime").datetime.strptime(expr, "%Y-%m-%d %H:%M")
@@ -58,4 +64,28 @@ def masked_settings(s: dict) -> dict:
         server["tg_token"] = mask_key(server["tg_token"])
     out["llm"] = llm
     out["server"] = server
+
+    # litellm.api_key：/api/stats 已专门剔除它，这里同样必须打码
+    litellm = out.get("litellm")
+    if isinstance(litellm, dict) and litellm.get("api_key"):
+        litellm = dict(litellm)
+        litellm["api_key"] = mask_key(litellm["api_key"])
+        out["litellm"] = litellm
+
+    # MCP 客户端每个服务器的 env 常放第三方令牌（GITHUB_TOKEN 之类）——
+    # 这是「配一次忘一次」的凭据，明文回传等于把外部账号交出去，必须整体打码
+    mcpc = out.get("mcp_client")
+    if isinstance(mcpc, dict) and isinstance(mcpc.get("servers"), list):
+        masked_servers = []
+        for srv in mcpc["servers"]:
+            if not isinstance(srv, dict):
+                continue
+            srv2 = dict(srv)
+            env = srv2.get("env")
+            if isinstance(env, dict) and env:
+                srv2["env"] = {k: mask_key(str(v)) for k, v in env.items()}
+            masked_servers.append(srv2)
+        mcpc = dict(mcpc)
+        mcpc["servers"] = masked_servers
+        out["mcp_client"] = mcpc
     return out

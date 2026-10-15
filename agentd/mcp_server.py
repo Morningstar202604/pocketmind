@@ -69,8 +69,39 @@ def _build_signature(parameters: dict) -> inspect.Signature:
     return inspect.Signature(parameters=params, return_annotation=dict)
 
 
+def _register_runtime_tools() -> None:
+    """注册依赖运行期数据目录的工具（档案记忆 / 技能），使 stdio MCP 模式与外层一致。
+
+    这些工具由 main.py 的 lifespan 在服务模式注册；独立 stdio 模式（不跑 FastAPI
+    lifespan）若不补注册，桌面端会少看到 remember_fact / read_skill 两个工具。
+    注册幂等（registry 按名字覆盖），重复调用无害；失败只影响对应工具。
+    """
+    try:
+        from .paths import home_dir
+
+        data = home_dir()
+        try:
+            from .profile_memory import ProfileMemory
+
+            ProfileMemory(data / "memory").register_tools()
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from .skills import SkillRegistry
+
+            SkillRegistry(data / "skills").register_tool()
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception:  # noqa: BLE001
+            pass
+    # aqg: top-level boundary —— 失败仅降级本能力
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def build_server(name: str = "pocket-agent"):
     """构建并注册完所有工具的 FastMCP server（不启动传输，便于测试 list_tools）。"""
+    _register_runtime_tools()
     mcp = FastMCP(name)
 
     for tool in all_tools():

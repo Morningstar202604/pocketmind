@@ -75,12 +75,34 @@ class MCPClientWrapper:
         try:
             tools = await self._session.list_tools()
             self._tools_cache = [
-                {"name": f"{self.name}.{t.name}", "description": t.description or "", "input_schema": getattr(t, "inputSchema", {}) or {}}
+                {
+                    "name": f"{self.name}.{t.name}",
+                    "description": t.description or "",
+                    "input_schema": getattr(t, "inputSchema", {}) or {},
+                    # 透传注解：main.py 用 mcp_tool_risk 决定只读工具能否免审批
+                    "annotations": self._annotation_dict(getattr(t, "annotations", None)),
+                }
                 for t in tools.tools
             ]
         except Exception as exc:
             logger.warning("MCP 工具列表拉取失败 [%s]：%s", self.name, exc)
         return self._tools_cache
+
+    @staticmethod
+    def _annotation_dict(ann) -> dict | None:
+        """把 SDK 的 ToolAnnotations（pydantic）转成 dict，供风险分级使用。"""
+        if ann is None:
+            return None
+        if isinstance(ann, dict):
+            return ann
+        dump = getattr(ann, "model_dump", None)
+        if callable(dump):
+            try:
+                return dump()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception:  # noqa: BLE001
+                return None
+        return None
 
     async def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """调用 Server 的工具（去掉名称前缀 '<server>.' 部分）。"""
@@ -166,11 +188,6 @@ def init_mcp_client(cfg: dict) -> MCPClientHub | None:
     if not servers:
         return None
     _hub = MCPClientHub(servers, timeout=cfg.get("timeout", 15))
-    return _hub
-
-
-def get_hub() -> MCPClientHub | None:
-    """获取当前 Hub 实例。"""
     return _hub
 
 

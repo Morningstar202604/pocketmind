@@ -26,7 +26,7 @@ PocketMind 是一个运行在 Android Termux（或 Docker/VPS）上的**本地 A
 ├─────────────────────────────────────────────────────┤
 │  Agent 循环  agentd/agent.py                         │
 │   · 单进程 ReAct：stream → tool_call → approve → 回填│
-│   · 最大 20 轮迭代                                   │
+│   · 链长封顶 agent.max_tool_chain_depth（默认 20）   │
 │   · 上下文管理（摘要 + FTS5 记忆搜索 + 历史裁剪）     │
 ├─────────────────────────────────────────────────────┤
 │  工具层   agentd/tools/                              │
@@ -70,18 +70,28 @@ PocketMind 是一个运行在 Android Termux（或 Docker/VPS）上的**本地 A
 ### 审批机制如何工作？
 
 每条 `write`/`danger` 工具调用会创建一个 `asyncio.Event`（gate），前端通过 SSE 收到
-审批卡片；用户点「允许一次/始终允许/拒绝」后 decide 通知 gate 继续。
+审批卡片；用户点「允许一次 / 始终允许 / 全局允许 / 拒绝 / 始终拒绝」后 decide 通知 gate 继续。
 120s 超时自动拒绝（安全优先）。
+
+三级权限粒度（对标 goose 的 AlwaysAllow / AskBefore / NeverAllow）：
+
+- **全局黑名单（deny_always）**：工具名粒度、跨会话生效、**优先级最高**——命中即短路拒绝，
+  既不建等待门也不推审批卡（拒绝是收敛方向，故默认全局）；可在 设置 → 审批权限名单 撤销。
+- **全局白名单（allow_global）**：仅由用户在审批卡上显式选择「全局允许」写入，
+  会话级决策不会隐式升级为全局（避免一次误点永久放行）。
+- **会话白名单（allow_always）**：`(会话, 工具)` 粒度，单会话内免重复确认。
 
 ## 4. 数据流
 
 ```
-用户输入 → POST /api/chat → add_message → 组装上下文
+用户输入 → POST /api/chat → 中断恢复（孤立 tool_calls 补占位）
+        → add_message → 组装上下文（固定前缀 → 偏好 → 档案记忆 → 技能索引
+                                    → RRF 检索 → 分页摘要 → 历史）
         → Agent.chat() → OpenAI stream → tool_call →
-          ├─ safe → 直接执行
+          ├─ safe → 直接执行（瞬时失败按 max_tool_retries 重试）
           └─ write/danger → ApprovalCenter.ask() → SSE emit approval → 等用户
-        → 工具结果回写 SSE + add_message → 循环下一轮
-        → done → 滚动更新每会话记忆摘要
+        → 工具结果回写 SSE + add_message → 循环下一轮（max_tool_chain_depth 封顶）
+        → done → 滚动更新每会话记忆摘要（LLM 摘要器；预算超阈值先归档）
 ```
 
 ## 5. 文件地图
@@ -89,18 +99,24 @@ PocketMind 是一个运行在 Android Termux（或 Docker/VPS）上的**本地 A
 ```
 agentd/
 ├── main.py          FastAPI 入口 + 路由 + ApprovalCenter 注入
-├── agent.py         ReAct 循环（~200 行核心）
-├── approval.py      审批中心（独立模块，timeout_cb 注入）
-├── config.py        pydantic 类型强制配置
-├── memory.py        SQLAlchemy Store + FTS5 记忆
+├── agent.py         ReAct 循环（~200 行核心；链长/重试/压缩全部配置驱动）
+├── approval.py      审批中心（三级：会话白名单 / 全局白名单 / 全局黑名单）
+├── config.py        pydantic 类型强制配置（旋钮全部有真实消费方）
+├── memory.py        SQLAlchemy Store + FTS5（记忆 / 任务清单 / 知识库三组表）
+├── profile_memory.py 结构化长期记忆（USER.md / FACT.md / JOURNAL.jsonl）
+├── skills.py        SKILL.md 渐进披露（name/description 进 system，正文按需读）
+├── summarizer.py    会话摘要器（直连 OpenAI 兼容端点，不依赖 LiteLLM）
 ├── scheduler.py     APScheduler 封装 + 热更新
 ├── checkpoints.py   文件 undo 日志
 ├── notify.py        系统通知
-├── mcp.py           第三方 MCP Server 客户端
-├── mcp_server.py    反向暴露手机工具为 MCP
+├── mcp.py           第三方 MCP Server 客户端（注解 → 风险分级）
+├── mcp_server.py    反向暴露手机工具为 MCP（含运行期工具补注册）
 ├── mock_llm.py      离线 Mock LLM（流式 + 正则匹配）
 └── tools/
-    ├── __init__.py  Tool 注册表 + pydantic 动态校验
+    ├── __init__.py  Tool 注册表 + pydantic 动态校验 + safe 工具重试
+    ├── ctx.py       工具执行上下文（会话/存储/推流回调，contextvars）
+    ├── todo.py      任务清单工具（todo_write / todo_clear）
+    ├── knowledge.py 知识库工具（kb_add / kb_search / kb_list，显式检索）
     ├── phone/       手机能力（5 子包 + _termux.py）
     ├── files.py     文件系统 CRUD
     ├── shell.py     bash 执行（强制审批）

@@ -15,6 +15,41 @@ import asyncio
 from contextlib import AsyncExitStack
 
 
+def mcp_tool_risk(annotations) -> str:
+    """由 MCP 工具注解推导风险等级（对标 goose 的 apply_tool_annotations 思路）。
+
+    MCP 规范里工具可声明 annotations：
+      - destructiveHint=true → 危险（可能造成不可逆破坏）→ "danger"
+      - 其余（含 readOnlyHint=true、无注解）→ "write"
+        readOnlyHint 故意**不**降为 safe：注解由对端服务器自己声明，把删除类工具
+        标成 readOnly 就能在 approve 模式免审批执行——等于把信任边界交给被接入方。
+        外部工具最低是 write（仍需确认），safe 只属于本地内建工具。
+
+    返回本项目 tools.risk 的三档值；annotations 允许是 dict / pydantic 对象 / None。
+    """
+    ann = annotations
+    if ann is None:
+        return "write"
+    if not isinstance(ann, dict):
+        # pydantic 的 ToolAnnotations：转 dict；失败则按最保守处理
+        dump = getattr(ann, "model_dump", None)
+        if callable(dump):
+            try:
+                ann = dump()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception:  # noqa: BLE001
+                return "write"
+        else:
+            return "write"
+    if bool(ann.get("destructiveHint")):
+        return "danger"
+    # readOnlyHint 只作为「降一级」使用，且永远不降到 safe：
+    # annotations 由对端服务器自己声明，把删除类工具标成 readOnlyHint: true
+    # 就能在 approve 模式下免审批执行——这是把信任边界交给了被接入方。
+    # 因此外部 MCP 工具最低为 write（仍需确认），只有本地内建工具才可能是 safe。
+    return "write"
+
+
 class MCPClient:
     """连接一个 stdio MCP 服务器（官方 SDK 管理子进程 + JSON-RPC 会话）。"""
 
@@ -45,11 +80,27 @@ class MCPClient:
 
     @staticmethod
     def _tool_to_dict(t) -> dict:
-        """把 SDK 的 Tool 对象转成 main.py 期望的 dict（inputSchema 驼峰对齐）。"""
+        """把 SDK 的 Tool 对象转成 main.py 期望的 dict（inputSchema 驼峰对齐）。
+
+        同时透传 annotations：main.py 据此把只读工具放行、破坏性工具升级为 danger。
+        """
+        ann = getattr(t, "annotations", None)
+        annotations = None
+        if ann is not None:
+            dump = getattr(ann, "model_dump", None)
+            if callable(dump):
+                try:
+                    annotations = dump()
+                # aqg: top-level boundary —— 失败仅降级本能力
+                except Exception:  # noqa: BLE001
+                    annotations = None
+            elif isinstance(ann, dict):
+                annotations = ann
         return {
             "name": t.name,
             "description": t.description or "",
             "inputSchema": t.input_schema or {"type": "object", "properties": {}},
+            "annotations": annotations,
         }
 
     async def call_tool(self, tool_name: str, arguments: dict) -> dict:

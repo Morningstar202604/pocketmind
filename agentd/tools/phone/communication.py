@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from . import _t
-from ._termux import _bin, _fail, _ok, _run, _unavailable
+from ._termux import _bin, _fail, _ok, _run, _run_checked, _unavailable
 
 
 async def send_sms(numbers: list[str], text: str) -> dict:
@@ -14,11 +14,12 @@ async def send_sms(numbers: list[str], text: str) -> dict:
     if not numbers:
         return _fail("缺少收件人号码")
     recipients = ",".join(str(n) for n in numbers)
-    try:
-        await _run([b, "-n", recipients], input_text=str(text))
-        return _ok(sent_to=numbers, chars=len(str(text)))
-    except TimeoutError:
-        return _fail("发送短信超时")
+    # 内部 15s < 工具级 20s：让"发送短信失败/超时"由内部先给出具体原因，
+    # 而不是被外层通用超时抢先（否则用户只看到"工具执行超时"）
+    failed = await _run_checked([b, "-n", recipients], "发送短信", input_text=str(text), timeout=15)
+    if failed:
+        return failed
+    return _ok(sent_to=numbers, chars=len(str(text)))
 
 
 async def read_sms(limit: int = 20) -> dict:
@@ -50,11 +51,10 @@ async def make_call(number: str) -> dict:
     b = _bin("termux-telephony-call")
     if not b:
         return _unavailable("termux-telephony-call")
-    try:
-        await _run([b, str(number)], timeout=10)
-        return _ok(calling=number)
-    except TimeoutError:
-        return _fail("拨号超时")
+    failed = await _run_checked([b, str(number)], "拨号", timeout=10)
+    if failed:
+        return failed
+    return _ok(calling=number)
 
 
 # ---------- 注册表 ----------

@@ -1,5 +1,8 @@
 # PocketMind 功能对标主流方案报告
 
+> **历史快照（2026-10-14 之前）**：本文记录的是当时代码的状态与结论，部分内容已被后续修复/新增取代；
+> **现状请以 [CHANGELOG.md](CHANGELOG.md) 与代码为准**。保留本文仅供追溯当时的判断依据。
+
 > 日期：2026-10-13
 > 对标基准：**当前工作区代码的实际状态**（已修复部署/鉴权/契约问题，APK 已可构建）
 > 方法：代码级盘点 + 主流方案公开资料调研（2026 年现状）
@@ -66,45 +69,32 @@
 
 ---
 
-## 四、核心差距与补强路线
+## 四、核心差距与补强路线（2026-10-14 状态复核）
 
-### P0｜长程记忆分页（对标 Letta）— 工作量 ~200 行
+> 本节原为"待补"清单；下列状态为逐项复核结果，实现细节见 CHANGELOG.md 的 Unreleased 段。
 
-- **现状**：上下文超 80 条消息时整体裁剪（`agent.py _trim`），早期细节永久丢失；记忆摘要只保留最近一份。
-- **目标**：近期原始消息 + 远期滚动摘要，实现"虚拟上下文分页"。
-- **做法**：`Store` 增加按会话归档表；每次对话前计算 token 预算，超出时把最旧消息压缩进摘要并落库；上下文重组时注入"摘要 + 近期原始"。
+### 已完成（原列为缺口）
 
-### P1｜Token 级上下文预算与压缩（对标 Cline/Claude Code）— 工作量 ~150 行
+- **长程记忆分页（原 P0）— 已完成**：上下文超窗口时把早期消息滚动归档为摘要
+  （`Store.archive_messages` / `memory(kind=archive)`），并在组装时按旧→新注入；
+  另有 token 预算触发路径（`context.budget_tokens` × `compress_threshold`）。
+- **Token 级工具结果预算（原 P1）— 已完成**：`_tool_result_limited` 按预算 15% 截断工具结果，
+  保头保尾；摘要链路补齐直连摘要器（未开 LiteLLM 也可用）。
+- **MCP Client 落地（原 P1）— 已完成**：官方 SDK 双端（暴露 38 个工具给桌面 / 接入外部 MCP Server），
+  并新增按注解自动分级（readOnlyHint→safe、destructiveHint→danger）。
+- **结构化长期记忆 + 用户可编辑（新增项）— 已完成**：USER.md / FACT.md / JOURNAL.jsonl，
+  设置面板可编辑，`remember_fact` 工具经审批写入。
+- **知识库与技能（新增项）— 已完成**：KB 走显式工具检索不自动注入；Skills 按 SKILL.md 渐进披露。
+- **任务清单（原对标 Claude Code 的缺口）— 已完成**：`todo_write` 落库 + SSE + 前端面板。
 
-- **现状**：`agent_utils.check_token_budget` 只有软/硬停，没有裁剪工具返回。
-- **目标**：工具返回结果按 token 预算截断（已有 `MAX_TOOL_TEXT=6000` 硬截断，改为按模型窗口比例 + 摘要），并在预算耗尽时强制触发摘要。
+### 仍开放（有意不做，理由见下）
 
-### P1｜MCP Client 实际启用（对标桌面生态）— 工作量 ~80 行 + 文档
-
-- **现状**：`mcp_client.py` 已存在但默认 `enabled=false`，设置面板无入口，工具注册/调度无 UI。
-- **目标**：设置面板增加 MCP Client 配置（服务器列表），连接后动态注册 `mcp__<server>__<tool>` 工具并纳入审批。
-
-### P1｜多 Agent 编排（对标 ADK/LangGraph/CrewAI）— 工作量 ~300 行
-
-- **现状**：单 Agent 循环。
-- **目标**：增加"子 Agent 工具"——主 Agent 可把任务拆给子 Agent（如"搜索记忆""汇总文件"），子 Agent 复用同一套审批/存储；先实现 `AgentTool`，再考虑图编排。
-
-### P2｜浏览器/UI 自动化 — 工作量 ~200 行 + 依赖
-
-- **现状**：无。
-- **目标**：可选接入 Playwright/浏览器 MCP Server，让 Agent 能查网页/操作 Web；对手机 Agent 价值中等。
-
-### P2｜评测闭环（对标 ADK/LangGraph）— 工作量 ~100 行
-
-- **现状**：`eval/promptfooconfig.yaml` 已就绪但未实际运行（需 API Key）。
-- **目标**：把 smoke 断言 + promptfoo 用例纳入 CI 门禁（`workflow_dispatch`），并补充"工具选择正确率/审批拦截率"等指标。
-
-### P2｜多模态（图片理解）— 工作量 ~60 行 + 模型支持
-
-- **现状**：只有 TTS/STT。
-- **目标**：`take_photo` 后把图片路径转 base64 传给支持视觉的模型（OpenAI 兼容），实现"拍照给我看看这是什么"。
-
----
+- **多 Agent 编排**：单用户单机场景价值有限，长任务已由调度器覆盖；维持单 agent。
+- **浏览器/UI 自动化（手机屏幕操作）**：与"termux-api 系统能力"路线不同，属另一条产品线。
+- **向量记忆默认开启**：chroma/fastembed(onnxruntime) 在 Termux/bionic 上无 wheel，
+  维持"可选 + 缺依赖即降级"，默认长期记忆走 FTS5 + RRF；真机可安装性待实测。
+- **换用 LangGraph / OpenAI Agents SDK 等框架**：调研结论为不换——其原生依赖（xxhash/ormsgpack/
+  sqlite-vec、griffelib）在 Termux 无法落地，且自研循环已覆盖流式/审批/plan/前缀缓存/全量持久化。
 
 ## 五、结论
 

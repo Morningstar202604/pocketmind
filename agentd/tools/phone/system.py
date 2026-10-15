@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from . import _t
-from ._termux import _bin, _fail, _ok, _run, _unavailable
+from ._termux import _bin, _fail, _ok, _run, _run_checked, _unavailable
 
 
 async def battery() -> dict:
@@ -34,44 +34,40 @@ async def notify(title: str, message: str = "") -> dict:
     args = [b, "--title", str(title)]
     if message:
         args += ["--content", str(message)]
-    try:
-        await _run(args)
-        return _ok()
-    except TimeoutError:
-        return _fail("发送通知超时")
+    failed = await _run_checked(args, "发送通知")
+    if failed:
+        return failed
+    return _ok()
 
 
 async def toast(message: str) -> dict:
     b = _bin("termux-toast")
     if not b:
         return _unavailable("termux-toast")
-    try:
-        await _run([b, "-s", str(message)])
-        return _ok()
-    except TimeoutError:
-        return _fail("toast 超时")
+    failed = await _run_checked([b, "-s", str(message)], "显示 toast")
+    if failed:
+        return failed
+    return _ok()
 
 
 async def vibrate(duration_ms: int = 500) -> dict:
     b = _bin("termux-vibrate")
     if not b:
         return _unavailable("termux-vibrate")
-    try:
-        await _run([b, "-d", str(max(50, min(10000, duration_ms)))])
-        return _ok(vibrated_ms=duration_ms)
-    except TimeoutError:
-        return _fail("震动超时")
+    failed = await _run_checked([b, "-d", str(max(50, min(10000, duration_ms)))], "震动")
+    if failed:
+        return failed
+    return _ok(vibrated_ms=duration_ms)
 
 
 async def torch(on: bool) -> dict:
     b = _bin("termux-torch")
     if not b:
         return _unavailable("termux-torch")
-    try:
-        await _run([b, "on" if on else "off"])
-        return _ok(torch="on" if on else "off")
-    except TimeoutError:
-        return _fail("手电筒控制超时")
+    failed = await _run_checked([b, "on" if on else "off"], "手电筒")
+    if failed:
+        return failed
+    return _ok(torch="on" if on else "off")
 
 
 async def get_volume(stream: str = "music") -> dict:

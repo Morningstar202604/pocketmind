@@ -12,15 +12,21 @@ import type { StateCreator } from "zustand/vanilla";
 import {
   api,
   exportAll,
+  getPendingApprovals,
+  getTodos,
   renameSession,
   undoToolCall,
-  type ChatEvent,
+  type ApiError,
+  type ApprovalDecision,
+  type PendingApproval,
   type Session,
   type StoredMessage,
+  type TodoItem,
 } from "../api";
+import { vibrate } from "../native";
 import { getThemePref, setThemePref, type ThemePref } from "../theme";
 import { uid, type Msg, type Part } from "../types";
-import { applyEvent, restore, appendTextPart, safeJson } from "./partReducer";
+import { applyEvent, restore } from "./partReducer";
 export { applyEvent, appendTextPart, restore, safeJson } from "./partReducer";
 export type { Msg, Part, ToolPart } from "../types";
 
@@ -39,10 +45,13 @@ let running = false;
 
 // 后端健康检查轮询 id（用于 clearInterval）
 let healthTimer: ReturnType<typeof setInterval> | null = null;
+// 连续探测失败计数（用于「一次抖动不报断开」）
+let pollFailures = 0;
 // 后端断连后的退避秒数（指数增长，上限 30s）
 let backoffSeconds = 1;
 const MAX_BACKOFF = 30;
-const BASE_BACKOFF = 1;
+// 正常状态每 5 秒探活一次：1 秒轮询既费电又曾把服务端限流打满（应用自己判自己掉线）
+const BASE_BACKOFF = 5;
 
 // 厂商 id → 显示标签（与后端 config.PRESETS 对齐）
 function providerName(id: string): string {
@@ -64,6 +73,15 @@ export interface AgentStore {
   sessions: Session[];
   sessionId: string;
   messages: Msg[];
+  // 当前会话的任务清单（todo_write 维护；切会话/刷新后从后端恢复）
+  todos: TodoItem[];
+  // 未决审批（含定时任务触发的后台审批）：SSE 之外的补充通路
+  pendingApprovals: PendingApproval[];
+  refreshPendingApprovals: () => Promise<void>;
+  /** 决定后台审批（可能属于别的会话，不能用当前 sessionId）；返回是否提交成功 */
+  decideBackgroundApproval: (sessionId: string, toolCallId: string, decision: ApprovalDecision) => Promise<boolean>;
+  // 清空任务清单（全部完成或任务取消）：本地立即清，同时同步后端
+  clearTodos: () => Promise<void>;
   // 流式/连接状态
   busy: boolean;
   ready: boolean;
@@ -116,7 +134,7 @@ export interface AgentStore {
   onRenameSession: (sid: string, title: string) => Promise<void>;
 
   // 审批 / 撤销 / 导出
-  onApproval: (toolCallId: string, decision: "allow_once" | "allow_always" | "deny") => Promise<void>;
+  onApproval: (toolCallId: string, decision: ApprovalDecision) => Promise<void>;
   onUndo: (toolCallId: string) => Promise<void>;
   onExport: () => Promise<void>;
 
@@ -143,6 +161,10 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
         if (ev.type === "text" || ev.type === "tool_start" || ev.type === "thinking" || ev.type === "plan") {
           set((s) => ({ messages: s.messages.map((m) => (m.id === aid ? { ...m, queued: false } : m)) }));
         }
+        // 任务清单：整表覆盖（后端已落库，前端只是渲染面）
+        if (ev.type === "todo") {
+          set({ todos: ev.todos });
+        }
         set((s) => ({ messages: s.messages.map((m) => (m.id === aid ? applyEvent(m, ev) : m)) }));
       }, ac.signal);
     } catch (e) {
@@ -165,11 +187,40 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     }
   };
 
+  /**
+   * 队列驱动器：串行执行 sendQueue 里的每一条消息。
+   *
+   * 为什么单独抽出来：旧实现是「push 后如果没在跑就自己起循环」，循环结束把 running 置 false。
+   * 但在这两步之间（`while` 判空退出 → `running = false`）入队的消息会看到 running 仍为 true
+   * 而直接 return，队列再也没有驱动者——界面上停在「已排队」，实际**永不执行**（消息被吞）。
+   * 现在统一入口 + 收尾接力，任何时刻入队的消息最终都会被处理。
+   */
+  const driveQueue = async () => {
+    if (running) return;
+    running = true;
+    set({ busy: true, error: "" });
+    try {
+      while (sendQueue.length > 0) {
+        const item = sendQueue.shift()!;
+        await doRun(item.text, item.aid);
+        void get().refreshSessions();
+      }
+    } finally {
+      running = false;
+      set({ busy: false });
+      abortController = null;
+      // 接力：覆盖「刚好在退出瞬间入队」的窗口
+      if (sendQueue.length > 0) void driveQueue();
+    }
+  };
+
   return {
     // ---------- 初始状态 ----------
     sessions: [],
     sessionId: "",
     messages: [],
+    todos: [] as TodoItem[],
+    pendingApprovals: [] as PendingApproval[],
     busy: false,
     ready: false,
     mock: false,
@@ -195,6 +246,10 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
       const poll = async () => {
         try {
           const h = await api.get<{ ok: boolean; ready: boolean; mock: boolean }>("/api/health");
+          pollFailures = 0; // 成功即复位；瞬时抖动不会留下「已断开」
+          // 顺带拉一次未决审批：定时任务触发的审批卡没有 SSE 通路，
+          // 只能靠轮询补显示，否则用户永远看不到、任务必然等超时被拒
+          void useAgentStore.getState().refreshPendingApprovals();
           const prev = useAgentStore.getState().connectionStatus;
           if (prev === "disconnected" || prev === "reconnecting") {
             set({ ready: h.ready, mock: h.mock, connectionStatus: "connected" });
@@ -208,7 +263,15 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
             }
           }
         } catch {
-          // 仅在前一次为 connected 时才标记为 disconnected（避免重复 set）
+          // 丢包/请求被中断（例如正在刷新页面）会让单次探测失败——手机上网络本来就常抖，
+          // 因此要求**连续两次**失败才报「已断开」：一次抖动不该吓用户一跳，
+          // 真正的宕机仍会在约 2 秒内提示。
+          pollFailures += 1;
+          if (pollFailures < 2) {
+            const cur0 = useAgentStore.getState().connectionStatus;
+            if (cur0 === "connected") set({ connectionStatus: "reconnecting" });
+            return;
+          }
           const cur = useAgentStore.getState().connectionStatus;
           if (cur !== "disconnected") {
             set({ ready: false, connectionStatus: "disconnected" });
@@ -250,10 +313,12 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
       }
       // 启动持续健康检查轮询（在后台持续检测后端是否恢复）
       get().startHealthPolling();
-      // 读取后端持久化的智能体模式（plan/act）+ 当前 LLM 厂商标签
+      // 读取后端持久化的智能体模式（plan/act）+ 当前 LLM 厂商标签 + 设置快照
       // providerLabel 用于 Composer 输入框左上角显示（如"豆包""DeepSeek"）
+      // settings 快照供只读消费者使用（审批倒计时读 server.approval_timeout 等）
       try {
         const s = await api.get<{ agent_mode?: "plan" | "act"; llm?: { provider?: string } }>("/api/settings");
+        set({ settings: s as Record<string, unknown> });
         if (s.agent_mode === "plan" || s.agent_mode === "act") set({ agentMode: s.agent_mode });
         if (s.llm?.provider) set({ providerLabel: providerName(s.llm.provider) });
       } catch {
@@ -268,6 +333,15 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
       }
     },
 
+    async refreshPendingApprovals() {
+      try {
+        const r = await getPendingApprovals();
+        set({ pendingApprovals: r.pending ?? [] });
+      } catch {
+        // 轮询失败不打扰用户（网络抖动/服务重启），保留上一次结果
+      }
+    },
+
     async refreshSessions() {
       try {
         const list = await api.get<Session[]>("/api/sessions");
@@ -279,7 +353,7 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     },
 
     async loadSession(sid: string) {
-      set({ sessionId: sid, messages: [], error: "" });
+      set({ sessionId: sid, messages: [], todos: [], error: "" });
       try {
         const msgs = await api.get<StoredMessage[]>(`/api/sessions/${sid}/messages`);
         // 竞态保护：期间用户已切到别的会话，则丢弃这次过期响应
@@ -287,6 +361,28 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
         if (cur === sid) set({ messages: restore(msgs) });
       } catch {
         /* 会话可能已删 */
+      }
+      // 任务清单同样按会话恢复（后端落库；失败不影响聊天）
+      try {
+        const todos = await getTodos(sid);
+        if (get().sessionId === sid) set({ todos });
+      } catch {
+        /* 旧后端没有该端点时静默忽略 */
+      }
+    },
+
+    async clearTodos() {
+      // 乐观清空 + 服务端同步：只清本地，刷新/切会话后会重新拉回来（"复活"）
+      const sid = get().sessionId;
+      if (!sid) {
+        set({ todos: [] });
+        return;
+      }
+      set({ todos: [] });
+      try {
+        await api.del(`/api/sessions/${sid}/todos`);
+      } catch {
+        // 旧后端没有该端点 / 请求失败：本地保持已清空，下次 loadSession 会拉回，不阻断用户
       }
     },
 
@@ -305,17 +401,8 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
         ],
       }));
       sendQueue.push({ text: t, aid });
-      if (running) return; // 正在跑，由循环消化队列
-      running = true;
-      set({ busy: true, error: "" });
-      while (sendQueue.length > 0) {
-        const item = sendQueue.shift()!;
-        await doRun(item.text, item.aid);
-        void get().refreshSessions();
-      }
-      running = false;
-      set({ busy: false });
-      abortController = null;
+      // 统一交给驱动器：在跑就并入当前循环，没跑就起一轮（含退出瞬间入队的接力）
+      await driveQueue();
     },
 
     stop() {
@@ -356,6 +443,30 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     },
 
     // ---------- 审批 / 撤销 / 导出 ----------
+    async decideBackgroundApproval(sessionId, toolCallId, decision) {
+      // 必须显式传该审批所属的会话：后台审批属于触发它的那个会话，
+      // 用「当前打开的会话」提交会让后端找不到 gate（静默无效，用户点了没反应）。
+      // 返回是否真正提交成功：失败时卡片必须保留（服务端的 gate 还开着），
+      // 藏掉卡片就退回到「静默失败」——审批只能等超时被自动拒绝。
+      let sent = false;
+      try {
+        await api.post("/api/approval", {
+          session_id: sessionId,
+          tool_call_id: toolCallId,
+          decision,
+        });
+        sent = true;
+        vibrate(20);
+      } catch (e) {
+        // 404 = 已超时/已被处理：卡片消失是正确行为，不算提交失败
+        const status = (e as ApiError).status;
+        if (status !== 404) set({ error: (e as Error).message || "审批提交失败，请重试" });
+      } finally {
+        await get().refreshPendingApprovals();
+      }
+      return sent;
+    },
+
     async onApproval(toolCallId, decision) {
       try {
         await api.post("/api/approval", {
@@ -363,13 +474,26 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
           tool_call_id: toolCallId,
           decision,
         });
-        if (decision !== "deny") {
+        vibrate(20); // 手机上给一次轻振动：确认"我的决定已生效"（浏览器环境无操作）
+        // 拒绝类决策（deny / deny_always）不把卡片置为运行中
+        if (!decision.startsWith("deny")) {
           set((s) => ({
             messages: s.messages.map((m) => ({
               ...m,
               parts: m.parts.map((p) =>
                 p.type === "tool" && p.tool.id === toolCallId
-                  ? { ...p, tool: { ...p.tool, status: "running" as const } }
+                  ? {
+                      ...p,
+                      tool: {
+                        ...p.tool,
+                        status: "running" as const,
+                        // 审批等待已作废起表（partReducer 的 approval 分支），
+                        // 批准后从决策时刻重新计时：耗时只含执行段，不含用户思考段。
+                        // 未走审批的工具 startedAt 仍在，保持原值不动。
+                        startedAt: p.tool.startedAt ?? Date.now(),
+                        startedFor: "running" as const,
+                      },
+                    }
                   : p
               ),
             })),

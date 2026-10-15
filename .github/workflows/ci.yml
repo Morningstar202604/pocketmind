@@ -36,8 +36,11 @@ jobs:
       - name: Ruff lint
         run: ruff check agentd/ tests/
 
-      - name: P0 单元回归（不需启动服务）
-        run: python tests/p0_regression_test.py
+      - name: P0/P4 与审批单测（不需启动服务）
+        run: |
+          python smoke/p0_regression_test.py
+          python smoke/p4_agent_depth_test.py
+          python tests/eval_approval.py
 
       - name: Set up faketermux stubs
         run: bash tests/setup_faketermux.sh
@@ -59,24 +62,25 @@ jobs:
 
       - name: Run end-to-end regression tests
         run: |
-          python tests/m5_regression.py
-          python tests/p0_queue_test.py
-          python tests/p1_jobs_test.py
+          python smoke/m5_regression.py
+          python smoke/p0_queue_test.py
+          python smoke/p1_jobs_test.py
+          python smoke/p5_frontend_contract_test.py
 
       # 此前只有上面 4 个套件进门禁：安全专项、配方、健壮性/性能泄漏、MCP、Telegram
       # 全部"能跑但没人跑"，而问题恰好集中在这些区域（配方校验、令牌打码、部署引导）。
       - name: Run security / recipe / robustness suites
         run: |
           python tests/security_test.py
-          python tests/p2_plan_recipe_test.py
-          python tests/p3_robustness_api.py
-          python tests/p3_robustness_unit.py
-          python tests/p3_perf_leak_test.py
+          python smoke/p2_plan_recipe_test.py
+          python smoke/p3_robustness_api.py
+          python smoke/p3_robustness_unit.py
+          python smoke/p3_perf_leak_test.py
 
       - name: Run MCP & Telegram gateway tests
         run: |
-          python tests/test_mcp_server.py
-          python tests/test_telegram_gateway.py
+          python smoke/test_mcp_server.py
+          python smoke/test_telegram_gateway.py
 
       - name: 部署链路自检（--lan 无令牌拒启 / AGENT_TOKEN 引导 / --clear-token）
         run: |
@@ -103,6 +107,14 @@ jobs:
           python -m agentd.main --home /tmp/pa-lan --clear-token
           python -c "import json;c=json.load(open('/tmp/pa-lan/config.json'));assert c['server'].get('token','x')=='',c['server'];print('clear-token + --home 定位生效')"
           rm -rf /tmp/pa-lan
+
+      # 首次使用路径（没填 API Key 就发消息）自带服务生命周期，无需外部依赖
+      - name: 首次使用（未配置模型）回归
+        run: python smoke/p6_unconfigured_test.py
+
+      # 横向审计修复回归（YAML 一个 run 只能一条命令，需单独一个 step）
+      - name: 横向审计修复回归（令牌/配置/密钥/排序/退出码/凭据目录）
+        run: python smoke/p7_cross_audit_test.py
 
       - name: Show server log on failure
         if: failure()

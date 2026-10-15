@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,8 @@ from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+
+logger = logging.getLogger("agentd.memory")
 
 
 def _now() -> float:
@@ -36,6 +39,8 @@ class Store:
         self._conn: AsyncConnection | None = None
         self._fts = False  # FTS5 是否可用（编译进 sqlite 且建表成功才为 True）
         self._write_lock = asyncio.Lock()
+        # FTS 回填批量（由 settings.memory.fts_page_size 注入；影响启动速度）
+        self.fts_page_size = 50
 
     async def start(self) -> None:
         """建立异步连接、开启 WAL、建表/回填（在 FastAPI startup 中调用）。"""
@@ -47,6 +52,10 @@ class Store:
         await self._conn.execute(text("PRAGMA synchronous=NORMAL"))
         await self._conn.execute(text("PRAGMA wal_autocheckpoint=1000"))
         await self._conn.execute(text("PRAGMA temp_store=MEMORY"))
+        # busy_timeout：多入口/多进程（用户误起两个实例、崩溃残留连接）争用同一库时，
+        # aiosqlite 默认只等 5 秒就抛 "database is locked"，而全仓没有 OperationalError
+        # 捕获 → 直接 500。放宽到 30 秒，让正常写入排队完成而不是失败。
+        await self._conn.execute(text("PRAGMA busy_timeout=30000"))
         await self._migrate()
         self._secure_files()
 
@@ -101,8 +110,37 @@ class Store:
             """
         ))
         await c.execute(text("CREATE INDEX IF NOT EXISTS idx_mem_sid ON memory(session_id, kind)"))
+        # 归档水位：记录该会话「已归档到哪条消息 id」。没有它就无从判断哪些消息
+        # 已进过摘要，于是每轮都把同一批最旧消息重新摘要一遍（白烧 token，
+        # 而且多份近似重复的归档会顶掉真正有用的记忆）。
+        await self._ensure_column(c, "sessions", "archived_upto", "INTEGER NOT NULL DEFAULT 0")
         # messages 按 session_id 高频点查/排序/删除；缺索引时每次 list/get/delete 全表扫描
         await c.execute(text("CREATE INDEX IF NOT EXISTS idx_msg_sid ON messages(session_id, id)"))
+        # 任务清单（todo_write 按会话整表覆盖；position 保序）
+        await c.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS todos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                updated_at REAL NOT NULL
+            )
+            """
+        ))
+        await c.execute(text("CREATE INDEX IF NOT EXISTS idx_todo_sid ON todos(session_id, position)"))
+        # 知识库（用户策展资料；只经 kb_* 工具显式检索，不自动注入上下文）
+        await c.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        ))
         await c.commit()
         await self._init_fts()
 
@@ -125,11 +163,34 @@ class Store:
                 )
                 """
             ))
+            # 知识库全文索引：与 memories_fts 同一分词器（trigram，中文子串可命中）
+            await self._conn.execute(text(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+                    content,
+                    title UNINDEXED,
+                    tokenize='trigram'
+                )
+                """
+            ))
             await self._conn.commit()
             self._fts = True
             await self._backfill_fts()
         except Exception:  # noqa: BLE001 —— FTS 不可用不影响主流程
             self._fts = False
+
+    async def _ensure_column(self, conn: AsyncConnection, table: str, column: str, ddl: str) -> None:
+        """幂等补列（老库升级用）：SQLite 没有 ADD COLUMN IF NOT EXISTS，先查表结构。"""
+        try:
+            rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
+            existing = {str(dict(r._mapping).get("name", "")) for r in rows}
+            if column not in existing:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                await conn.commit()
+        # aqg: top-level boundary —— 补列失败不阻塞启动（旧库仍可用，仅归档水位退化为 0）
+        except Exception as e:  # noqa: BLE001
+            # 静默 pass 会把「老库缺列」藏成后续导出/归档的 500，必须留痕
+            logger.warning("补列 %s.%s 失败，相关能力退化为默认值: %s", table, column, e)
 
     async def _backfill_fts(self) -> None:
         """把 memory 表里已存在、但尚未进 FTS 索引的摘要补进去（幂等 + 限速）。
@@ -138,7 +199,11 @@ class Store:
         """
         try:
             assert self._conn is not None
-            BATCH = 50
+            # 批量大小来自 settings.memory.fts_page_size（小屏/慢存储可调小减少卡顿）
+            try:
+                BATCH = max(1, min(1000, int(self.fts_page_size)))
+            except (TypeError, ValueError):
+                BATCH = 50
             while True:
                 result = await self._conn.execute(text(
                     f"""
@@ -213,23 +278,28 @@ class Store:
     async def delete_session(self, sid: str) -> bool:
         assert self._conn is not None
         async with self._write_lock:
-            await self._conn.execute(text("DELETE FROM messages WHERE session_id=:s"), {"s": sid})
-            await self._conn.execute(text("DELETE FROM memory WHERE session_id=:s"), {"s": sid})
-            if self._fts:
-                await self._conn.execute(text("DELETE FROM memories_fts WHERE session_id=:s"), {"s": sid})
-            cur = await self._conn.execute(text("DELETE FROM sessions WHERE id=:s"), {"s": sid})
-            await self._conn.commit()
+            # 失败必须回滚：这批 DELETE 共用一条连接，若中途抛错（锁冲突/IO 错误）
+            # 而直接退出，前几条未提交的 DELETE 会悬在连接上，被**下一次任意 commit**
+            # 连带提交 —— 用户看到删除失败，但消息/记忆已被悄悄清空（跨会话数据损坏）。
+            try:
+                await self._conn.execute(text("DELETE FROM messages WHERE session_id=:s"), {"s": sid})
+                await self._conn.execute(text("DELETE FROM memory WHERE session_id=:s"), {"s": sid})
+                await self._conn.execute(text("DELETE FROM todos WHERE session_id=:s"), {"s": sid})
+                if self._fts:
+                    await self._conn.execute(text("DELETE FROM memories_fts WHERE session_id=:s"), {"s": sid})
+                cur = await self._conn.execute(text("DELETE FROM sessions WHERE id=:s"), {"s": sid})
+                await self._conn.commit()
+            # aqg: top-level boundary —— 事务边界：回滚后原样抛出，不吞异常、不降级。
+            # 取消（CancelledError）时 await rollback 会立即再次传播取消，
+            # 用 best-effort 包一层，至少把回滚的发起动作做完。
+            except BaseException:
+                # aqg: top-level boundary —— 回滚本身失败（连接已坏）只记录不压制原异常
+                try:
+                    await self._conn.rollback()
+                except BaseException:
+                    pass
+                raise
         return cur.rowcount > 0
-
-    async def clear_all(self) -> None:
-        assert self._conn is not None
-        async with self._write_lock:
-            await self._conn.execute(text("DELETE FROM messages"))
-            await self._conn.execute(text("DELETE FROM sessions"))
-            await self._conn.execute(text("DELETE FROM memory"))
-            if self._fts:
-                await self._conn.execute(text("DELETE FROM memories_fts"))
-            await self._conn.commit()
 
     async def cleanup_expired(self, retention_days: int = 0) -> int:
         """清理超过 retention_days 的旧 memory 与 messages。retention_days<=0 则跳过。"""
@@ -247,17 +317,6 @@ class Store:
             await self._conn.commit()
         return r1 + r2
 
-    async def count_memory(self, session_id: str | None = None) -> int:
-        """统计记忆条数（用于决定是否触发摘要分页）。"""
-        assert self._conn is not None
-        if session_id:
-            r = (await self._conn.execute(
-                text("SELECT COUNT(*) FROM memory WHERE session_id=:s"), {"s": session_id}
-            )).scalar()
-        else:
-            r = (await self._conn.execute(text("SELECT COUNT(*) FROM memory"))).scalar()
-        return int(r or 0)
-
     async def auto_summarize_if_needed(self, sid: str, cfg: dict, llm_client=None) -> str | None:
         """当会话消息数超过阈值时，自动把早期消息压缩为摘要写回 memory。
 
@@ -271,12 +330,27 @@ class Store:
             return None
         # 取当前会话消息数（纯读，不加锁）
         assert self._conn is not None
-        msg_count = (await self._conn.execute(
+        # 注意括号：`await conn.execute(...).scalar()` 会先对 coroutine 取属性，
+        # 永远抛 AttributeError（摘要因此从未生效），必须先 await execute 再取 scalar。
+        count_row = await self._conn.execute(
             text("SELECT COUNT(*) FROM messages WHERE session_id=:s AND role IN ('user','assistant')"),
             {"s": sid},
-        ).scalar()) or 0
+        )
+        msg_count = count_row.scalar() or 0
         if msg_count > every_n * 2:
-            old_msgs = await self.get_messages(sid, limit=every_n)
+            # 摘要对象是「早期未归档的历史」，但 get_messages 的语义已反转为取**最近** N
+            # 条（修失忆时改的），直接用它会把正在进行的对话摘要掉。
+            # 这里显式按水位取最旧的 every_n 条：已归档的（id <= archived_upto）跳过，
+            # 与 archive_messages 共享同一水位，不重复摘要同一段。
+            old_rows = (await self._conn.execute(text(
+                "SELECT role, content FROM messages WHERE session_id=:s "
+                "AND role IN ('user','assistant') AND id > :w "
+                "ORDER BY id ASC LIMIT :l"
+            ), {"s": sid, "w": await self.get_archived_upto(sid), "l": every_n})).fetchall()
+            old_msgs = [
+                {"role": dict(r._mapping)["role"], "content": dict(r._mapping)["content"]}
+                for r in old_rows
+            ]
             if not old_msgs:
                 return None
             summary = await llm_client.summarize(
@@ -301,17 +375,64 @@ class Store:
         return {"id": cur.lastrowid, "role": role, "content": content, "meta": meta or {}}
 
     async def get_messages(self, sid: str, limit: int = 200) -> list[dict]:
+        """取该会话最近 limit 条消息（时间正序返回）。
+
+        必须按 id **倒序**取再翻转：旧的 `ORDER BY id LIMIT :l` 取的是**最旧** N 条，
+        会话超过 limit 后最新的消息根本进不了上下文 —— 模型表现为「突然失忆、答非所问」，
+        而 `_trim` 只会在已截断的集合里再裁，无法补救。
+        """
         assert self._conn is not None
+        # 带上 id：归档水位要靠它判断「这条是否已归档过」
         rows = (await self._conn.execute(text(
-            "SELECT role, content, meta, created_at FROM messages WHERE session_id=:s ORDER BY id LIMIT :l"
+            "SELECT id, role, content, meta, created_at FROM messages WHERE session_id=:s "
+            "ORDER BY id DESC LIMIT :l"
         ), {"s": sid, "l": limit})).fetchall()
+        rows = list(reversed(rows))
         out = []
         for r in rows:
             m = dict(r._mapping)
             try:
                 m["meta"] = json.loads(m["meta"] or "{}")
-            except Exception:
+            # aqg: top-level boundary —— meta 是 JSON 文本，坏值降级为 {}，不影响消息本体
+            except Exception:  # noqa: BLE001
                 m["meta"] = {}
+            out.append(m)
+        # 归位 tool 响应：中断恢复的占位消息落在会话末尾，需在组装时纠正顺序
+        return self._reorder_tool_pairs(out)
+
+    @staticmethod
+    def _reorder_tool_pairs(items: list[dict]) -> list[dict]:
+        """把 role="tool" 的响应紧贴到它对应的 assistant(tool_calls) 之后。
+
+        为什么需要：中断恢复补的占位响应**插入在会话末尾**（写入时无从知道该插哪里），
+        而 OpenAI 兼容 API 要求 tool 消息必须紧跟发起它的那条 assistant 消息 ——
+        否则直接 400「tool_calls must be followed by tool messages」，会话从此卡死。
+        这里在组装上下文时按 tool_call_id 归位，让任何写入顺序都得到合法历史。
+        """
+        by_id: dict[str, dict] = {}
+        for m in items:
+            if m.get("role") == "tool":
+                cid = str((m.get("meta") or {}).get("tool_call_id") or "")
+                if cid and cid not in by_id:
+                    by_id[cid] = m
+        if not by_id:
+            return items
+        placed: set[str] = set()
+        out: list[dict] = []
+        for m in items:
+            role = m.get("role")
+            if role == "assistant":
+                out.append(m)
+                for c in (m.get("meta") or {}).get("tool_calls") or []:
+                    cid = str(c.get("id") or "")
+                    if cid in by_id and cid not in placed:
+                        out.append(by_id[cid])
+                        placed.add(cid)
+                continue
+            if role == "tool":
+                cid = str((m.get("meta") or {}).get("tool_call_id") or "")
+                if cid in placed:
+                    continue  # 已归位，跳过原位置
             out.append(m)
         return out
 
@@ -388,26 +509,203 @@ class Store:
 
         old_msgs 是超过近期窗口的历史消息（按时间正序）。优先用 LLM 压缩；
         LLM 不可用时降级为「最后一条用户消息摘要占位」，保证分页后仍有记忆。
+
+        水位控制：只归档「id 大于 archived_upto」的消息，并在成功后推进水位。
+        否则每轮都把同一批最旧消息重新摘要（一次多烧一次 LLM 调用，
+        且 5 条近似重复的归档会把真正有用的记忆挤出注入窗口）。
         """
         if not old_msgs:
             return None
+        upto = await self.get_archived_upto(sid)
+        pending = [m for m in old_msgs if int(m.get("id") or 0) > upto]
+        if not pending:
+            return None  # 这批已经归档过了，不重复调用 LLM
         summary = None
         if llm_client is not None:
             try:
                 summary = await llm_client.summarize(
-                    old_msgs, max_chars=int(cfg.get("summary_max_chars", 400) or 400)
+                    pending, max_chars=int(cfg.get("summary_max_chars", 400) or 400)
                 )
+            # aqg: top-level boundary —— LLM 摘要失败降级为「取最后一条用户消息」占位，
+            # 不推进水位（下轮重试），绝不丢历史
             except Exception:  # noqa: BLE001
                 summary = None
         if not summary:
-            for m in reversed(old_msgs):
+            for m in reversed(pending):
                 if m.get("role") == "user" and m.get("content"):
                     summary = "（早期对话摘要）" + str(m["content"])[:200]
                     break
         if summary:
             await self.append_archive(sid, summary)
+            # 只有在摘要真正落库后才推进水位；失败则下轮重试，不丢历史
+            await self.set_archived_upto(sid, max(int(m.get("id") or 0) for m in pending))
         return summary
 
+    async def get_archived_upto(self, sid: str) -> int:
+        """该会话已归档到的消息 id（0 = 尚未归档）。"""
+        assert self._conn is not None
+        try:
+            row = (await self._conn.execute(
+                text("SELECT archived_upto FROM sessions WHERE id=:s"), {"s": sid}
+            )).fetchone()
+        # aqg: top-level boundary —— 老库补列失败（缺列）时降级为 0，不能让调用方 500
+        except Exception as e:  # noqa: BLE001
+            logger.warning("读取归档水位失败（缺列?）: %s", e)
+            return 0
+        if not row:
+            return 0
+        try:
+            return int(dict(row._mapping).get("archived_upto") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    async def set_archived_upto(self, sid: str, upto: int) -> None:
+        assert self._conn is not None
+        async with self._write_lock:
+            await self._conn.execute(
+                text("UPDATE sessions SET archived_upto=:u WHERE id=:s AND archived_upto<:u"),
+                {"u": int(upto), "s": sid},
+            )
+            await self._conn.commit()
+
+
+    # ---------- 中断恢复：孤立 tool_calls 回填 ----------
+    async def recover_orphan_tool_calls(self, sid: str) -> int:
+        """为「有 tool_calls 但缺 tool 响应」的历史补占位响应，返回补的条数。
+
+        成因：assistant(tool_calls) 消息在工具执行前就已落库，若进程在工具结果落库
+        前被杀/被取消，历史里就留下没有响应的工具调用。OpenAI 兼容 API 对这种历史
+        直接 400（tool_calls must be followed by tool messages），会话从此无法继续。
+        这里按序扫描会话，对每个未被响应的 tool_call_id 补一条失败占位
+        （meta.recovered=True），使历史自洽——模型看到「未执行完成」会自行决定重试。
+        """
+        assert self._conn is not None
+        rows = (await self._conn.execute(text(
+            "SELECT id, role, meta FROM messages WHERE session_id=:s ORDER BY id"
+        ), {"s": sid})).fetchall()
+        pending: list[str] = []
+        for r in rows:
+            m = dict(r._mapping)
+            try:
+                meta = json.loads(m["meta"] or "{}")
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception:  # noqa: BLE001
+                meta = {}
+            if m["role"] == "assistant" and meta.get("tool_calls"):
+                for c in meta["tool_calls"]:
+                    cid = str(c.get("id") or "")
+                    if cid:
+                        pending.append(cid)
+            elif m["role"] == "tool" and meta.get("tool_call_id"):
+                cid = str(meta["tool_call_id"])
+                if cid in pending:
+                    pending.remove(cid)
+        if not pending:
+            return 0
+        content = json.dumps(
+            {"error": "该工具调用在服务中断时未执行完成，结果未知；如需请重新发起。"},
+            ensure_ascii=False,
+        )
+        async with self._write_lock:
+            for cid in pending:
+                await self._conn.execute(text(
+                    "INSERT INTO messages(session_id, role, content, meta, created_at) "
+                    "VALUES (:s,'tool',:c,:m,:t)"
+                ), {
+                    "s": sid, "c": content, "t": _now(),
+                    "m": json.dumps({"tool_call_id": cid, "name": "", "status": "failed",
+                                     "recovered": True}, ensure_ascii=False),
+                })
+            await self._conn.commit()
+        return len(pending)
+
+    # ---------- 任务清单（todo_write） ----------
+    async def set_todos(self, sid: str, todos: list[dict]) -> list[dict]:
+        """整表覆盖某会话的任务清单（先删后插，position 保序）。"""
+        assert self._conn is not None
+        async with self._write_lock:
+            await self._conn.execute(text("DELETE FROM todos WHERE session_id=:s"), {"s": sid})
+            for i, t in enumerate(todos):
+                await self._conn.execute(text(
+                    "INSERT INTO todos(session_id, position, content, status, updated_at) "
+                    "VALUES (:s,:p,:c,:st,:u)"
+                ), {"s": sid, "p": i, "c": str(t.get("content", ""))[:200],
+                    "st": str(t.get("status", "pending")), "u": _now()})
+            await self._conn.commit()
+        return todos
+
+    async def get_todos(self, sid: str) -> list[dict]:
+        assert self._conn is not None
+        rows = (await self._conn.execute(text(
+            "SELECT content, status FROM todos WHERE session_id=:s ORDER BY position"
+        ), {"s": sid})).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    async def clear_todos(self, sid: str) -> None:
+        assert self._conn is not None
+        async with self._write_lock:
+            await self._conn.execute(text("DELETE FROM todos WHERE session_id=:s"), {"s": sid})
+            await self._conn.commit()
+
+    # ---------- 知识库（显式检索，不自动注入） ----------
+    async def kb_add(self, title: str, content: str) -> int:
+        assert self._conn is not None
+        async with self._write_lock:
+            cur = await self._conn.execute(text(
+                "INSERT INTO knowledge(title, content, created_at) VALUES (:t,:c,:n)"
+            ), {"t": str(title or "")[:120], "c": str(content or ""), "n": _now()})
+            if self._fts:
+                await self._conn.execute(text(
+                    "INSERT INTO knowledge_fts(rowid, content, title) VALUES (:r,:c,:t)"
+                ), {"r": cur.lastrowid, "c": str(content or ""), "t": str(title or "")[:120]})
+            await self._conn.commit()
+        return int(cur.lastrowid or 0)
+
+    async def kb_search(self, query: str, limit: int = 5) -> list[dict]:
+        """关键词检索知识库：FTS5 MATCH 优先，未命中/不可用时回退 LIKE。"""
+        words = self._keywords(query)
+        if not words:
+            return []
+        rows: list = []
+        if self._fts:
+            try:
+                assert self._conn is not None
+                match = " OR ".join(self._fts_phrase(w) for w in words)
+                rows = (await self._conn.execute(text(
+                    "SELECT k.id, k.title, k.content, k.created_at FROM knowledge_fts f "
+                    "JOIN knowledge k ON k.id = f.rowid WHERE knowledge_fts MATCH :m LIMIT :l"
+                ), {"m": match, "l": max(1, int(limit))})).fetchall()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception:  # noqa: BLE001 —— FTS 异常回退 LIKE
+                rows = []
+        if not rows:
+            assert self._conn is not None
+            conds, args = [], {}
+            for i, w in enumerate(words):
+                conds.append(f"(content LIKE :w{i} OR title LIKE :w{i})")
+                args[f"w{i}"] = f"%{w}%"
+            args["l"] = max(1, int(limit))
+            rows = (await self._conn.execute(text(
+                "SELECT id, title, content, created_at FROM knowledge WHERE "
+                + " OR ".join(conds) + " ORDER BY id DESC LIMIT :l"
+            ), args)).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    async def kb_list(self) -> list[dict]:
+        assert self._conn is not None
+        rows = (await self._conn.execute(text(
+            "SELECT id, title, content, created_at FROM knowledge ORDER BY id DESC"
+        ))).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    async def kb_delete(self, kid: int) -> bool:
+        assert self._conn is not None
+        async with self._write_lock:
+            if self._fts:
+                await self._conn.execute(text("DELETE FROM knowledge_fts WHERE rowid=:r"), {"r": int(kid)})
+            cur = await self._conn.execute(text("DELETE FROM knowledge WHERE id=:r"), {"r": int(kid)})
+            await self._conn.commit()
+        return cur.rowcount > 0
 
     # ---------- 相关历史记忆（P1：跨会话回忆） ----------
     @staticmethod
@@ -460,6 +758,7 @@ class Store:
                 sql += " ORDER BY created_at DESC LIMIT :l"
                 args["l"] = limit
                 rows = (await self._conn.execute(text(sql), args)).fetchall()
+            # aqg: top-level boundary —— FTS 查询异常回退 LIKE，检索能力降级但不失败
             except Exception:  # noqa: BLE001 —— FTS 查询异常则回退 LIKE
                 rows = []
         if not rows:

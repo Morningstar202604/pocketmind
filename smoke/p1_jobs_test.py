@@ -19,6 +19,10 @@ def check(name, cond, detail=""):
     print(("  ✅ " if cond else "  ❌ ") + name + (f" — {detail}" if detail and not cond else ""))
 
 print("== P1 定时任务验收 ==")
+# 0. 幂等：清掉上次运行留下的「持久化」哨兵任务（否则「初始无任务」必挂）
+for old in req("GET", "/api/jobs")["jobs"]:
+    if old["name"] == "持久化":
+        req("DELETE", f"/api/jobs/{old['id']}")
 # 1. 空列表
 r = req("GET", "/api/jobs")
 check("初始无任务", r["jobs"] == [], str(r))

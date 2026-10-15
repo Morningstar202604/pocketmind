@@ -1,5 +1,8 @@
 # PocketMind 修复与安卓化完成报告
 
+> **历史快照（2026-10-14 之前）**：本文记录的是当时代码的状态与结论，部分内容已被后续修复/新增取代；
+> **现状请以 [CHANGELOG.md](CHANGELOG.md) 与代码为准**。保留本文仅供追溯当时的判断依据。
+
 > 日期：2026-10-12
 > 范围：P0/P1/P2 代码修复 + 测试全绿 + 文档一致性 + 增强版安卓 APK 实际构建
 > 前置审查：见 `POCKETMIND_审查报告.md`
@@ -171,13 +174,15 @@ pm run build：通过（256.56KB JS + 22.52KB CSS）
 | 消息时间戳 | 消息列表没有时间信息，无法区分新旧 | 后端 get_messages 返回 created_at；前端消息模型与历史恢复保留时间，用户/助手消息旁显示 HH:MM |
 | Esc 停止生成 | 停止按钮 title 写「Esc」但实际无快捷键 | Composer 增加全局 keydown 监听，Esc 与停止按钮等效 |
 | 计划可忽略 | Plan 模式下计划卡片只能「批准/修改」，无法放弃 | PlanCard 增加「忽略计划」按钮（store 新增 ignorePlan），忽略后卡片显示已忽略，可继续发新指令 |
-| 任务时间完整显示 | 定时任务下次运行时间只显示 MM-DD HH:MM，无年份、依赖 ISO 格式 | 新增 ormatNextRun，显示本地化完整时间（含年份） |
+| 任务时间完整显示 | 定时任务下次运行时间只显示 MM-DD HH:MM，无年份、依赖 ISO 格式 | 新增 
+ormatNextRun，显示本地化完整时间（含年份） |
 | 记忆清理生效 | memory.retention_days 配置存在但从未执行 | lifespan 启动时调用 store.cleanup_expired(retention_days)，过期记忆/消息自动清理 |
 | LLM 连接测试 | 设置里填完 Key 只能保存后试聊才知道能不能用 | 新增 POST /api/llm/test 端点 + 设置面板「测试连接」按钮，即时返回成功/失败与模型名 |
 | 备份文案修正 | 设置页声称「凭文件恢复」但实际无导入功能（误导） | 文案改为「用于本地备份留存」 |
 | 会话搜索 | 会话多了只能手动翻找 | 会话抽屉新增搜索框，按标题实时过滤 |
 
 ### 验证结果
-- 前端：	sc 0 错误、vitest 31/31、ite build 通过
+- 前端：	sc 0 错误、vitest 31/31、
+ite build 通过
 - 后端：ruff/compileall 通过、11 个 smoke 套件全部退出码 0
 - 实测：/api/llm/test mock 模式返回 {ok:true}，配置后返回模型名；get_messages 返回 created_at

@@ -104,7 +104,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React frontend (Vite + TS); built `dist/` is served directly by agentd |
 | `termux/` | Phone side: `install.sh` one-click deps / `start.sh` launch / `boot.sh` boot autostart |
 | `config/` | Preset recipes `recipes.json` (job templates); LLM provider presets in `agentd/config.py` → `PRESETS` |
-| `tests/` | Regression suites (queueing / scheduled jobs / security hardening) |
+| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit; 15 suites, all in CI) |
 
 ---
 
@@ -168,7 +168,7 @@ Drive the agent on your phone from a computer or any other device — send messa
 
 ## MCP Server — Remote-Control Your Phone
 
-Expose all on-phone tools (battery / SMS / location / files / shell… 31 tools) as standard MCP tools, so desktop **Claude Desktop / Cline / Codex** can call them over stdio — desktop LLMs operate this phone remotely.
+Expose all on-phone tools (battery / SMS / location / files / shell… 38 tools) as standard MCP tools, so desktop **Claude Desktop / Cline / Codex** can call them over stdio — desktop LLMs operate this phone remotely.
 
 **Start (standalone, no FastAPI)**:
 ```bash

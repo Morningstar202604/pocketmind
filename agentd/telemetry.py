@@ -12,14 +12,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from functools import wraps
-
-from fastapi import FastAPI
 
 _TRACER = None
 
 
-def setup_telemetry(app: FastAPI, service_name: str, version: str) -> None:
+def setup_telemetry(app, service_name: str, version: str) -> None:
     import logging as _logging
 
     from opentelemetry import trace
@@ -71,20 +68,3 @@ def scheduler_span(job_id: str):
     with tracer.start_as_current_span("scheduler.job") as span:
         span.set_attribute("scheduler.job_id", job_id)
         yield span
-
-
-def traced_tool(func):
-    """工具执行 span 装饰器：耗时 + 错误自动记录。"""
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        tool_name = func.__name__
-        tracer = get_tracer()
-        with tracer.start_as_current_span(f"tool.{tool_name}") as span:
-            span.set_attribute("tool.name", tool_name)
-            try:
-                return await func(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001
-                span.set_attribute("error", True)
-                span.set_attribute("error.message", str(exc)[:200])
-                raise
-    return wrapper

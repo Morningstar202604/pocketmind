@@ -19,7 +19,7 @@ html[data-theme="dark"] {
   --border: #262b36;
   --text: #e4e7ec;
   --text-2: #9aa3b2;
-  --text-3: #6b7280;
+  --text-3: #8a94a4;
   --brand: #10b981;
   --brand-2: #06b6d4;
   --brand-soft: rgba(16, 185, 129, 0.12);
@@ -72,7 +72,7 @@ html[data-theme="light"] {
   --border: #e0e5ec;
   --text: #1a1f2a;
   --text-2: #5a6472;
-  --text-3: #98a1ae;
+  --text-3: #6b7280;
   --brand: #0d9d6e;
   --brand-2: #0a94ab;
   --brand-soft: rgba(13, 157, 110, 0.1);
@@ -146,7 +146,7 @@ body {
 }
 .brand p {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
@@ -159,7 +159,7 @@ body {
   flex: none;
 }
 .pill {
-  font-size: 11px;
+  font-size: 12px;
   padding: 3px 10px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
@@ -176,6 +176,24 @@ body {
   border-color: color-mix(in srgb, var(--warn) 35%, transparent);
   background: color-mix(in srgb, var(--warn) 8%, transparent);
 }
+.pill.err {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+}
+/* 状态灯：一个小圆点承担「能不能用」，文字只做补充 */
+.pill-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--text-3);
+}
+.pill-dot.ok { background: var(--ok); }
+.pill-dot.warn { background: var(--warn); }
+.pill-dot.err { background: var(--err); }
 .icon-btn {
   width: 36px;
   height: 36px;
@@ -198,7 +216,17 @@ body {
   transform: scale(0.96);
 }
 
-/* ===== 聊天区 ===== */
+/* ===== 聊天区 =====
+   .chat-wrap 是定位上下文：「最新」按钮（.to-bottom，absolute）锚在它上面，
+   随聊天区一起被输入框/审批浮层顶在正确位置，而不是漂到 body 坐标系压住输入框。
+   滚动本身仍在 .chat（overflow-y:auto）上。 */
+.chat-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .chat {
   flex: 1;
   min-height: 0;
@@ -221,7 +249,7 @@ body {
 .msg-action {
   position: absolute;
   top: -10px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-3);
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -473,7 +501,8 @@ body {
   background: var(--text-3);
 }
 .tool-dot.running {
-  background: var(--warn);
+  /* 语义分工：青 = 正在实时干活；琥珀 = 待你处理（审批）；绿 = 完成；红 = 失败/拒绝 */
+  background: var(--brand-2);
   animation: blink 1s ease-in-out infinite;
 }
 .tool-dot.waiting {
@@ -496,7 +525,7 @@ body {
   white-space: nowrap;
 }
 .tool-status {
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 9px;
   border-radius: var(--radius-pill);
   flex: none;
@@ -504,8 +533,9 @@ body {
   background: var(--code-bg);
 }
 .tool-status.running {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  /* 与 running 圆点同色系：进行中一律青 */
+  color: var(--brand-2);
+  background: color-mix(in srgb, var(--brand-2) 12%, transparent);
 }
 .tool-status.waiting {
   color: var(--warn);
@@ -575,7 +605,7 @@ body {
 }
 .approval-note {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 .approval-countdown {
@@ -583,7 +613,7 @@ body {
   font-weight: 600;
 }
 .msg-time {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-3);
   flex-shrink: 0;
 }
@@ -592,7 +622,7 @@ body {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--text-1);
+  color: var(--text);
   cursor: pointer;
   margin-bottom: 8px;
 }
@@ -687,7 +717,7 @@ body {
   min-height: 16px;
 }
 .composer-provider {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--brand);
   background: var(--brand-soft);
   padding: 1px 8px;
@@ -695,7 +725,7 @@ body {
   line-height: 1.4;
 }
 .composer-count {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -783,7 +813,7 @@ body {
   max-width: 760px;
   margin: 6px auto 0;
   text-align: center;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -851,10 +881,10 @@ body {
   transition: border-color 0.15s, color 0.15s, transform 0.1s, box-shadow 0.15s;
 }
 .task:hover {
+  /* 只改边框与文字色——不做「每个卡片都上浮+投影」的默认动画；
+     移动端主要反馈交给 :active（按下即答） */
   border-color: color-mix(in srgb, var(--brand) 45%, var(--border));
   color: var(--text);
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--brand) 12%, transparent);
-  transform: translateY(-1px);
 }
 .task:active {
   transform: scale(0.98);
@@ -997,7 +1027,7 @@ body {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-2);
-  color: var(--text-1);
+  color: var(--text);
   font-size: 13px;
   outline: none;
 }
@@ -1044,7 +1074,7 @@ body {
   white-space: nowrap;
 }
 .s-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 .s-del {
@@ -1124,7 +1154,7 @@ body {
 }
 .hint {
   margin: 5px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 .key-row {
@@ -1211,7 +1241,7 @@ body {
   color: var(--brand-2);
 }
 .tool-risk {
-  font-size: 10px;
+  font-size: 12px;
   padding: 1px 8px;
   border-radius: var(--radius-pill);
   color: var(--text-3);
@@ -1290,7 +1320,7 @@ body {
   cursor: default;
 }
 .undo-note {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -1382,7 +1412,7 @@ body {
   color: var(--brand);
 }
 .plan-tag {
-  font-size: 10px;
+  font-size: 12px;
   padding: 2px 10px;
   border-radius: var(--radius-pill);
   color: var(--warn);
@@ -1400,7 +1430,7 @@ body {
 }
 .plan-tools-title {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
 }
 .plan-tools ul {
@@ -1449,4 +1479,524 @@ body {
 .recipe-desc p {
   white-space: normal;
   overflow: visible;
+}
+
+/* ===== 任务清单面板（todo_write；固定在输入框上方） ===== */
+.todo-panel {
+  margin: 0 16px calc(8px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.todo-panel.all-done {
+  opacity: 0.72;
+}
+.todo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.todo-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.todo-count {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.todo-action {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.todo-action:hover {
+  color: var(--text);
+}
+.todo-track {
+  flex: 1;
+  min-width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-3) 25%, transparent);
+  overflow: hidden;
+}
+.todo-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--brand);
+  transition: width 0.25s ease;
+}
+.todo-panel.all-done .todo-fill {
+  background: var(--ok);
+}
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.todo-item {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+.todo-item.completed .todo-text {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+.todo-item.in_progress .todo-text {
+  color: var(--text);
+  font-weight: 600;
+}
+.todo-mark {
+  width: 14px;
+  flex: none;
+  text-align: center;
+  color: var(--text-3);
+}
+.todo-item.completed .todo-mark {
+  color: var(--ok);
+}
+.todo-item.in_progress .todo-mark {
+  /* 与工具卡一致：进行中 = 青（一色一义），不用主色绿 */
+  color: var(--brand-2);
+}
+
+/* ===== 审批按钮第二行（全局允许 / 始终拒绝） ===== */
+.approval-btns.secondary {
+  margin-top: 6px;
+}
+/* 审批键是「要不要放行」的关键决策点：桌面也保证最低 36px 高度（触屏 44px 见移动块） */
+.approval .btn {
+  min-height: 36px;
+}
+
+/* ===== 权限名单（设置面板内） ===== */
+.rules-list {
+  list-style: none;
+  margin: 4px 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rules-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rules-list code {
+  font-size: 12px;
+}
+.rules-list .btn.mini {
+  margin-left: auto;
+}
+
+/* ===== 行内按钮组（记忆档案保存等） ===== */
+.row-btns {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* ===== 知识库与技能列表（设置面板内；只读浏览） ===== */
+.kb-list {
+  list-style: none;
+  margin: 4px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.kb-list li:last-child { border-bottom: none; }
+.kb-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.kb-size {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-list .btn.mini { margin-left: auto; }
+
+/* ===== 工具结果：可复制（读数一类的信息用户常要拿出去用） ===== */
+.tool-result-wrap { position: relative; }
+.tool-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+  opacity: 0.9;
+}
+.tool-copy:hover { color: var(--text); }
+
+/* ===== 空态补充文案（品牌语，不用通用口号） ===== */
+.empty-hint {
+  margin: 18px 0 10px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.empty-foot {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--text-3);
+  max-width: 30ch;
+  line-height: 1.6;
+}
+
+/* ===== 降低动效偏好：全站只保留必需反馈 ===== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ===== 触摸设备与手机适配 =====
+   判定用指针/悬停能力（hover/pointer），而不是只看宽度：触屏平板上同样没有 hover。
+   三类问题都在这里修：
+   1) 靠 hover 才出现的操作在触屏上等于不存在（如消息的「复制」按钮 opacity:0）；
+   2) 触摸目标过矮（复制/清空/收起等只有 20-28px，Android 建议 ≥48dp）；
+   3) 手机上缺少触摸反馈约定（点击蓝闪、双击缩放延迟、下拉刷新打断对话）。 */
+
+@media (hover: none), (pointer: coarse) {
+  /* 1) 触摸目标高度：主按钮 44，次要 36 起 */
+  /* 触摸目标统一 44px：手掌点按的可靠下限。
+     此前这里是 36/40/42px 混用（小按钮比主按钮矮、图标键 42px），
+     实测顶栏三个图标键就是 42px —— 差 2px 也会明显提高误触率，故一律对齐 44px。
+     视觉尺寸仍靠 padding/字号控制，不会显得笨重。 */
+  .btn { min-height: 44px; }
+  .btn.sm,
+  .btn.mini { min-height: 44px; }
+  .todo-action { min-height: 44px; padding: 6px 10px; }
+  .tool-copy { min-height: 44px; padding: 6px 10px; }
+  .msg-action { min-height: 44px; padding: 6px 12px; opacity: 1; transform: none; }
+  .s-del,
+  .s-rename { width: 44px; height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .approval .btn { min-height: 44px; }
+  .thinking-head { min-height: 44px; }
+
+  /* 2) 触屏无 hover：不能靠悬停揭示任何可点元素 */
+  .row .msg-action { opacity: 1; transform: none; }
+
+  /* 3) 触摸反馈约定：去掉 300ms 双击缩放延迟与点击蓝闪 */
+  button,
+  .btn,
+  .task,
+  .session,
+  .icon-btn,
+  .todo-action,
+  .tool-copy { touch-action: manipulation; }
+  * { -webkit-tap-highlight-color: transparent; }
+}
+
+/* 手机竖屏：更紧凑的边距 + 16px 输入字号（避免 iOS/部分 WebView 聚焦时自动放大页面） */
+@media (max-width: 480px) {
+  .msgs { padding: 12px 10px 6px; }
+  .composer { padding-left: 10px; padding-right: 10px; }
+  .composer textarea { font-size: 16px; }
+  .bubble { max-width: 90%; }
+  .todo-panel { margin-left: 10px; margin-right: 10px; }
+  .sheet { padding: 16px 14px calc(16px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* 下拉刷新/橡皮筋会打断长对话且可能误触重载：应用内禁用纵向过滚动链 */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
+/* 横屏或键盘弹起导致的矮视口：面板不抢占对话区 */
+@media (max-height: 480px) {
+  .todo-panel { max-height: 24vh; }
+  .sheet { max-height: 92dvh; }
+}
+
+/* ===== 会话列表：最后活跃时间（弱化于消息数，避免抢视线） ===== */
+.s-time {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 工具结果：逐行「键：值」时的行距（比 JSON 密排更易扫读） ===== */
+.tool-result {
+  line-height: 1.55;
+}
+
+
+/* ===== 可折叠分组：折叠不是藏起来，而是先给概览 ===== */
+.group.collapsible {
+  padding: 0;
+  overflow: hidden;
+}
+.group-head-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.group-head-btn:active {
+  background: var(--panel);
+}
+.group.collapsible .group-title {
+  margin: 0;
+}
+.group-grow {
+  flex: 1 1 auto;
+}
+.group-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--brand);
+  text-align: right;
+}
+.group-action {
+  flex: none;
+  display: inline-flex;
+}
+.group-chevron {
+  flex: none;
+  display: inline-flex;
+  color: var(--text-3);
+  transition: transform 0.18s ease;
+}
+.group.collapsible.open .group-chevron {
+  transform: rotate(180deg);
+}
+.group-body {
+  padding: 0 14px 14px;
+}
+.group-body > .field:last-child {
+  margin-bottom: 0;
+}
+
+/* ===== 字体健壮性 =====
+   安卓/iOS 在窄布局、旋屏、多栏回退时会自动放大正文（text autosizing），
+   同一段文字在不同方向下字号不一致——这就是"字体偶尔出问题"的来源。
+   关掉自动放大，并显式给出中日字形优先的字体栈，避免中文字被日文字形接管。 */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC",
+    "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+}
+
+/* ===== 小字号下限：任何宽度都不低于 12px =====
+   低于 12px 的辅助文字在手机上会被系统放大或直接读不清；
+   与其分宽度维护两套，不如全局只留一个下限。 */
+@media (max-width: 900px) {
+  .brand p,
+  .pill,
+  .msg-action,
+  .tool-status,
+  .approval-note,
+  .msg-time,
+  .composer-provider,
+  .composer-count,
+  .composer-hint,
+  .s-count,
+  .hint,
+  .undo-note,
+  .plan-tag,
+  .plan-tools-title,
+  .tool-copy,
+  .tool-risk,
+  .group-summary {
+    font-size: 12px;
+  }
+}
+
+/* ===== 工具描述：原来 nowrap+ellipsis 会把长句切掉 =====
+   这些摘要只有几十个字，且整个分组默认是收起的，展开时多两行换不来任何代价；
+   直接允许完整换行，保证任何宽度下都不再截断。 */
+.tool-item p {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.45;
+}
+.tools-list .tool-item {
+  align-items: flex-start;
+}
+
+
+/* ===== 触摸目标补足到 44px =====
+   实测：发送键 38×38、消息「复制」36px 高、工具卡头 38px 高。
+   手指点按的可靠下限是 44px——小于这个值误触率明显上升。
+   只在触屏设备上放大，桌面保持紧凑（鼠标精度高）。 */
+@media (hover: none), (pointer: coarse) {
+  .send {
+    width: 44px;
+    height: 44px;
+  }
+  .msg-action {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+  }
+  .tool-head {
+    min-height: 44px;
+  }
+  .tool-copy {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* 工具执行耗时：等 30 秒到底是正常还是卡住，用户需要一个参照 */
+.tool-ms {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 「回到最新」浮动按钮 =====
+   流式输出时用户往上翻看历史不再被拽回底部（见 App.tsx 的贴底判断），
+   于是需要一个显式入口回到最新消息。 */
+.to-bottom {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 12px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  touch-action: manipulation;
+}
+.to-bottom:active {
+  filter: brightness(1.15);
+}
+@media (hover: none), (pointer: coarse) {
+  .to-bottom {
+    min-height: 44px;
+    padding: 0 16px;
+  }
+}
+
+/* ===== 后台审批浮层（定时任务等无 SSE 通路的审批）=====
+   普通对话的审批卡在消息流里；后台任务的只能靠轮询补显示，
+   固定贴在输入区上方，保证用户一定能看到并处理。 */
+.bg-approvals {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 8px;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+}
+.bg-approval {
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--panel-2);
+  padding: 10px 12px;
+}
+.bg-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.bg-approval-risk {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--warn);
+}
+.bg-approval-body {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.bg-approval-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.bg-approval-fail {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--err, #e5534b);
+}
+.bg-approval-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+@media (hover: none), (pointer: coarse) {
+  .bg-approval .btn {
+    min-height: 44px;
+  }
 }

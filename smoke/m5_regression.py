@@ -123,9 +123,16 @@ else:
     names = [x.get("title", "") for x in ss if isinstance(x, dict)]
     check("会话自动命名", any("电池" in n or "电量" in n for n in names), str(names)[:80])
 
-# 6. 工具清单（31 项：30 内建 + tts_offline 离线语音）
+# 6. 工具清单（38 项：31 内建/手机/文件/语音 + agent 自有 7 项：
+#    todo_write / todo_clear / kb_add / kb_search / kb_list / read_skill / remember_fact）
 tools = req("GET", "/api/tools")
-check("工具清单 31 项", tools.get("count", 0) == 31, str(tools.get("count")))
+names = {t.get("name") for t in tools.get("tools", [])}
+required = {
+    "get_battery", "read_sms", "run_shell", "write_file",   # 既有核心工具未丢失
+    "todo_write", "kb_search", "read_skill", "remember_fact",  # 新增能力已注册
+}
+check("工具清单 38 项", tools.get("count", 0) == 38, str(tools.get("count")))
+check("工具清单含核心与新增能力", required <= names, str(sorted(required - names)))
 
 print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败" + (f" / {len(skipped)} 跳过" if skipped else ""))
 sys.exit(1 if failed else 0)

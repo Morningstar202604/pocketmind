@@ -24,6 +24,9 @@ export interface Session {
   id: string;
   title: string;
   message_count: number;
+  /** 后端已返回；用于会话列表显示"最后活跃时间" */
+  created_at?: number;
+  updated_at?: number;
 }
 
 export interface StoredMessage {
@@ -66,6 +69,26 @@ export interface AppSettings {
     enabled?: boolean;
     timeout?: number;
     servers?: Array<{ name: string; command: string; args: string[]; auto_connect?: boolean }>;
+  };
+  // 运行参数（此前只能在配置文件里改，现在设置面板可直接调）
+  agent?: {
+    max_tool_retries: number;
+    max_tool_chain_depth: number;
+  };
+  // 上下文预算与压缩
+  context?: {
+    budget_tokens: number;
+    auto_compress: boolean;
+    compress_threshold: number;
+  };
+  // 记忆与检索
+  memory?: {
+    auto_summarize: boolean;
+    summarize_every_n_turns: number;
+    summary_max_chars: number;
+    search_limit: number;
+    fts_page_size: number;
+    retention_days: number;
   };
   user_prefs?: string;
 }
@@ -111,6 +134,12 @@ export interface ToolInfo {
   group: string;
 }
 
+/** 任务清单条目（todo_write 工具维护，随 SSE todo 事件刷新）。 */
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
 export type ChatEvent =
   | { type: "session"; session_id: string }
   | { type: "text"; text: string }
@@ -126,10 +155,88 @@ export type ChatEvent =
       undoable?: boolean;
     }
   | { type: "queued"; message: string }
+  // 任务清单更新（todo_write）：整表覆盖
+  | { type: "todo"; todos: TodoItem[] }
   // Plan 模式：模型给出执行计划，等待用户批准（随后 done 的 stop_reason="plan" 表示本轮就此停住）
   | { type: "plan"; plan: string; tool_calls: Array<{ name: string; arguments: unknown }> }
   | { type: "done"; stop_reason: string }
   | { type: "error"; message: string };
+
+/** 审批决策：一次 / 本会话始终 / 全局始终 / 一次拒绝 / 全局始终拒绝。 */
+export type ApprovalDecision =
+  | "allow_once"
+  | "allow_always"
+  | "allow_global"
+  | "deny"
+  | "deny_always";
+
+/** 当前会话的任务清单（刷新页面后恢复面板）。 */
+export const getTodos = (sid: string) =>
+  api.get<{ todos: TodoItem[] }>(`/api/sessions/${sid}/todos`).then((d) => d.todos);
+
+/** 手动压缩会话历史为摘要（保留最近 keep 条原文）。 */
+export const compactSession = (sid: string, keep = 10) =>
+  api.post<{
+    ok: boolean;
+    reason?: string;
+    archived_messages?: number;
+    kept?: number;
+    summary?: string;
+  }>(`/api/sessions/${sid}/compact`, { keep });
+
+/** 结构化长期记忆（USER.md / FACT.md）。 */
+export interface ProfileData {
+  enabled: boolean;
+  user: string;
+  facts: string;
+  journal_lines?: number;
+}
+export const getProfile = () => api.get<ProfileData>("/api/memory/profile");
+export const putProfile = (body: { user?: string; facts?: string; fact?: string }) =>
+  api.put<{ ok: boolean; user: string; facts: string }>("/api/memory/profile", body);
+
+/** 审批权限名单（全局白名单 / 全局黑名单 / 会话白名单）。 */
+export interface ApprovalRules {
+  global: string[];
+  deny: string[];
+  sessions: Record<string, string[]>;
+}
+/** 未决审批（含定时任务/后台触发的）：前端轮询显示，避免后台任务等超时被静默拒绝 */
+export interface PendingApproval {
+  session_id: string;
+  tool_call_id: string;
+  name: string;
+  summary: string;
+  risk: string;
+  remaining: number;
+  timeout: number;
+}
+
+export const getPendingApprovals = () =>
+  api.get<{ pending: PendingApproval[] }>("/api/approvals/pending");
+
+export const getApprovalRules = () => api.get<ApprovalRules>("/api/approvals");
+export const clearApprovalRules = (scope: "deny" | "global" | `session:${string}`, tool = "") =>
+  api.del<{ ok: boolean; rules: ApprovalRules }>(
+    `/api/approvals?scope=${encodeURIComponent(scope)}${tool ? `&tool=${encodeURIComponent(tool)}` : ""}`
+  );
+
+/** 已安装技能（$AGENT_HOME/skills/<name>/SKILL.md）。 */
+export interface SkillInfo {
+  name: string;
+  description: string;
+}
+export const getSkills = () => api.get<{ skills: SkillInfo[]; dir: string }>("/api/skills");
+
+/** 知识库条目（管理用；正文写入只经 kb_add 工具，避免绕过审批）。 */
+export interface KbItem {
+  id: number;
+  title: string;
+  chars: number;
+  created_at: number;
+}
+export const listKb = () => api.get<{ items: KbItem[] }>("/api/kb").then((d) => d.items);
+export const deleteKb = (id: number) => api.del<{ ok: boolean; id: number }>(`/api/kb/${id}`);
 
 /** 撤销一次文件类危险操作（写文件/删文件前已自动备份）。 */
 export const undoToolCall = (sessionId: string, toolCallId: string) =>

@@ -17,13 +17,17 @@ from .mem0_memory import Mem0Memory
 from .memory import Store
 from .mock_llm import MockLLM
 from .tools import call_tool, get_tool, schemas
+from .tools import ctx as tool_ctx
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 20      # 一轮最多工具调用次数，防死循环
-MAX_CONTEXT = 80         # 上下文消息上限，超出做安全裁剪
+# 以下常量是「配置缺失时的兜底默认」：正常路径上取 settings.agent / settings.memory /
+# settings.context 的值（见 Agent._cfg），保证设置面板里的旋钮真实生效。
+MAX_ITERATIONS = 20      # 兜底：一轮最多工具调用次数（配置项 agent.max_tool_chain_depth）
+MAX_CONTEXT = 80         # 上下文消息上限，超出做安全裁剪（消息条数兜底，非 token 预算）
 MAX_HISTORY_WINDOW = 60  # 长程记忆分页：近期原始消息窗口，更早的历史滚动归档为摘要
 MAX_TOOL_TEXT = 6000     # 回传给模型的工具结果上限
+CHARS_PER_TOKEN = 4      # 粗略 token 估算口径（与 _tool_result_limited 保持一致）
 
 Emit = Callable[[dict], Awaitable[None]]
 AskApproval = Callable[[str, str, str, str], Awaitable[str]]  # (tool_call_id, name, summary, risk) -> allow|deny
@@ -46,6 +50,30 @@ def _fallback_title(message: str) -> str:
     """回退标题：取首条消息前 14 字（与 mock 规则一致）。"""
     text = " ".join(str(message).split())
     return text[:14] + ("…" if len(text) > 14 else "")
+
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """粗估一批消息的 token 数（字符数 / 4，与工具结果截断同一口径）。
+
+    只用内容长度，不计 role / tool_calls 包装开销——预算判断只需要量级正确；
+    精确分词在 Termux 上要么引原生依赖（tiktoken），要么误差不比这个更小。
+    """
+    total = 0
+    for m in messages:
+        total += len(str(m.get("content") or ""))
+    return total // CHARS_PER_TOKEN
+
+
+def _should_compress(est_tokens: int, budget_tokens: int, threshold: float,
+                     auto: bool = True) -> bool:
+    """是否因接近 token 预算而需要压缩早期历史。
+
+    budget_tokens <= 0 表示未配置预算（用模型默认窗口），此时永不因预算触发；
+    auto=False（settings.context.auto_compress 关闭）同理。
+    """
+    if not auto or budget_tokens <= 0:
+        return False
+    return est_tokens >= int(budget_tokens * float(threshold))
 
 
 def _trim(messages: list[dict], maxn: int = MAX_CONTEXT) -> list[dict]:
@@ -134,14 +162,65 @@ def _rrf_fuse(mem0_results: list[dict], fts5_results: list[dict], k: int = 60, l
 
 
 class Agent:
-    def __init__(self, store: Store, settings: dict, mock: bool = False, mem0: Mem0Memory | None = None):
+    def __init__(
+        self,
+        store: Store,
+        settings: dict,
+        mock: bool = False,
+        mem0: Mem0Memory | None = None,
+        profile=None,      # profile_memory.ProfileMemory：USER/FACT 文件记忆（可选）
+        skills=None,       # skills.SkillRegistry：SKILL.md 渐进披露（可选）
+    ):
         self.store = store
         self.settings = settings
         self.mock = mock
         self.mem0 = mem0  # 本地 Mem0 记忆（可选）
+        self.profile = profile  # 结构化长期记忆（可选）
+        self.skills = skills    # 技能索引（可选）
         self._client = None  # AsyncOpenAI 懒加载缓存（httpx 连接池复用，避免每次新建泄漏）
         self._litellm = None  # LiteLLM 懒加载缓存（use_litellm=true 时生效）
+        self._summarizer_obj = None  # 摘要器懒加载（直连端点，见 summarizer.py）
         self._pending_mem0_tasks: set = set()  # 保留引用，防 GC 回收进行中任务
+
+    # ---------- 配置读取（统一兜底：Settings 对象 / 裸 dict 都支持） ----------
+
+    def _cfg(self, accessor: str, key: str) -> dict:
+        """读取配置块：优先 Settings 的专用访问器（带 pydantic 收敛），退化到 dict。
+
+        早期实现散落 `hasattr(settings, "xx_cfg")` 判断且部分配置块无人读取
+        （agent_cfg/auto_compress/search_limit 等），导致设置面板旋钮是装饰品；
+        这里统一入口，保证每个旋钮都有真实消费方。
+        """
+        try:
+            fn = getattr(self.settings, accessor, None)
+            if callable(fn):
+                return fn() or {}
+            if isinstance(self.settings, dict):
+                v = self.settings.get(key)
+                return v if isinstance(v, dict) else {}
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception:  # noqa: BLE001 —— 配置读取失败退回兜底常量
+            pass
+        return {}
+
+    def _summarizer(self):
+        """摘要器：LiteLLM（带成本追踪）优先，否则直连 OpenAI 兼容端点。
+
+        修复要点：此前把 `self._litellm or self._client` 直接当 llm_client 传给
+        Store，而 AsyncOpenAI 没有 summarize 方法——未开 LiteLLM（默认）时
+        自动摘要每次都 AttributeError 被吞，归档退化为占位句。mock 模式返回
+        None（沿用原有行为：mock 不写摘要）。
+        """
+        if self.mock:
+            return None
+        litellm_client = self._get_litellm()
+        if litellm_client is not None:
+            return litellm_client
+        if self._summarizer_obj is None:
+            from .summarizer import LLMSummarizer
+
+            self._summarizer_obj = LLMSummarizer(self.settings)
+        return self._summarizer_obj
 
     def _llm(self):
         if self.mock:
@@ -180,6 +259,13 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
             self._client = None
+        if self._summarizer_obj is not None:
+            try:
+                await self._summarizer_obj.aclose()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception:  # noqa: BLE001
+                pass
+            self._summarizer_obj = None
 
     async def _stream(self, messages: list[dict], tools: list[dict] | None):
         """统一流式接口：产出 (content, reasoning, tool_calls_delta)。
@@ -260,13 +346,55 @@ class Agent:
     ) -> None:
         mode = self.settings.permission_mode()
         tools = [] if mode == "chat" else schemas()
+        # 配置读取（每个旋钮都有真实消费方，见 _cfg 注释）
+        agent_cfg = self._cfg("agent_cfg", "agent")
+        mem_cfg = self._cfg("memory_cfg", "memory")
+        ctx_cfg = self._cfg("context_cfg", "context")
+        try:
+            max_iters = max(1, int(agent_cfg.get("max_tool_chain_depth") or MAX_ITERATIONS))
+        except (TypeError, ValueError):
+            max_iters = MAX_ITERATIONS
+        try:
+            retries = max(0, int(agent_cfg.get("max_tool_retries") or 0))
+        except (TypeError, ValueError):
+            retries = 0
+        try:
+            search_limit = max(1, min(20, int(mem_cfg.get("search_limit") or 5)))
+        except (TypeError, ValueError):
+            search_limit = 5
+        budget_tokens = int(ctx_cfg.get("budget_tokens") or 0)
+        auto_compress = bool(ctx_cfg.get("auto_compress", True))
+        try:
+            compress_threshold = float(ctx_cfg.get("compress_threshold") or 0.8)
+        except (TypeError, ValueError):
+            compress_threshold = 0.8
 
         # 组装上下文（顺序固定，前缀稳定以利提示缓存）：
-        #   固定角色 → 用户长期偏好 → 相关历史记忆 → 记忆摘要 → 历史 → 本条消息
+        #   固定角色 → 用户长期偏好 → 档案记忆 → 技能索引 → 相关历史记忆 → 记忆摘要 → 历史 → 本条消息
         messages: list[dict] = [{"role": "system", "content": SYSTEM_FIXED}]
         prefs = str(self.settings.get().get("user_prefs", "")).strip()
         if prefs:
             messages.append({"role": "system", "content": f"用户长期偏好：{prefs}"})
+        # 结构化长期记忆（USER.md / FACT.md）：文件不变则文本不变，缓存前缀稳定
+        if self.profile is not None:
+            try:
+                pblock = self.profile.system_block()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception as e:  # noqa: BLE001 —— 记忆读取失败不阻塞对话
+                logger.warning("档案记忆读取失败: %s", e)
+                pblock = ""
+            if pblock:
+                messages.append({"role": "system", "content": pblock})
+        # 技能索引：只放 name/description（渐进披露，正文由 read_skill 按需读取）
+        if self.skills is not None:
+            try:
+                sblock = self.skills.system_block()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception as e:  # noqa: BLE001
+                logger.warning("技能索引读取失败: %s", e)
+                sblock = ""
+            if sblock:
+                messages.append({"role": "system", "content": sblock})
         if tools and self._is_reasoning_model():
             messages.append(
                 {
@@ -284,20 +412,20 @@ class Agent:
 
         if self.mem0 is not None and self.mem0.enabled():
             try:
-                mem0_results = await self.mem0.asearch(message, limit=5, session_id=session_id)
+                mem0_results = await self.mem0.asearch(message, limit=search_limit, session_id=session_id)
             except Exception as e:  # noqa: BLE001
                 logger.warning("Mem0 搜索失败，降级 FTS5: %s", e)
 
         # FTS5 关键词检索（始终执行，作为语义检索的补充）
         try:
-            fts5_results = await self.store.search_memories(message, limit=5, exclude_session=session_id)
+            fts5_results = await self.store.search_memories(message, limit=search_limit, exclude_session=session_id)
         except Exception as e:  # noqa: BLE001
             logger.warning("FTS5 搜索失败: %s", e)
 
         # Reciprocal Rank Fusion（k=60 为标准值）
-        merged = _rrf_fuse(mem0_results, fts5_results, k=60)
+        merged = _rrf_fuse(mem0_results, fts5_results, k=60, limit=search_limit)
         if merged:
-            rel_text = "\n".join(f"· {m['text'][:160]}" for m in merged[:6])
+            rel_text = "\n".join(f"· {m['text'][:160]}" for m in merged[:search_limit])
             messages.append({"role": "system", "content": f"与此相关的历史记忆：\n{rel_text}"})
         summary = await self.store.get_summary(session_id)
         archives = await self.store.get_archives(session_id, limit=5)
@@ -309,20 +437,41 @@ class Agent:
             messages.append({"role": "system", "content": f"此前对话摘要（分页归档）：\n{mem_text}"})
         # 恢复历史消息：从 meta 反序列化 tool_calls / tool_call_id，
         # 否则重启后孤立的 role:"tool" 消息会让 OpenAI 兼容 API 返回 400。
+        # 先做中断恢复：上一轮在「工具结果落库前」被杀会留下没有响应的 tool_calls，
+        # 补占位响应后历史才自洽（否则本次请求直接 400，会话卡死）。
+        try:
+            recovered = await self.store.recover_orphan_tool_calls(session_id)
+            if recovered:
+                logger.info("会话 %s 检测到 %d 个未完成工具调用，已补占位响应", session_id, recovered)
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception as e:  # noqa: BLE001 —— 恢复失败不阻塞新消息
+            logger.warning("孤立工具调用恢复失败: %s", e)
         # P0 长程记忆分页：超过近期窗口的历史消息先滚动归档为摘要，再注入近期窗口。
+        # 两类触发：① 消息条数超过 MAX_HISTORY_WINDOW（兜底）；
+        #           ② 估算 token 接近 context.budget_tokens * compress_threshold（预算优先）。
         history = await self.store.get_messages(session_id)
-        if len(history) > MAX_HISTORY_WINDOW:
-            old_msgs, history = history[:-MAX_HISTORY_WINDOW], history[-MAX_HISTORY_WINDOW:]
-            try:
-                mem_cfg = {}
-                if hasattr(self.settings, "memory_cfg"):
-                    mem_cfg = self.settings.memory_cfg()
-                elif isinstance(self.settings, dict):
-                    mem_cfg = self.settings.get("memory", {})
-                llm_for_archive = self._litellm or self._client
-                await self.store.archive_messages(session_id, old_msgs, mem_cfg, llm_client=llm_for_archive)
-            except Exception:  # noqa: BLE001 —— 归档失败不影响主流程
-                pass
+        llm_for_archive = self._summarizer()
+        if auto_compress and history:
+            if _should_compress(_estimate_tokens(history), budget_tokens, compress_threshold,
+                                auto=auto_compress):
+                # 预算触发：保留最近 1/3（至少 10 条），其余归档
+                keep = max(10, len(history) // 3)
+                if len(history) > keep:
+                    old_msgs, history = history[:-keep], history[-keep:]
+                    try:
+                        await self.store.archive_messages(session_id, old_msgs, mem_cfg,
+                                                          llm_client=llm_for_archive)
+                    # aqg: top-level boundary —— 失败仅降级本能力
+                    except Exception as e:  # noqa: BLE001 —— 归档失败不影响主流程
+                        logger.warning("预算触发归档失败: %s", e)
+            if len(history) > MAX_HISTORY_WINDOW:
+                old_msgs, history = history[:-MAX_HISTORY_WINDOW], history[-MAX_HISTORY_WINDOW:]
+                try:
+                    await self.store.archive_messages(session_id, old_msgs, mem_cfg,
+                                                      llm_client=llm_for_archive)
+                # aqg: top-level boundary —— 失败仅降级本能力
+                except Exception:  # noqa: BLE001 —— 归档失败不影响主流程
+                    pass
         for m in history:
             msg: dict = {"role": m["role"], "content": m["content"] or ""}
             meta = m.get("meta") or {}
@@ -341,7 +490,38 @@ class Agent:
         messages.append({"role": "user", "content": message})
         await self.store.add_message(session_id, "user", message)
 
-        for _ in range(MAX_ITERATIONS):
+        # 工具执行上下文：todo / 知识库这类工具需要知道当前会话、存储与推流回调。
+        # set 后整个 await 链（含工具 handler）都能读到；finally 里 reset，绝不跨请求泄漏。
+        _tok_s = tool_ctx.current_session.set(session_id)
+        _tok_store = tool_ctx.current_store.set(self.store)
+        _tok_emit = tool_ctx.current_emit.set(emit)
+        try:
+            from .telemetry import agent_span
+
+            with agent_span(session_id):
+                await self._loop(
+                    session_id, messages, tools, emit, ask_approval, mode,
+                    max_iters, retries, mem_cfg,
+                )
+        finally:
+            tool_ctx.current_emit.reset(_tok_emit)
+            tool_ctx.current_store.reset(_tok_store)
+            tool_ctx.current_session.reset(_tok_s)
+
+    async def _loop(
+        self,
+        session_id: str,
+        messages: list[dict],
+        tools: list[dict],
+        emit: Emit,
+        ask_approval: AskApproval | None,
+        mode: str,
+        max_iters: int,
+        retries: int,
+        mem_cfg: dict,
+    ) -> None:
+        """ReAct 主循环（拆出以便用 try/finally 管理工具执行上下文）。"""
+        for _ in range(max_iters):
             messages = _trim(messages)
             content_acc, reasoning_acc = "", ""
             tool_calls: dict[int, dict] = {}
@@ -391,20 +571,14 @@ class Agent:
                 # 一轮结束后滚动更新记忆摘要（后续对话的开头注入）
                 # 改进：按 settings.memory.auto_summarize 配置驱动（可关闭 / 改阈值）
                 try:
-                    mem_cfg = {}
-                    if hasattr(self.settings, "memory_cfg"):
-                        # Settings 对象：用合并了 DEFAULTS 的专用访问器（符合 Pydantic validator 收敛）
-                        mem_cfg = self.settings.memory_cfg()
-                    elif isinstance(self.settings, dict):
-                        # 兼容直接传 dict 的旧调用方（不应发生，但保底）
-                        mem_cfg = self.settings.get("memory", {})
                     if mem_cfg:
-                        # 改进：LiteLLM 不可用时回退到直连 OpenAI 客户端，都没有则跳过
-                        llm_for_summary = self._litellm or self._client
+                        # 摘要器：LiteLLM 优先，否则直连端点（见 _summarizer 注释——
+                        # 旧实现传 AsyncOpenAI 客户端，导致默认配置下摘要从未生效）
+                        llm_for_summary = self._summarizer()
                         if llm_for_summary:
                             await self.store.auto_summarize_if_needed(session_id, mem_cfg, llm_client=llm_for_summary)
                         else:
-                            logger.debug("记忆摘要跳过：无可用 LLM 客户端 session=%s", session_id)
+                            logger.debug("记忆摘要跳过：无可用摘要器 session=%s", session_id)
                 except Exception as e:  # noqa: BLE001 —— 摘要失败不影响主流程
                     logger.warning("记忆摘要更新失败: %s", e)
                 # Mem0 异步抽取长期事实（不阻塞响应；失败仅日志）
@@ -452,7 +626,14 @@ class Agent:
                 # 形成权限绕过。这里在执行前兜底：chat 模式一律拒绝。
                 if mode == "chat":
                     decision = "deny"
-                elif ask_approval is not None:
+                elif ask_approval is None:
+                    # fail-closed：没有审批通道时，写/危险操作必须拒绝而不是静默放行。
+                    # 旧实现默认 decision="allow"，只要调用方漏传 ask_approval
+                    # （例如未来的新入口、测试、MCP 子进程模式），
+                    # approve 模式就会退化成 auto —— 审批机制形同虚设。
+                    if tool is None or permissions.should_ask(tool.risk, mode):
+                        decision = "deny"
+                else:
                     if tool is None:
                         # 模型幻觉出的未知工具：approve 模式下同样要求用户确认，不静默执行
                         if mode != "auto":
@@ -469,7 +650,7 @@ class Agent:
                     status = "denied"
                     await emit({"type": "tool_update", "id": tid, "name": name, "status": status, "result": result})
                 else:
-                    result = await call_tool(name, args)
+                    result = await call_tool(name, args, retries=retries)
                     # 危险文件操作自动备份：剥离 _ckpt、落库、前端显示可撤销
                     ck = result.pop("_ckpt", None)
                     undoable = False

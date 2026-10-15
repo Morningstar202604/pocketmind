@@ -1,5 +1,8 @@
 # PocketMind（口袋智灵）严格检验报告
 
+> **历史快照（2026-10-14 之前）**：本文记录的是当时代码的状态与结论，部分内容已被后续修复/新增取代；
+> **现状请以 [CHANGELOG.md](CHANGELOG.md) 与代码为准**。保留本文仅供追溯当时的判断依据。
+
 > 审查日期：2026-10-12
 > 审查对象：`poketmind` 工作区（Android Termux 常驻 AI Agent，Python FastAPI 后端 + React/Vite/TS 前端）
 > 审查方式：源码走读 + 实际运行基线（后端 lint/编译/测试、前端 typecheck/test/build、mock 服务端到端冒烟）

@@ -68,23 +68,53 @@ def schemas() -> list[dict]:
     return out
 
 
-async def call_tool(name: str, args: dict) -> dict:
-    """执行工具，统一捕获异常与超时，永远返回结构化结果。"""
+async def call_tool(name: str, args: dict, retries: int = 0) -> dict:
+    """执行工具，统一捕获异常与超时，永远返回结构化结果。
+
+    retries：瞬时失败（超时 / 处理器抛异常）时的最大重试次数，由 settings.agent
+    .max_tool_retries 提供。**只对 risk="safe" 的只读工具生效**——write/danger
+    可能非幂等（发短信、写文件、跑 shell），重试等于重复副作用。处理器主动 return
+    的 {"error": ...}（如「不是文件」「termux-api 未安装」）属业务结果，不重试。
+    """
     tool = get_tool(name)
     if tool is None:
         return {"error": f"未知工具：{name}"}
     if not isinstance(args, dict):
         args = {}
-    # P1：pydantic 参数校验（类型强制 + 必填检查），模型幻觉参数直接拦下，不执行
-    err = validate_args(tool, args)
+    # P1：pydantic 参数校验（类型强制 + 必填检查），模型幻觉参数直接拦下，不执行。
+    # 必须使用强转后的 args（见 coerce_args 注释），否则 "false"/"500" 这类字符串
+    # 会带着错误的真值语义进入 handler。
+    args, err = coerce_args(tool, args)
     if err:
         return {"error": f"参数不合法：{err}"}
     try:
-        return await asyncio.wait_for(tool.handler(**args), timeout=tool.timeout)
-    except TimeoutError:
-        return {"error": f"工具 {name} 执行超时（>{tool.timeout}s）"}
-    except Exception as e:  # noqa: BLE001 —— 工具失败必须回传给模型
-        return {"error": f"{type(e).__name__}: {e}"}
+        extra = max(0, int(retries))
+    except (TypeError, ValueError):
+        extra = 0
+    attempts = 1 + (extra if tool.risk == "safe" else 0)
+    last: dict | None = None
+    # 每个工具调用一个 OTEL span（未配置 exporter 时近乎零开销；见 agentd/telemetry.py）。
+    # 此前 telemetry 里定义了 agent/scheduler/tool span 却从未接线，等于可观测性只有 HTTP 层。
+    from ..telemetry import get_tracer
+
+    with get_tracer().start_as_current_span(f"tool.{name}") as span:
+        span.set_attribute("tool.name", name)
+        span.set_attribute("tool.risk", tool.risk)
+        span.set_attribute("tool.attempts", attempts)
+        for _ in range(attempts):
+            try:
+                result = await asyncio.wait_for(tool.handler(**args), timeout=tool.timeout)
+                if isinstance(result, dict) and result.get("error"):
+                    span.set_attribute("tool.error", str(result["error"])[:200])
+                return result
+            except TimeoutError:
+                last = {"error": f"工具 {name} 执行超时（>{tool.timeout}s）"}
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception as e:  # noqa: BLE001 —— 工具失败必须回传给模型
+                last = {"error": f"{type(e).__name__}: {e}"}
+        if last:
+            span.set_attribute("tool.error", str(last.get("error", ""))[:200])
+        return last or {"error": f"工具 {name} 执行失败"}
 
 
 # ---------- P1：参数校验（pydantic，fastapi 已带，零新增依赖） ----------
@@ -127,18 +157,32 @@ def _build_model(tool: Tool):
 
 
 def validate_args(tool: Tool, args: dict) -> str:
-    """返回错误描述字符串；空字符串 = 通过。"""
+    """返回错误描述字符串；空字符串 = 通过（保留旧签名，兼容既有调用方）。"""
+    return coerce_args(tool, args)[1]
+
+
+def coerce_args(tool: Tool, args: dict) -> tuple[dict, str]:
+    """校验并**返回强转后的参数**：(args, 错误描述)。
+
+    为什么必须回传强转结果：pydantic 会把 "false" 转成 False、"500" 转成 500，
+    但旧实现只取错误字符串，真正传给 handler 的仍是模型给的原始值 ——
+    于是 set_wifi(enabled="false") 里字符串非空 → 真值 → **反而把 WiFi 打开**；
+    vibrate("500") 则直接 TypeError。校验和强转结果必须一起用。
+    """
     if not (tool.parameters or {}).get("properties"):
-        return ""
+        return args, ""
     try:
-        _build_model(tool).model_validate(args)
-        return ""
+        cleaned = _build_model(tool).model_validate(args)
+        # exclude_none：模型用 null 表示"用默认值"，透传 None 会覆盖 handler 默认参数
+        # （如 list_dir(path=None) → Path(None) 抛 TypeError）
+        return cleaned.model_dump(exclude_none=True), ""
     except Exception as e:  # noqa: BLE001
-        return str(e).split("\n")[0][:200]
+        return args, str(e).split("\n")[0][:200]
 
 
 # 导入子模块完成注册（必须在 _REGISTRY 定义之后）
-from . import files, shell  # noqa: E402,F401
+# agent 自有能力（knowledge/todo）依赖 tools.ctx 提供的会话上下文
+from . import files, knowledge, shell, todo  # noqa: E402,F401
 from . import (  # noqa: E402,F401  # phone 是子包，统一注册 system/comm/sensors/network/media
     phone as _phone_pkg,
 )

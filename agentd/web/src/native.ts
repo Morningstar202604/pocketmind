@@ -8,8 +8,6 @@
 interface PocketNativeBridge {
   /** 触发设备振动（毫秒） */
   vibrate?: (ms: number) => void;
-  /** 发送 Android 通知栏通知 */
-  notify?: (title: string, body: string) => void;
   /** 写入系统剪贴板（Android 原生实现，不依赖 HTTPS） */
   copyText?: (text: string) => void;
   /** 触发页面重载 */
@@ -26,9 +24,6 @@ function getBridge(): PocketNativeBridge | null {
   return typeof window !== "undefined" ? window.PocketNative ?? null : null;
 }
 
-/** 判断当前是否在 PocketNative WebView 环境 */
-export const isNativeAvailable = (): boolean => getBridge() !== null;
-
 /**
  * 振动反馈（Android 原生）。
  * @param ms 振动时长（毫秒），默认 30
@@ -38,18 +33,6 @@ export function vibrate(ms = 30): void {
     getBridge()?.vibrate?.(ms);
   } catch {
     /* 浏览器环境或桥调用失败：忽略 */
-  }
-}
-
-/**
- * 发送系统通知（Android 通知栏）。
- * 浏览器环境下无操作。
- */
-export function notify(title: string, body: string): void {
-  try {
-    getBridge()?.notify?.(title, body);
-  } catch {
-    /* 忽略 */
   }
 }
 

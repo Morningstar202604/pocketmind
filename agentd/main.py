@@ -32,9 +32,11 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 from .agent import Agent
 from .approval import ApprovalCenter
 from .config import PRESETS, Settings, mask_key
-from .mcp import MCPClient
+from .mcp import MCPClient, mcp_tool_risk
 from .memory import Store
 from .notify import notify
+from .profile_memory import ProfileMemory
+from .skills import SkillRegistry
 from .tools import Tool, register
 
 
@@ -60,6 +62,8 @@ DIST = Path(__file__).parent / "web" / "dist"
 settings_mgr = Settings()
 store: Store | None = None
 mem0: Any = None  # Mem0Memory 实例（Optional，不启用时为 None）
+profile: ProfileMemory | None = None  # 结构化长期记忆（USER/FACT 文件层）
+skills: SkillRegistry | None = None   # SKILL.md 技能注册表
 _scheduler: Any = None  # SchedulerService 实例
 
 
@@ -119,10 +123,29 @@ async def run_agent(session_id: str, message: str) -> None:
     _notify_bg("口袋智灵", f"正在处理：{message[:40]}", persistent=True)
     agent = None
     try:
+        # 未配置模型时快速失败并给出明确指引：否则 AsyncOpenAI 会拿默认 base_url
+        # 打 api.openai.com 并重试，用户要对着「正在思考…」干等十几分钟才看到报错。
+        # 注意必须放在 try 内：提前 return 也要走 finally（runs.pop + 续跑排队消息），
+        # 否则该会话会一直留在 runs 里，后续每条消息都被判成「排队」而永不执行。
+        if not MOCK and not settings_mgr.llm_ready():
+            missing = "、".join(settings_mgr.llm_missing()) or "模型配置"
+            note = f"（未能执行：尚未配置模型，缺少{missing}。请打开「设置 → 模型」填写后重试。）"
+            # 用户消息先落库（正常路径由 Agent.chat 落库，这里提前返回，得自己记），
+            # 再补一条说明；否则重开会话只剩「未能执行」而看不到用户说了什么。
+            await store.add_message(session_id, "user", message)
+            await store.add_message(session_id, "assistant", note)
+            emit = emit_now(session_id)
+            if emit:
+                await emit(
+                    {"type": "error", "message": f"尚未配置模型（缺少{missing}）：请打开「设置 → 模型」填写后重试。"}
+                )
+                await emit({"type": "done", "stop_reason": "unconfigured"})
+            _notify_bg("口袋智灵 · 未配置模型", f"缺少{missing}", persistent=False)
+            return
         # 新会话（尚无 user 消息）自动命名
         if await store.first_user_message(session_id) is None:
             try:
-                title_agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0)
+                title_agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0, profile=profile, skills=skills)
                 try:
                     title = await title_agent.title_for(message)
                 finally:
@@ -130,9 +153,13 @@ async def run_agent(session_id: str, message: str) -> None:
                 await store.touch_session(session_id, title or "新会话")
             except Exception:  # noqa: BLE001 —— 命名失败不阻塞
                 pass
-        agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0)
+        agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0, profile=profile, skills=skills)
 
         async def ask(tid: str, name: str, summary: str, risk: str) -> str:
+            # 「始终拒绝」（全局黑名单）优先于一切：直接拒绝，不推审批卡、不注册 gate。
+            # 与「始终允许」同理——否则用户会收到一张自己早已拒绝过的幽灵审批卡。
+            if approval.is_auto_denied(name):
+                return "deny"
             # 已「始终允许」的工具：不再弹审批卡、不注册 gate，直接放行。
             # 必须在 emit 之前判断——否则前端会收到一张早已自动批准的幽灵审批卡，
             # 用户点同意时 gate 已不存在（404），体验上是「卡了一下又消失」。
@@ -148,15 +175,23 @@ async def run_agent(session_id: str, message: str) -> None:
                     f"{summary}（{'危险' if risk == 'danger' else '需要' if risk == 'write' else '只读'}操作），去应用里处理",
                     persistent=True,
                 )
-            return await approval.ask(session_id, tid, name)
+            return await approval.ask(session_id, tid, name, summary=summary, risk=risk)
 
         await agent.chat(session_id, message, emit=emit_now(session_id), ask_approval=ask)
         _notify_bg("口袋智灵 · 完成", f"已处理：{message[:30]}", persistent=False)
     except asyncio.CancelledError:
+        # 必须显式标记「本轮被取消」并 re-raise：
+        # 旧实现吞掉 CancelledError 后任务正常结束，于是 finally 里
+        # `run["task"].cancelled()` 恒为 False → pending 队列被当成「正常结束」继续续跑，
+        # 用户的「停止」和「删除会话」都拦不住后续消息（删除后还会往已删会话里写数据）。
+        run = runs.get(session_id)
+        if run:
+            run["cancelled"] = True
         q = runs.get(session_id, {}).get("queue")
         if q:
             q.put_nowait({"type": "error", "message": "已停止"})
         _notify_bg("口袋智灵", "已停止")
+        raise
     except Exception as e:  # noqa: BLE001 —— 服务端兜底，不能静默
         q = runs.get(session_id, {}).get("queue")
         if q:
@@ -176,12 +211,19 @@ async def run_agent(session_id: str, message: str) -> None:
                 pass
         run = runs.get(session_id)
         pending = (run or {}).get("pending", [])
-        cancelled = (run or {}).get("task") is not None and run["task"].cancelled()
+        cancelled = bool(run and run.get("cancelled"))
         runs.pop(session_id, None)
         # 排队续跑：同一会话期间发来的消息在此自动执行。
         # 但若本轮是被外部取消（用户停止 / SSE 断开 / 删会话），则丢弃 pending，
         # 避免会话已删/已停还在后台偷偷续跑。
+        # 还有一个更窄的窗口：本次 run 刚 pop、续跑尚未重建时 DELETE /sessions 到达，
+        # cancel_run 拿不到旧 run 也就没置 cancelled —— 此时必须复查会话还在，
+        # 否则续跑任务会往已删会话写消息。
         if pending and not cancelled:
+            still_exists = await store.get_session(session_id) is not None
+        else:
+            still_exists = False
+        if pending and still_exists:
             nxt = pending.pop(0)
             queue2: asyncio.Queue = asyncio.Queue()
             runs[session_id] = {"task": None, "queue": queue2, "pending": pending}
@@ -191,9 +233,13 @@ async def run_agent(session_id: str, message: str) -> None:
 
 def cancel_run(session_id: str) -> bool:
     run = runs.get(session_id)
-    if run and run.get("task") and not run["task"].done():
-        run["task"].cancel()
-        return True
+    if run:
+        # 无论任务是否已在收尾，都要置位：决定「排队消息是否续跑」的是这个标志，
+        # 不是 task 状态。删会话路径（main.py 的 DELETE /api/sessions）也依赖它。
+        run["cancelled"] = True
+        if run.get("task") and not run["task"].done():
+            run["task"].cancel()
+            return True
     return False
 
 
@@ -251,9 +297,26 @@ def create_app() -> FastAPI:
         # 按 memory.retention_days 清理过期记忆/消息（0 = 永久保留）
         try:
             mem_cfg = settings_mgr.memory_cfg()
+            # FTS 回填批量跟随配置（小屏/慢存储可调小，减少启动卡顿）
+            store.fts_page_size = int(mem_cfg.get("fts_page_size", 50) or 50)
             await store.cleanup_expired(int(mem_cfg.get("retention_days", 0) or 0))
         except Exception:  # noqa: BLE001 —— 清理失败不影响启动
             pass
+        # ---- 结构化长期记忆（USER.md / FACT.md / JOURNAL.jsonl）----
+        global profile, skills
+        profile = ProfileMemory(settings_mgr.path.parent / "memory")
+        try:
+            profile.register_tools()  # remember_fact（risk=write，经审批）
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning("remember_fact 工具注册失败（%s）", e)
+        # ---- Skills：SKILL.md 渐进披露（目录不存在 = 空注册表，不报错）----
+        skills = SkillRegistry(settings_mgr.path.parent / "skills")
+        try:
+            skills.register_tool()  # read_skill 工具（skill 数为 0 时也注册，便于用户放目录后立即生效）
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning("read_skill 工具注册失败（%s）", e)
         # ---- Mem0 本地记忆（可选：未配置/依赖缺失时静默跳过）----
         global mem0
         try:
@@ -306,7 +369,9 @@ def create_app() -> FastAPI:
                             name=full,
                             description=f"[MCP:{client.name}] {(t.get('description') or tname)[:160]}",
                             parameters=t.get("inputSchema") or {"type": "object", "properties": {}},
-                            risk="write",  # 第三方工具默认需审批
+                            # 风险按 MCP 注解分级：destructiveHint→danger；
+                            # readOnlyHint 不降级（外部声明不可信），最低 write
+                            risk=mcp_tool_risk(t.get("annotations")),
                             handler=_handler,
                             summary=f"MCP {client.name} · {tname}",
                             timeout=60,
@@ -338,7 +403,9 @@ def create_app() -> FastAPI:
                         name=full,
                         description=f"[MCP Client:{server}] {(tool.get('description') or tool_real)[:160]}",
                         parameters=tool.get("input_schema") or {"type": "object", "properties": {}},
-                        risk="write",  # 第三方工具默认需审批
+                        # 风险按 MCP 注解分级（详见 mcp_tool_risk）：
+                        # destructiveHint→danger；readOnlyHint 不降级，外部工具最低 write
+                        risk=mcp_tool_risk(tool.get("annotations")),
                         handler=_mcp_client_handler,
                         summary=f"MCP {server} · {tool_real}",
                         timeout=60,
@@ -411,8 +478,53 @@ def create_app() -> FastAPI:
     from .telemetry import setup_telemetry
     setup_telemetry(app, service_name=APP_NAME, version=VERSION)
 
+    # ---------- CSRF / 跨站防护 ----------
+    def check_same_origin(request: Request) -> None:
+        """拦掉浏览器发起的跨站请求（**对所有方法**生效，不只是写方法）。
+
+        为什么需要：本机模式下（无令牌）没有任何鉴权，而一部分写端点没有请求体 ——
+        无 body 的 POST 属于 CORS simple request，**不触发预检**，
+        于是手机浏览器打开任意恶意网页就能静默 POST /api/memory/reset
+        （清空全部记忆）或 /api/recipes/<id>/apply（创建并启用定时任务）。
+        非浏览器客户端（curl / 安卓 App / 测试脚本）不带 Origin，照常放行。
+
+        为什么 GET 也校验：当前 GET 端点都是只读，跨站 GET 读不到响应内容
+        （无 CORS 头）暂无实害；但同源判定对所有方法统一，未来新增带副作用的
+        GET 端点时防线不会漏边。GET 只读端点被误拒的概率极低（同源的 GET
+        浏览器会带 Origin，主机匹配即放行）。
+        """
+        origin = request.headers.get("origin")
+        if not origin:
+            return  # 非浏览器来源（curl / 安卓 App / 测试脚本都不带 Origin）
+        # 有 Origin = 浏览器发起：只接受「同主机」的来源。
+        # 判定只比主机名，不比端口：本机可能通过 127.0.0.1 / localhost 的
+        # 任意端口（如旧版文档页）访问，这些都是同一台设备，安全上等价。
+        # Host 头解析用中括号切分而非 split(":")：IPv6 写作 [::1]:port，
+        # split 会把 [::1] 错切成 "["（::1 启动时合法浏览器请求被误拒）
+        host = request.headers.get("host", "").lower()
+        if host.startswith("["):
+            host = host[1 : host.find("]")] if "]" in host else ""
+        else:
+            host = host.split(":")[0]
+        if not host:
+            raise HTTPException(status_code=403, detail="跨站请求被拒绝")
+        try:
+            from urllib.parse import urlparse
+
+            origin_host = (urlparse(origin).hostname or "").lower()
+        except ValueError:
+            origin_host = ""
+        # localhost / 127.0.0.1 / ::1 视为同一台设备
+        # 注意：urlparse("http://[::1]").hostname 返回的是裸 "::1"（不带中括号），
+        # 所以集合里放 "::1" 而不是 "[::1]"（带括号的写法永远匹配不上）
+        loopback = {"localhost", "127.0.0.1", "::1"}
+        same = origin_host == host or (origin_host in loopback and host in loopback)
+        if not same:
+            raise HTTPException(status_code=403, detail="跨站请求被拒绝")
+
     # ---------- 鉴权（局域网开启后强制） ----------
     def check_token(request: Request) -> None:
+        check_same_origin(request)
         import hmac
 
         s = settings_mgr.get()
@@ -423,7 +535,15 @@ def create_app() -> FastAPI:
         if not auth.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="需要访问令牌")
         given = auth[len("Bearer ") :].strip()
-        if not hmac.compare_digest(given, token):
+        # 必须先编码成 bytes 再比较：hmac.compare_digest 对含非 ASCII 的 str 会抛
+        # TypeError（"comparing strings with non-ASCII characters is not supported"），
+        # 那会让每个带 Authorization 的请求变成 500 —— 用户填过中文令牌后连设置页都打不开，
+        # 且无法自行改回。字节比较对任意 UTF-8 输入都安全，且保持常量时间语义。
+        try:
+            same = hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
+        except (UnicodeError, TypeError):
+            same = False
+        if not same:
             raise HTTPException(status_code=401, detail="需要访问令牌")
 
     # ---------- API ----------
@@ -452,8 +572,17 @@ def create_app() -> FastAPI:
             health_info["ok"] = False
 
         # 2. LLM 连接性（仅检查配置有效性，不实际调 LLM）
-        llm = settings_mgr.llm()
-        health_info["components"]["llm"] = "ready" if (MOCK or (llm.get("api_key") and llm.get("model"))) else "not_configured"
+        llm_ready = bool(MOCK or settings_mgr.llm_ready())
+        missing = [] if llm_ready else settings_mgr.llm_missing()
+        health_info["components"]["llm"] = (
+            "ready" if llm_ready else f"not_configured: 缺少{'、'.join(missing)}"
+        )
+        # 顶层 ready：前端据此决定是否展示「已就绪」与示例任务。
+        # 此前 health 不返回该字段，前端读到 undefined 便永远显示「未配置」——
+        # 即使模型已配好、可以正常对话（顶栏状态灯与空态文案都被它带偏）。
+        health_info["ready"] = llm_ready
+        if not llm_ready:
+            health_info["llm_missing"] = missing
 
         # 3. Mem0 状态
         if mem0 is not None:
@@ -550,12 +679,47 @@ def create_app() -> FastAPI:
         session_id = payload.get("session_id", "")
         tool_call_id = payload.get("tool_call_id", "")
         decision = payload.get("decision", "")
-        if decision not in ("allow_once", "allow_always", "deny"):
-            raise HTTPException(400, "decision 必须是 allow_once / allow_always / deny")
+        # 决策白名单：一次放行 / 本会话始终允许 / 全局始终允许 / 一次拒绝 / 全局始终拒绝
+        if decision not in ("allow_once", "allow_always", "allow_global", "deny", "deny_always"):
+            raise HTTPException(
+                400, "decision 必须是 allow_once / allow_always / allow_global / deny / deny_always"
+            )
         ok = approval.decide(session_id, tool_call_id, decision)
         if not ok:
             raise HTTPException(404, "该审批已过期或不存在")
-        return {"ok": True}
+        return {"ok": True, "rules": approval.list_rules()}
+
+    @app.get("/api/approvals/pending", dependencies=[Depends(check_token)])
+    async def approvals_pending():
+        """当前未决审批（含定时任务/后台触发的）。
+
+        为什么需要：后台任务没有 SSE 消费者，它的审批卡 emit 进的是无人读取的队列，
+        用户在界面里看不到 → 任务必然等超时被拒（或已授权时静默执行），
+        整个过程对用户不可见。前端轮询本端点把卡片补显示出来。
+        """
+        return {"pending": approval.pending()}
+
+    @app.get("/api/approvals", dependencies=[Depends(check_token)])
+    async def approvals_list():
+        """当前审批权限名单（全局白名单 / 全局黑名单 / 会话白名单）。
+
+        黑名单是全局的：一次误点「始终拒绝」会让工具永久不可用，用户需要一个
+        可见、可撤销的入口，否则只能手动去删 approval_always.json。
+        """
+        return approval.list_rules()
+
+    @app.delete("/api/approvals", dependencies=[Depends(check_token)])
+    async def approvals_clear(scope: str = "deny", tool: str = ""):
+        """清除名单：scope=deny（黑名单）/ global（全局白名单）/ session:<sid>。"""
+        if scope == "deny":
+            approval.clear_never(tool or None)
+        elif scope == "global":
+            approval.clear_global(tool or None)
+        elif scope.startswith("session:"):
+            approval.forget(scope.split(":", 1)[1])
+        else:
+            raise HTTPException(400, "scope 必须是 deny / global / session:<sid>")
+        return {"ok": True, "rules": approval.list_rules()}
 
     @app.post("/api/undo", dependencies=[Depends(check_token)])
     async def undo_endpoint(payload: dict):
@@ -632,6 +796,61 @@ def create_app() -> FastAPI:
         if await store.get_session(sid) is None:
             raise HTTPException(404, "会话不存在")
         return await store.get_messages(sid)
+
+    @app.get("/api/sessions/{sid}/todos", dependencies=[Depends(check_token)])
+    async def session_todos(sid: str):
+        """当前会话的任务清单（todo_write 维护；刷新页面后前端据此恢复面板）。"""
+        if store is None:
+            raise HTTPException(503)
+        if await store.get_session(sid) is None:
+            raise HTTPException(404, "会话不存在")
+        return {"todos": await store.get_todos(sid)}
+
+    @app.delete("/api/sessions/{sid}/todos", dependencies=[Depends(check_token)])
+    async def session_todos_clear(sid: str):
+        """清空当前会话的任务清单（前端"清空"按钮；与 todo_clear 工具同一后端方法）。
+
+        为什么必须有这个端点：前端清掉面板后刷新页面会重新拉一次清单，
+        没有服务端同步，已清空的清单会"复活"。
+        """
+        if store is None:
+            raise HTTPException(503)
+        if await store.get_session(sid) is None:
+            raise HTTPException(404, "会话不存在")
+        await store.clear_todos(sid)
+        return {"ok": True}
+
+    @app.post("/api/sessions/{sid}/compact", dependencies=[Depends(check_token)])
+    async def session_compact(sid: str, payload: dict | None = None):
+        """手动压缩：把较早的历史归档成摘要，保留最近若干条原文。
+
+        与自动分页同一套机制（archive_messages → memory(kind=archive)），
+        区别只是由用户显式触发；LLM 不可用时退化为占位摘要（不报错）。
+        """
+        if store is None:
+            raise HTTPException(503)
+        if await store.get_session(sid) is None:
+            raise HTTPException(404, "会话不存在")
+        keep = 10
+        if isinstance(payload, dict):
+            try:
+                keep = max(2, min(200, int(payload.get("keep", 10))))
+            except (TypeError, ValueError):
+                keep = 10
+        history = await store.get_messages(sid, limit=1000)
+        if len(history) <= keep:
+            return {"ok": False, "reason": f"消息只有 {len(history)} 条，无需压缩"}
+        old_msgs, kept = history[:-keep], history[-keep:]
+        # 摘要器：mock 下为 None（降级为占位摘要），真实模式走直连端点
+        helper = Agent(store, settings_mgr, mock=MOCK, mem0=None)
+        try:
+            summary = await store.archive_messages(
+                sid, old_msgs, settings_mgr.memory_cfg(), llm_client=helper._summarizer()
+            )
+        finally:
+            await helper.aclose()
+        return {"ok": True, "archived_messages": len(old_msgs), "kept": len(kept),
+                "summary": summary}
 
     # ---------- P1：定时任务 API ----------
     @app.get("/api/jobs", dependencies=[Depends(check_token)])
@@ -799,6 +1018,68 @@ def create_app() -> FastAPI:
         }
 
     # ---------- Mem0 记忆管理 ----------
+    @app.get("/api/memory/profile", dependencies=[Depends(check_token)])
+    async def profile_get():
+        """读取结构化长期记忆（USER.md / FACT.md），并可查看最近日志行数。"""
+        if profile is None:
+            return {"enabled": False, "user": "", "facts": "", "journal_lines": 0}
+        data = profile.load()
+        try:
+            journal_lines = len(profile.journal.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            journal_lines = 0
+        return {"enabled": True, "user": data["user"], "facts": data["facts"],
+                "journal_lines": journal_lines}
+
+    @app.put("/api/memory/profile", dependencies=[Depends(check_token)])
+    async def profile_put(payload: dict):
+        """编辑结构化长期记忆。user=覆盖画像；facts=整体替换事实清单；fact=追加一条事实。"""
+        if profile is None:
+            raise HTTPException(503, "档案记忆未启用")
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "请求体必须是 JSON 对象")
+        if "user" in payload:
+            profile.update_user(str(payload.get("user") or ""))
+        if "facts" in payload:
+            # 整体替换：先清空再写入（按行拆分，逐条 append 以沿用去重与上限逻辑）
+            try:
+                profile.fact_md.write_text("", encoding="utf-8")
+            except OSError as e:
+                raise HTTPException(500, f"写入失败：{e}") from None
+            for line in str(payload.get("facts") or "").splitlines():
+                line = line.strip().lstrip("-").strip()
+                if line:
+                    profile.append_fact(line)
+        elif payload.get("fact"):
+            profile.append_fact(str(payload["fact"]))
+        data = profile.load()
+        return {"ok": True, "user": data["user"], "facts": data["facts"]}
+
+    @app.get("/api/kb", dependencies=[Depends(check_token)])
+    async def kb_list_endpoint():
+        """知识库条目列表（标题与长度；正文用 kb_search 工具检索）。"""
+        if store is None:
+            raise HTTPException(503)
+        items = await store.kb_list()
+        return {"items": [{"id": i["id"], "title": i["title"], "chars": len(i["content"]),
+                           "created_at": i["created_at"]} for i in items]}
+
+    @app.delete("/api/kb/{kid}", dependencies=[Depends(check_token)])
+    async def kb_delete_endpoint(kid: int):
+        if store is None:
+            raise HTTPException(503)
+        ok = await store.kb_delete(int(kid))
+        if not ok:
+            raise HTTPException(404, "条目不存在")
+        return {"ok": True, "id": kid}
+
+    @app.get("/api/skills", dependencies=[Depends(check_token)])
+    async def skills_list():
+        """已安装的技能（$AGENT_HOME/skills/<name>/SKILL.md）。"""
+        if skills is None:
+            return {"skills": []}
+        return {"skills": skills.list_skills(), "dir": str(skills.dir)}
+
     @app.get("/api/memory", dependencies=[Depends(check_token)])
     async def memory_list():
         """列出全部长期记忆（管理页面用）。"""
@@ -866,9 +1147,16 @@ def create_app() -> FastAPI:
 
     @app.get("/api/export", dependencies=[Depends(check_token)])
     async def export_all():
-        """导出全部数据（会话 + 消息 + 脱敏配置）为 JSON，用于备份迁移。"""
+        """导出全部数据（会话 + 消息 + 摘要归档 + 档案记忆 + 任务清单 + 知识库 + 定时任务）。
+
+        承诺是「本机数据的完整备份」，因此本机数据必须齐全，否则换机/重装后无声丢失：
+        结构化档案 USER/FACT、每会话任务清单、知识库条目，以及**摘要/归档记忆
+        （memory 表）与定时任务** —— 后两者此前完全没导出，
+        用户重装后会发现定时提醒全没了、长期记忆只剩最近一条，而导出文件看着「完整」。
+        """
         import datetime
 
+        prof = profile.load() if profile is not None else {}
         out: dict = {
             "app": "口袋智灵",
             "version": VERSION,
@@ -880,22 +1168,43 @@ def create_app() -> FastAPI:
                 },
                 "user_prefs": settings_mgr.get().get("user_prefs", ""),
             },
+            # 结构化长期记忆原文（USER.md / FACT.md；不含 JOURNAL 事件日志）
+            "memory_profile": {"user": prof.get("user") or "", "facts": prof.get("facts") or ""},
+            "knowledge": [],
             "sessions": [],
+            # 定时任务（会话级 + 全局）：重装后要能照原样恢复
+            "jobs": [],
         }
         if store is not None:
+            out["knowledge"] = [
+                {"id": k["id"], "title": k["title"], "content": k["content"],
+                 "created_at": k["created_at"]}
+                for k in await store.kb_list()
+            ]
             for s in await store.list_sessions(limit=500):
                 msgs = [
                     {"role": m["role"], "content": m["content"], "meta": m.get("meta")}
                     for m in await store.get_messages(s["id"], limit=1000)
                 ]
+                # 摘要与归档记忆是「长期记忆」的主体，缺了它备份名不符实
+                archives = await store.get_archives(s["id"], limit=1000)
                 out["sessions"].append(
                     {
                         "id": s["id"],
                         "title": s["title"],
                         "message_count": len(msgs),
+                        "todos": await store.get_todos(s["id"]),
                         "messages": msgs,
+                        "summary": await store.get_summary(s["id"]),
+                        "archives": archives,
+                        "archived_upto": await store.get_archived_upto(s["id"]),
                     }
                 )
+            try:
+                out["jobs"] = scheduler_svc.list()
+            # aqg: top-level boundary —— 定时任务读不到不影响其余数据导出
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger(__name__).warning("导出定时任务失败: %s", e)
         return out
 
     @app.get("/api/settings", dependencies=[Depends(check_token)])
@@ -1060,12 +1369,17 @@ def main():
         TG_CHAT_ID = args.tg_chat_id
 
     host = args.host or ("0.0.0.0" if args.lan else "127.0.0.1")
-    if args.lan:
+    # 判定依据是「最终是否对非本机地址开放」，而不是用户是否敲了 --lan：
+    # 旧写法下 `--host 0.0.0.0` 能完全跳过下面的令牌强校验，而 check_token 在
+    # token 为空时直接放行 —— 等于把整个 API（含 chat/export/settings）暴露给局域网。
+    _local_only = host in ("127.0.0.1", "localhost", "::1")
+    if not _local_only:
         s = settings_mgr.get()
         token = str(s.get("server", {}).get("token", "")).strip()
         if not token:
             print(
-                "✗ 安全策略：--lan 必须配置访问令牌才能启动（否则局域网内任何设备都能调用本服务）。"
+                f"✗ 安全策略：监听 {host}（非本机）必须配置访问令牌才能启动，"
+                "否则局域网内任何设备都能调用本服务（含读取文件与执行命令）。"
             )
             print(
                 "  请先设置 server.token（启动本机模式后，在页面「设置 → 局域网访问令牌」填入），"

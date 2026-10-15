@@ -64,6 +64,38 @@ st, _ = req(
 )
 check("interval 非数字 400", st == 400, f"got {st}")
 
+
+# 限流豁免：健康探测与静态资源不该被自己的限流打死（曾经 1s 轮询撞 30/min → 界面报掉线）
+codes = []
+for _ in range(40):
+    try:
+        r = urllib.request.Request(BASE + "/api/health")
+        with urllib.request.urlopen(r, timeout=5) as resp:
+            codes.append(resp.status)
+    except urllib.error.HTTPError as e:
+        codes.append(e.code)
+check("健康检查连打 40 次不触发 429", set(codes) == {200}, f"codes={sorted(set(codes))}")
+
+root_codes = []
+for _ in range(10):
+    try:
+        with urllib.request.urlopen(BASE + "/", timeout=5) as resp:
+            root_codes.append(resp.status)
+    except urllib.error.HTTPError as e:
+        root_codes.append(e.code)
+check("静态首页连打 10 次不触发 429", set(root_codes) == {200}, f"codes={sorted(set(root_codes))}")
+
+# 正常界面流量（会话列表刷新等）不该被限流：一轮界面操作轻松超过 30 次/分钟，
+# 旧配额会让用户看到莫名的 429
+ui_codes = []
+for _ in range(45):
+    try:
+        with urllib.request.urlopen(BASE + "/api/sessions", timeout=5) as resp:
+            ui_codes.append(resp.status)
+    except urllib.error.HTTPError as e:
+        ui_codes.append(e.code)
+check("常规 API 连打 45 次不触发 429（配额适配界面操作）", set(ui_codes) == {200}, f"codes={sorted(set(ui_codes))}")
+
 print()
 print(f"结果: {len(passed)} 通过 / {len(failed)} 失败")
 if failed:

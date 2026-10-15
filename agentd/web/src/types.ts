@@ -9,6 +9,13 @@ export interface ToolPart {
   summary?: string;
   risk?: string;
   undoable?: boolean; // 文件类危险操作已自动备份，可一键撤销
+  /** 执行耗时（毫秒）：由前端在 tool_start → tool_update 之间计时，
+   *  用户需要知道"等 30 秒"是正常还是卡住。 */
+  ms?: number;
+  /** 本地开始时刻（仅运行期使用，用于结算 ms；不走网络、不持久化） */
+  startedAt?: number;
+  /** startedAt 起表时的工具状态；审批等待作废起表，批准后重开计时才结算这段 */
+  startedFor?: ToolPart["status"];
 }
 
 /** 计划中预告的一次工具调用（plan 事件里的 tool_calls，仅展示用，尚未执行） */

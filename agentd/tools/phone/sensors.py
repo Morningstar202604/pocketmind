@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from . import _t
-from ._termux import _bin, _fail, _ok, _run, _unavailable
+from ._termux import _bin, _fail, _ok, _run, _run_checked, _unavailable
 
 
 async def get_location(provider: str = "network") -> dict:
@@ -47,11 +47,10 @@ async def clipboard_set(text: str) -> dict:
     b = _bin("termux-clipboard-set")
     if not b:
         return _unavailable("termux-clipboard-set")
-    try:
-        await _run([b], input_text=str(text))
-        return _ok()
-    except TimeoutError:
-        return _fail("写入剪贴板超时")
+    failed = await _run_checked([b], "写入剪贴板", input_text=str(text))
+    if failed:
+        return failed
+    return _ok()
 
 
 async def list_sensors() -> dict:
@@ -94,11 +93,10 @@ async def tts_speak(text: str, rate: float = 1.0) -> dict:
     if not b:
         return _unavailable("termux-tts-speak")
     args = [b, "-r", str(max(0.0, min(2.0, rate)))]
-    try:
-        await _run(args, input_text=str(text))
-        return _ok(spoken_chars=len(str(text)))
-    except TimeoutError:
-        return _fail("TTS 朗读超时")
+    failed = await _run_checked(args, "TTS 朗读", input_text=str(text))
+    if failed:
+        return failed
+    return _ok(spoken_chars=len(str(text)))
 
 
 async def speech_to_text(lang: str = "zh-CN") -> dict:
@@ -115,9 +113,11 @@ async def speech_to_text(lang: str = "zh-CN") -> dict:
 
 
 # ---------- 注册表 ----------
+# timeout=40：内部 _run 用 30s（GPS 冷启动慢），工具级必须留出余量，
+# 否则外层 wait_for 先触发，内部那句"冷启动可能较慢"的提示永远到不了用户
 _t("get_location", "获取手机当前位置（经纬度，涉及隐私，需确认）。",
    {"provider": {"type": "string", "description": "gps/network/passive，默认 network"}},
-   "write", get_location, "获取当前位置")
+   "write", get_location, "获取当前位置", timeout=40)
 _t("get_clipboard", "读取手机剪贴板当前内容。", {}, "safe", clipboard_get, "读取剪贴板")
 _t("set_clipboard", "把指定文本写入手机剪贴板。",
    {"text": {"type": "string", "description": "要写入剪贴板的文本"}},

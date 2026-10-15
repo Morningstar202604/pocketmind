@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Session } from "../api";
+import { relativeTime } from "../lib/format";
 import { IconClose, IconPlus, IconTrash } from "./icons";
 
 export function SessionList({
@@ -72,7 +73,12 @@ export function SessionList({
                 <span className="s-title" title="双击重命名" onDoubleClick={() => rename(s)}>
                   {s.title}
                 </span>
-                <span className="s-count">{s.message_count} 条消息</span>
+                <span className="s-count">
+                  {s.message_count} 条消息
+                  {relativeTime(s.updated_at) && (
+                    <span className="s-time">{` · ${relativeTime(s.updated_at)}`}</span>
+                  )}
+                </span>
               </div>
               <div className="s-ops">
                 <button

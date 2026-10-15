@@ -1,11 +1,15 @@
 {
-  "name": "口袋智灵",
+  "id": "/",
+  "name": "口袋智灵 · PocketMind",
   "short_name": "口袋智灵",
-  "description": "手机本地智能体：聊天、执行命令、调用手机能力，数据只在你设备上。",
+  "description": "住在这台手机里的本地智能体：聊天、调用手机能力、执行命令，数据只在你设备上。",
   "lang": "zh-CN",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait",
+  "categories": ["productivity", "utilities"],
   "background_color": "#0f1115",
   "theme_color": "#0f1115",
   "icons": [

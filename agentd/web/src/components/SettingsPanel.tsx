@@ -1,7 +1,26 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, isUnauthorized, setToken, type AppSettings, type Provider, type ToolInfo } from "../api";
+import {
+  api,
+  clearApprovalRules,
+  compactSession,
+  deleteKb,
+  getApprovalRules,
+  getProfile,
+  getSkills,
+  isUnauthorized,
+  listKb,
+  putProfile,
+  setToken,
+  type AppSettings,
+  type ApprovalRules,
+  type KbItem,
+  type Provider,
+  type SkillInfo,
+  type ToolInfo,
+} from "../api";
 import { useAgentStore } from "../store/useAgentStore";
 import type { ThemePref } from "../theme";
+import { CollapsibleGroup } from "./CollapsibleGroup";
 import { IconClose } from "./icons";
 
 const MODES: Array<{ v: "auto" | "approve" | "chat"; label: string; hint: string }> = [
@@ -23,10 +42,24 @@ const RISK_LABEL: Record<string, string> = {
   danger: "危险",
 };
 
+/** memory 配置块的默认值（与后端 DEFAULTS.memory 对齐）：局部编辑时保持其余字段不丢。 */
+const MEMORY_DEFAULTS = {
+  auto_summarize: true,
+  summarize_every_n_turns: 10,
+  summary_max_chars: 400,
+  search_limit: 5,
+  fts_page_size: 50,
+  retention_days: 90,
+};
+
 /** 工具分组展示顺序与名称 */
 const GROUP_NAMES: Array<{ id: string; label: string }> = [
   { id: "phone", label: "手机能力" },
   { id: "files", label: "文件" },
+  { id: "agent", label: "任务与编排" },
+  { id: "knowledge", label: "知识库" },
+  { id: "memory", label: "长期记忆" },
+  { id: "skills", label: "技能" },
   { id: "system", label: "系统" },
   { id: "voice", label: "语音" },
   { id: "mcp", label: "MCP 扩展" },
@@ -100,11 +133,32 @@ export function SettingsPanel({
   // 401 时不再无限停在「加载中…」：给出令牌输入口，写入本地后重新拉取
   const [needToken, setNeedToken] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
+  // 用户是否真的编辑过「访问令牌」输入框。
+  // 必要性：GET /api/settings 回传的是打码值（如 to*********56），
+  // 若保存时无条件 setToken(打码值)，本地凭据就被替换成假令牌 → 之后所有请求 401，
+  // 且每次保存都会复发，用户被自己锁在门外（只能清 localStorage 才恢复）。
+  const [tokenDirty, setTokenDirty] = useState(false);
   const [loadError, setLoadError] = useState("");
+  // 结构化长期记忆（USER.md / FACT.md）：独立于「保存」按钮，即时写入
+  const [profileForm, setProfileForm] = useState<{ user: string; facts: string } | null>(null);
+  const [profileMsg, setProfileMsg] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+  // 审批权限名单（全局白名单 / 黑名单 / 会话白名单）
+  const [rules, setRules] = useState<ApprovalRules | null>(null);
+  // 知识库与技能（能力面）：只读浏览 + 删除；条目写入只经 kb_add 工具（走审批）
+  const [kbItems, setKbItems] = useState<KbItem[]>([]);
+  const [kbMsg, setKbMsg] = useState("");
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillsDir, setSkillsDir] = useState("");
 
   // Plan/Act 模式直接走 store：切换即持久化（局部 PUT，不随「保存」按钮走）
   const agentMode = useAgentStore((s) => s.agentMode);
   const setAgentMode = useAgentStore((s) => s.setAgentMode);
+  // 手动压缩当前会话：需要会话 id 与压缩后重载消息
+  const sessionId = useAgentStore((s) => s.sessionId);
+  const loadSession = useAgentStore((s) => s.loadSession);
+  const [compacting, setCompacting] = useState(false);
+  const [compactMsg, setCompactMsg] = useState("");
 
   const load = async () => {
     setLoadError("");
@@ -123,6 +177,95 @@ export function SettingsPanel({
     }
     if (p.status === "fulfilled") setProviders(p.value.providers);
     if (t.status === "fulfilled") setTools(t.value.tools);
+    // 记忆档案与权限名单：失败不影响设置面板主流程
+    try {
+      const pf = await getProfile();
+      setProfileForm({ user: pf.user, facts: pf.facts });
+    } catch {
+      /* 旧后端无该端点时静默 */
+    }
+    try {
+      const r = await getApprovalRules();
+      // 归一化：旧后端/异常响应可能缺字段，缺了就是空名单——不能让它炸掉整个面板
+      setRules({ global: r?.global ?? [], deny: r?.deny ?? [], sessions: r?.sessions ?? {} });
+    } catch {
+      /* 同上 */
+    }
+    // 知识库与技能：能力面只读浏览
+    try {
+      setKbItems(await listKb());
+    } catch {
+      setKbItems([]);
+    }
+    try {
+      const sk = await getSkills();
+      // 归一化：响应缺字段时退化为空列表（旧后端/异常响应不能让面板崩）
+      setSkills(Array.isArray(sk?.skills) ? sk.skills : []);
+      setSkillsDir(typeof sk?.dir === "string" ? sk.dir : "");
+    } catch {
+      setSkills([]);
+    }
+  };
+
+  /** 立即压缩当前会话：把较早历史归档成摘要，保留最近若干条原文。 */
+  const compactNow = async () => {
+    if (!sessionId) {
+      setCompactMsg("先开始一个会话再压缩");
+      return;
+    }
+    setCompacting(true);
+    setCompactMsg("");
+    try {
+      const r = await compactSession(sessionId, 10);
+      if (r.ok) {
+        setCompactMsg(`已归档 ${r.archived_messages ?? 0} 条，保留最近 ${r.kept ?? 10} 条`);
+        await loadSession(sessionId);
+      } else {
+        setCompactMsg(r.reason || "无需压缩");
+      }
+    } catch (e) {
+      setCompactMsg((e as Error).message || "压缩失败");
+    } finally {
+      setCompacting(false);
+    }
+  };
+
+  /** 删除知识库条目：不可逆（无备份），必须二次确认。 */
+  const removeKb = async (item: KbItem) => {
+    if (!window.confirm(`删除知识库条目「${item.title}」？此操作不可撤销。`)) return;
+    setKbMsg("");
+    try {
+      await deleteKb(item.id);
+      setKbItems((list) => list.filter((k) => k.id !== item.id));
+      setKbMsg("已删除");
+    } catch (e) {
+      setKbMsg((e as Error).message || "删除失败");
+    }
+  };
+
+  /** 立即写入记忆档案（不走「保存」按钮：人设/事实是独立文件，即时生效）。 */
+  const saveProfile = async () => {
+    if (!profileForm) return;
+    setProfileSaving(true);
+    setProfileMsg("");
+    try {
+      const r = await putProfile(profileForm);
+      setProfileForm({ user: r.user, facts: r.facts });
+      setProfileMsg("已保存（下一轮对话生效）");
+    } catch (e) {
+      setProfileMsg((e as Error).message || "保存失败");
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const clearRule = async (scope: "deny" | "global" | `session:${string}`, tool = "") => {
+    try {
+      const r = await clearApprovalRules(scope, tool);
+      setRules(r.rules);
+    } catch {
+      /* 忽略：下次打开会重新拉取 */
+    }
   };
 
   useEffect(() => {
@@ -141,8 +284,7 @@ export function SettingsPanel({
             </button>
           </div>
           {needToken ? (
-            <div className="group">
-              <p className="group-title">需要访问令牌</p>
+            <CollapsibleGroup title="需要访问令牌" defaultOpen>
               <p className="hint">
                 本服务已设置访问令牌（局域网保护）。在这里输入一次令牌即可打开设置；
                 忘记令牌可在设备上执行 <code>python -m agentd.main --clear-token</code> 清除。
@@ -164,7 +306,7 @@ export function SettingsPanel({
               >
                 解锁设置
               </button>
-            </div>
+            </CollapsibleGroup>
           ) : (
             <p className="center-muted">{loadError || "加载中…"}</p>
           )}
@@ -213,11 +355,27 @@ export function SettingsPanel({
           mcp: form.server?.mcp ?? [],
         },
         mcp_client: form.mcp_client ?? { enabled: false, servers: [], timeout: 15 },
+        // 运行参数 / 上下文 / 记忆：面板里可调，必须一起提交（后端会做范围收敛）
+        agent: form.agent,
+        context: form.context,
+        memory: form.memory,
         user_prefs: form.user_prefs ?? "",
       });
-      // 局域网令牌同步到本地，后续请求自动携带
-      setToken((form.server?.token ?? "").trim());
-      setMsg("已保存");
+      // 只在用户真的改过令牌时才同步到本地：
+      // 未改动说明 form 里是后端回传的打码占位符，写入会把自己锁死（见 tokenDirty 注释）
+      let msg = "已保存";
+      if (tokenDirty) {
+        const t = (form.server?.token ?? "").trim();
+        if (t) {
+          setToken(t);
+        } else {
+          // 清空输入框：后端把空值当"不修改"（防止打码占位被写进去），服务端令牌保持不变；
+          // 本地凭据跟着保持不动，否则会出现"服务端有令牌、本地没有 → 全部 401"的错位
+          msg = "已保存（令牌未变更：面板清空不算清除，请在设备命令行执行 --clear-token 清除）";
+        }
+        setTokenDirty(false);
+      }
+      setMsg(msg);
       setTimeout(onClose, 800);
     } catch (e) {
       setMsg((e as Error).message || "保存失败");
@@ -239,8 +397,7 @@ export function SettingsPanel({
         {mock && <p className="mock-banner">当前是离线演示模式（--mock），下面的配置不影响演示。</p>}
 
         {/* 外观 */}
-        <div className="group">
-          <p className="group-title">外观</p>
+        <CollapsibleGroup title="外观" summary={theme === "dark" ? "深色" : theme === "light" ? "浅色" : "跟随系统"} defaultOpen>
           <div className="field">
             <label>主题</label>
             <div className="theme-row">
@@ -258,11 +415,10 @@ export function SettingsPanel({
               ))}
             </div>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         {/* 智能体工作模式：Plan 先出计划待批准 / Act 直接执行 */}
-        <div className="group">
-          <p className="group-title">智能体模式</p>
+        <CollapsibleGroup title="智能体模式" summary={agentMode === "plan" ? "先计划" : "直接执行"}>
           <div className="field">
             <label>工作方式</label>
             <div className="mode-row">
@@ -281,11 +437,10 @@ export function SettingsPanel({
             </div>
             <p className="hint">「先计划」下，复杂任务会先给你一张计划卡片，批准后才真正执行。</p>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         {/* 模型 */}
-        <div className="group">
-          <p className="group-title">模型</p>
+        <CollapsibleGroup title="模型" summary={form.llm.model ? `${form.llm.provider} · ${form.llm.model}` : "未配置"} defaultOpen>
           <div className="field">
             <label>模型厂商</label>
             <select value={form.llm.provider} onChange={(e) => pickProvider(e.target.value)}>
@@ -353,11 +508,10 @@ export function SettingsPanel({
               )}
             </div>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         {/* 权限与安全 */}
-        <div className="group">
-          <p className="group-title">权限与安全</p>
+        <CollapsibleGroup title="权限与安全" summary={MODES.find((m) => m.v === form.permission_mode)?.label ?? form.permission_mode}>
           <div className="field">
             <label>工具权限</label>
             <div className="mode-row">
@@ -379,10 +533,13 @@ export function SettingsPanel({
             <label>局域网访问令牌（可选）</label>
             <input
               value={form.server?.token ?? ""}
-              onChange={(e) => setForm((f) => (f ? { ...f, server: { ...f.server, token: e.target.value } } : f))}
+              onChange={(e) => {
+                setTokenDirty(true);
+                setForm((f) => (f ? { ...f, server: { ...f.server, token: e.target.value } } : f));
+              }}
               placeholder="留空 = 仅本机可访问"
             />
-            <p className="hint">只要此处非空，所有 /api 请求（含本机）都必须带 Authorization: Bearer &lt;令牌&gt;；忘记令牌可在设备上执行 python -m agentd.main --clear-token 清除。</p>
+            <p className="hint">只要此处非空，所有 /api 请求（含本机）都必须带 Authorization: Bearer &lt;令牌&gt;；面板里清空不算清除（避免误删），清除请在设备上执行 python -m agentd.main --clear-token。</p>
           </div>
           <div className="field">
             <label>审批超时（秒）</label>
@@ -399,11 +556,161 @@ export function SettingsPanel({
             />
             <p className="hint">等待审批超过该时长自动拒绝（安全优先）</p>
           </div>
-        </div>
+        </CollapsibleGroup>
+
+        {/* 运行参数（此前只能在 config.json 里改） */}
+        <CollapsibleGroup title="运行参数" summary={`工具链 ${form.agent?.max_tool_chain_depth ?? 20} · 重试 ${form.agent?.max_tool_retries ?? 2}`}>
+          <div className="field">
+            <label htmlFor="cfg-chain-depth">工具调用链上限</label>
+            <input
+              id="cfg-chain-depth"
+              type="number"
+              min={3}
+              max={50}
+              value={form.agent?.max_tool_chain_depth ?? 20}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, agent: { ...(f.agent ?? { max_tool_retries: 2, max_tool_chain_depth: 20 }), max_tool_chain_depth: Number(e.target.value) || 20 } } : f
+                )
+              }
+            />
+            <p className="hint">单次请求最多连续调用多少次工具（防死循环），3–50。</p>
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-retries">只读工具失败重试次数</label>
+            <input
+              id="cfg-retries"
+              type="number"
+              min={0}
+              max={5}
+              value={form.agent?.max_tool_retries ?? 2}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, agent: { ...(f.agent ?? { max_tool_retries: 2, max_tool_chain_depth: 20 }), max_tool_retries: Number(e.target.value) || 0 } } : f
+                )
+              }
+            />
+            <p className="hint">
+              仅对只读（safe）工具的瞬时失败生效；发短信/写文件/shell 等写操作绝不重试，避免重复副作用。
+            </p>
+          </div>
+        </CollapsibleGroup>
+
+        {/* 上下文与记忆 */}
+        <CollapsibleGroup title="上下文与记忆" summary={form.context?.budget_tokens ? `${form.context.budget_tokens} tokens` : "不限制预算"}>
+          <div className="field">
+            <label htmlFor="cfg-budget">上下文预算（tokens，0 = 不限制）</label>
+            <input
+              id="cfg-budget"
+              type="number"
+              min={0}
+              max={200000}
+              step={1000}
+              value={form.context?.budget_tokens ?? 0}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, context: { ...(f.context ?? { budget_tokens: 0, auto_compress: true, compress_threshold: 0.8 }), budget_tokens: Number(e.target.value) || 0 } } : f
+                )
+              }
+            />
+            <p className="hint">按估算占用触发早期历史归档；工具结果也会按该预算截断（留头留尾）。</p>
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-threshold">压缩触发阈值（预算占用比例）</label>
+            <input
+              id="cfg-threshold"
+              type="number"
+              min={0.5}
+              max={0.95}
+              step={0.05}
+              value={form.context?.compress_threshold ?? 0.8}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, context: { ...(f.context ?? { budget_tokens: 0, auto_compress: true, compress_threshold: 0.8 }), compress_threshold: Number(e.target.value) || 0.8 } } : f
+                )
+              }
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-autocompress">
+              <input
+                id="cfg-autocompress"
+                type="checkbox"
+                checked={form.context?.auto_compress ?? true}
+                onChange={(e) =>
+                  setForm((f) =>
+                    f ? { ...f, context: { ...(f.context ?? { budget_tokens: 0, auto_compress: true, compress_threshold: 0.8 }), auto_compress: e.target.checked } } : f
+                  )
+                }
+              />{' '}
+              自动压缩早期历史为摘要
+            </label>
+            <p className="hint">关闭后不做自动归档（仍会为不超窗口而裁剪上下文，但不写入长期记忆）。</p>
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-search-limit">每轮注入的检索条数</label>
+            <input
+              id="cfg-search-limit"
+              type="number"
+              min={1}
+              max={20}
+              value={form.memory?.search_limit ?? 5}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, memory: { ...(f.memory ?? MEMORY_DEFAULTS), search_limit: Number(e.target.value) || 5 } } : f
+                )
+              }
+            />
+            <p className="hint">跨会话记忆（向量 + 关键词 RRF 融合）注入 system 的条数上限。</p>
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-summarize-turns">摘要触发轮数</label>
+            <input
+              id="cfg-summarize-turns"
+              type="number"
+              min={3}
+              max={50}
+              value={form.memory?.summarize_every_n_turns ?? 10}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, memory: { ...(f.memory ?? MEMORY_DEFAULTS), summarize_every_n_turns: Number(e.target.value) || 10 } } : f
+                )
+              }
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-retention">记忆保留天数（0 = 永久）</label>
+            <input
+              id="cfg-retention"
+              type="number"
+              min={0}
+              max={3650}
+              value={form.memory?.retention_days ?? 90}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, memory: { ...(f.memory ?? MEMORY_DEFAULTS), retention_days: Number(e.target.value) || 0 } } : f
+                )
+              }
+            />
+            <p className="hint">启动时清理超过该天数的消息与记忆（含分页归档）。</p>
+          </div>
+          <div className="field">
+            <label>立即压缩当前会话</label>
+            <div className="row-btns">
+              <button className="btn sm" onClick={() => void compactNow()} disabled={compacting}>
+                {compacting ? "压缩中…" : "把早期消息压成摘要"}
+              </button>
+              {compactMsg && <span className="hint">{compactMsg}</span>}
+            </div>
+            <p className="hint">
+              保留最近 10 条原文，其余归档为摘要（与自动分页同一套机制）；会话很长时手动做一次，
+              后续对话仍能记得要点。
+            </p>
+          </div>
+        </CollapsibleGroup>
 
         {/* MCP 服务器（可选接入） */}
-        <div className="group">
-          <p className="group-title">MCP 服务器（可选）</p>
+        <CollapsibleGroup title="MCP 服务器（可选）" summary={`${form.server?.mcp?.length ?? 0} 个服务器`}>
           <div className="field">
             <label>接入列表（每行一个：名称 | 启动命令 | 参数）</label>
             <textarea
@@ -435,11 +742,10 @@ export function SettingsPanel({
               MCP 是通用工具协议（Linux 基金会托管）。每行一个：名称 | 命令 | 参数。保存重启后自动连接，其工具会出现在「手机能力」里（默认需审批）。
             </p>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         {/* MCP Client（PocketMind 调用外部 MCP 服务器） */}
-        <div className="group">
-          <p className="group-title">MCP Client（调用外部 MCP）</p>
+        <CollapsibleGroup title="MCP Client（调用外部 MCP）" summary={form.mcp_client?.enabled ? "已启用" : "未启用"}>
           <div className="field">
             <label className="checkbox-row">
               <input
@@ -482,11 +788,10 @@ export function SettingsPanel({
             />
             <p className="hint">需先安装对应 MCP Server 依赖（如 npx 包），且外部服务器需可从手机访问。</p>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         {/* 长期偏好（跨会话记忆） */}
-        <div className="group">
-          <p className="group-title">长期偏好</p>
+        <CollapsibleGroup title="长期偏好" summary={form.user_prefs?.trim() ? "已填写" : "未填写"}>
           <div className="field">
             <label>我希望 Agent 记住的事</label>
             <textarea
@@ -497,16 +802,124 @@ export function SettingsPanel({
             />
             <p className="hint">这段文字会写进每次对话的系统提示（存在本机，不会上传）。</p>
           </div>
-        </div>
+        </CollapsibleGroup>
+
+        {/* 记忆档案（USER.md / FACT.md，结构化长期记忆；独立保存、即时生效） */}
+        <CollapsibleGroup title="记忆档案" summary={(profileForm?.user?.trim() || profileForm?.facts?.trim()) ? "已有内容" : "空"}>
+          <div className="field">
+            <label>用户画像（USER.md）</label>
+            <textarea
+              rows={3}
+              value={profileForm?.user ?? ""}
+              onChange={(e) => setProfileForm((f) => ({ user: e.target.value, facts: f?.facts ?? "" }))}
+              placeholder={"例如：\n老王，杭州，做硬件；周末不处理工作消息"}
+            />
+          </div>
+          <div className="field">
+            <label>长期事实（FACT.md，一行一条）</label>
+            <textarea
+              rows={4}
+              value={profileForm?.facts ?? ""}
+              onChange={(e) => setProfileForm((f) => ({ user: f?.user ?? "", facts: e.target.value }))}
+              placeholder={"例如：\n- 家里 WiFi 密码在客厅抽屉的便签上\n- 车是 2021 款凯美瑞，保养周期 1 万公里"}
+            />
+            <p className="hint">
+              存在本机 <code>~/.agent/termux-agent/memory/</code>，可直接编辑或备份；
+              Agent 也可用 remember_fact 工具自行追加事实。与「长期偏好」不同：这里是结构化档案，
+              偏好是自由文本。
+            </p>
+          </div>
+          <div className="row-btns">
+            <button className="btn sm" onClick={() => void saveProfile()} disabled={profileSaving || !profileForm}>
+              {profileSaving ? "保存中…" : "保存档案"}
+            </button>
+            {profileMsg && <span className="hint">{profileMsg}</span>}
+          </div>
+        </CollapsibleGroup>
+
+        {/* 审批权限名单（黑名单全局生效，误点后可在这里撤销） */}
+        <CollapsibleGroup title="审批权限名单" summary={`始终拒绝 ${rules?.deny?.length ?? 0} · 全局允许 ${rules?.global?.length ?? 0}`}>
+          <div className="field">
+            <label>始终拒绝（全局黑名单，优先级最高）</label>
+            {rules && (rules.deny?.length ?? 0) > 0 ? (
+              <ul className="rules-list">
+                {(rules.deny ?? []).map((t) => (
+                  <li key={t}>
+                    <code>{t}</code>
+                    <button className="btn mini" onClick={() => void clearRule("deny", t)}>撤销</button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">无。在审批卡上点「始终拒绝」会把工具加入这里。</p>
+            )}
+            <label>全局允许（所有会话免确认）</label>
+            {rules && (rules.global?.length ?? 0) > 0 ? (
+              <ul className="rules-list">
+                {(rules.global ?? []).map((t) => (
+                  <li key={t}>
+                    <code>{t}</code>
+                    <button className="btn mini" onClick={() => void clearRule("global", t)}>撤销</button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">无。在审批卡上点「全局允许」会把工具加入这里。</p>
+            )}
+          </div>
+        </CollapsibleGroup>
+
+        {/* 知识库（只读浏览 + 删除；新增只经 kb_add 工具，走审批） */}
+        <CollapsibleGroup title="知识库" summary={`${kbItems.length} 条`}>
+          <div className="field">
+            {kbItems.length > 0 ? (
+              <ul className="kb-list">
+                {kbItems.map((k) => (
+                  <li key={k.id}>
+                    <span className="kb-title">{k.title}</span>
+                    <span className="kb-size">{k.chars} 字</span>
+                    <button className="btn mini" onClick={() => void removeKb(k)}>删除</button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">还没有条目。让 Agent「把这份保修卡存进知识库」即可（写入会走审批）。</p>
+            )}
+            <p className="hint">
+              条目只在 Agent 主动调用 kb_search 时检索，不会自动塞进每轮对话——这正是让上下文保持干净的关键。
+            </p>
+            {kbMsg && <p className="hint">{kbMsg}</p>}
+          </div>
+        </CollapsibleGroup>
+
+        {/* 技能（只读展示：把 SKILL.md 目录放进 skills/ 即生效） */}
+        <CollapsibleGroup title="技能" summary={`${skills.length} 个`}>
+          <div className="field">
+            {skills.length > 0 ? (
+              <ul className="kb-list">
+                {skills.map((s) => (
+                  <li key={s.name}>
+                    <span className="kb-title">{s.name}</span>
+                    <span className="kb-size">{s.description}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">还没有技能。把任一带 SKILL.md 的技能目录放进下面的位置即可被识别。</p>
+            )}
+            <p className="hint">
+              目录：<code>{skillsDir || "~/.agent/termux-agent/skills/"}</code>
+              ；只有技能名与描述会进系统提示，正文由 Agent 按需读取（渐进披露）。
+            </p>
+          </div>
+        </CollapsibleGroup>
 
         {/* 工具能力（按分组展示） */}
-        <div className="group">
-          <div className="group-head">
-            <p className="group-title">工具能力（{tools.length} 项）</p>
-            <button className="btn mini" onClick={onExport} title="把所有会话与配置导出为 JSON 文件">
-              导出数据备份
-            </button>
-          </div>
+        <CollapsibleGroup
+          title={`工具能力（${tools.length} 项）`}
+          summary={`${tools.length} 项`}
+          action={<button className="btn mini" onClick={onExport} title="把所有会话与配置导出为 JSON 文件">导出备份</button>}
+        >
           <div className="field">
             {GROUP_NAMES.map((g) => {
               const items = tools.filter((t) => (t.group || "other") === g.id);
@@ -528,18 +941,17 @@ export function SettingsPanel({
             })}
             <p className="hint">「手机能力」依赖 termux-api：pkg install termux-api。「系统」为 shell 命令（危险）。文件操作（写/删）执行前自动备份，可在对话里一键撤销。</p>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         {/* 数据备份 */}
-        <div className="group">
-          <p className="group-title">数据备份</p>
+        <CollapsibleGroup title="数据备份">
           <div className="field">
             <p className="hint">
               一键把全部会话与设置导出为 JSON 文件（不含 API 密钥），用于本地备份留存；文件保存在你下载的位置。
             </p>
             <button className="btn" onClick={onExport}>导出全部数据</button>
           </div>
-        </div>
+        </CollapsibleGroup>
 
         <div className="sheet-foot">
           <button className="btn" onClick={onClose}>取消</button>
