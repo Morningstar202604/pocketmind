@@ -237,6 +237,9 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
 逐个套件的说明见 `smoke/README.md`。也可以单独跑某个套件——
 需要服务的那些从环境变量 `AGENTD_BASE` 读取服务地址（默认 `http://127.0.0.1:8799`）。
 
+已在 Windows（Git Bash）与 Linux（Ubuntu 24.04，Python 3.12 / Node 22）双平台实测：
+Linux 下 21 项全过且零跳过；计入 Playwright E2E 为 22/22。
+
 ## License
 
 Apache-2.0（本仓库实现见 [LICENSE](LICENSE)）

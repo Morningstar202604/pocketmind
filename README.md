@@ -236,6 +236,9 @@ Per-suite details are in `smoke/README.md`. Single suites can still be run alone
 the API-driven ones read the server base URL from `AGENTD_BASE` (default
 `http://127.0.0.1:8799`).
 
+Verified on both Windows (Git Bash) and Linux (Ubuntu 24.04, Python 3.12 / Node 22):
+21 checks pass with 0 skips on Linux, 22/22 including Playwright E2E.
+
 ## License
 
 Apache-2.0 (this implementation, see [LICENSE](LICENSE))
