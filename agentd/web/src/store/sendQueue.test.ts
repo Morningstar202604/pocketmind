@@ -84,4 +84,28 @@ describe("发送队列：消息不被吞", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(sseChat).not.toHaveBeenCalled();
   });
+
+  // 回归：新建会话会走 onNewSession → loadSession（先清空再异步回填）。
+  // 用户在这两步之间发消息时，旧实现会把刚插入的「用户消息 + 助手占位」抹掉，
+  // 界面退回空态、只剩一条停在「正在思考…」的孤儿行（E2E 用例 3/4 偶发失败）。
+  it("会话加载期间的发送不会被回填覆盖", async () => {
+    mockStream(10);
+    // 让 /api/sessions/{id}/messages 慢一拍返回空历史
+    let release: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => (release = r));
+    get.mockImplementation((path: string) =>
+      path.includes("/messages") ? gate : Promise.resolve([])
+    );
+    useAgentStore.setState({ sessionId: "s1", messages: [] });
+
+    const loading = useAgentStore.getState().loadSession("s1");
+    const sending = useAgentStore.getState().send("你好"); // 加载尚未返回时发送
+    await sending;
+    release([]);
+    await loading;
+
+    const msgs = useAgentStore.getState().messages;
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(msgs[0].parts[0]).toMatchObject({ type: "text", text: "你好" });
+  });
 });

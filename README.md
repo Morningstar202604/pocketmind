@@ -228,9 +228,9 @@ Exit code is 0 only when everything passes; failures are listed in the summary a
   a dist-freshness check (the committed `dist/` must match the current source,
   since phones build nothing).
 - **E2E** — Playwright (8-viewport mobile matrix), opt-in via `--with-e2e`; needs
-  `npx playwright install chromium` once. Known flaky: two specs (`app.spec.ts` "收到：你好"
-  and "工具卡显示执行耗时") intermittently time out on a cold data dir — they fail on the
-  pre-existing tree too, so treat an E2E failure there as noise until those specs are fixed.
+  `npx playwright install chromium` once. Each run starts from a unique empty data dir
+  and the webServer is always launched fresh, so a leftover mock instance can never be
+  reused with another run's `permission_mode` or session history.
 
 Per-suite details are in `smoke/README.md`. Single suites can still be run alone —
 the API-driven ones read the server base URL from `AGENTD_BASE` (default

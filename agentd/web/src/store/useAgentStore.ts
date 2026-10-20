@@ -42,6 +42,8 @@ let abortController: AbortController | null = null;
 // 前端消息队列：同一会话连续发送时排队执行（服务端亦有队列作为 API 层保险）
 let sendQueue: Array<{ text: string; aid: string }> = [];
 let running = false;
+// 会话消息代数：每次本地插入新消息时自增，用来识别「加载响应已过期」
+let msgGen = 0;
 
 // 后端健康检查轮询 id（用于 clearInterval）
 let healthTimer: ReturnType<typeof setInterval> | null = null;
@@ -353,12 +355,24 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     },
 
     async loadSession(sid: string) {
-      set({ sessionId: sid, messages: [], todos: [], error: "" });
+      // 请求发出前先记代数：等待期间只要 send 插入过新消息（msgGen 自增），
+      // 这次响应就是过期的，不能再清空或回填——否则会把刚插入的
+      // 「用户消息 + 助手占位」整体抹掉，界面退回空态、只剩一条停在
+      // 「正在思考…」的孤儿行（E2E 用例 3/4 偶发失败的真实原因）。
+      const gen = msgGen;
+      // 切会话必然换一份消息；但如果本次是同一会话的重复加载（新建后立刻发消息
+      // 就属于这种），本地已经有的消息必须留着，不能用空数组盖掉。
+      const sameSession = get().sessionId === sid;
+      set((st) => ({
+        sessionId: sid,
+        messages: sameSession ? st.messages : [],
+        todos: [],
+        error: "",
+      }));
       try {
         const msgs = await api.get<StoredMessage[]>(`/api/sessions/${sid}/messages`);
-        // 竞态保护：期间用户已切到别的会话，则丢弃这次过期响应
         const cur = get().sessionId;
-        if (cur === sid) set({ messages: restore(msgs) });
+        if (cur === sid && gen === msgGen) set({ messages: restore(msgs) });
       } catch {
         /* 会话可能已删 */
       }
@@ -393,6 +407,7 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
       const aid = uid("a");
       // 队列里已有在等/正在执行的请求时，新消息立即显示并排队
       const queued = running || sendQueue.length > 0;
+      msgGen += 1;
       set((s) => ({
         messages: [
           ...s.messages,

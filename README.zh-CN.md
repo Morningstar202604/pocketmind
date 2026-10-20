@@ -230,9 +230,9 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
 - **前端**——`tsc -b --noEmit` + 64 个 Vitest 单测 + 生产构建 +
   dist 新鲜度检查（提交的 `dist/` 必须与当前源码一致，因为手机不做构建）。
 - **E2E**——Playwright（8 视口移动适配矩阵），用 `--with-e2e` 显式开启，
-  首次需 `npx playwright install chromium`。已知不稳定：`app.spec.ts` 的「收到：你好」
-  与「工具卡显示执行耗时」两例在空数据目录下会间歇超时（原始提交同样失败），
-  修好这两例之前，把它们偶发失败当噪音处理。
+  首次需 `npx playwright install chromium`。每次运行都用独立的空数据目录，
+  webServer 也强制自起，不会复用上一轮残留的 mock 实例（那会带进别人的
+  `permission_mode` 与会话历史）。
 
 逐个套件的说明见 `smoke/README.md`。也可以单独跑某个套件——
 需要服务的那些从环境变量 `AGENTD_BASE` 读取服务地址（默认 `http://127.0.0.1:8799`）。
