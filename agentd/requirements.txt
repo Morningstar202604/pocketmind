@@ -17,7 +17,10 @@ python-multipart>=0.0.31
 slowapi>=0.1.9
 # OpenTelemetry 可观测性（main.py 的 create_app 无条件调用 setup_telemetry）
 opentelemetry-sdk>=1.24
-opentelemetry-instrumentation-fastapi>=0.46
+# 注意：instrumentation 系列用的是独立的 0.x beta 版本线，发布号形如 0.46b0 / 0.66b1。
+# 按 PEP 440，0.46b0 < 0.46，所以写 ">=0.46" 会匹配不到任何版本——全新安装直接失败。
+# 必须显式带 beta 后缀，且与 opentelemetry-sdk 的 1.x 线配套使用（0.4x b0 ↔ 1.2x）。
+opentelemetry-instrumentation-fastapi>=0.46b0
 # OTEL OTLP/gRPC 导出（仅当设置 OTEL_TRACES_EXPORTER=otlp 时导入）
 opentelemetry-exporter-otlp-proto-grpc>=1.24
 

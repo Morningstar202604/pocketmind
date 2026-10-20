@@ -141,6 +141,11 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p7 横向审计回归" run_py smoke/p7_cross_audit_test.py
   step "p6 首次使用（未配置模型，自起服务）" run_py smoke/p6_unconfigured_test.py
 
+  # 依赖清单自检：requirements.txt 的版本约束必须真实可满足。
+  # 真实事故：instrumentation 系列只发 0.x beta，写 ">=0.46" 严格高于所有 0.46b*，
+  # 全新安装（干净的 Linux/Docker/Termux）直接失败，而装过旧版的环境完全无感。
+  step "依赖清单自检（requirements.txt 版本约束可满足）" run_py tests/check_requirements.py
+
   # 部署链路自检：无令牌 --lan 必须拒启 / AGENT_TOKEN 引导 / --clear-token 恢复
   deploy_self_check() {
     local port home pid code ok=1 refuse_log boot_log
