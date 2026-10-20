@@ -31,12 +31,16 @@
 
 1. **定版本**：按语义化版本（SemVer）——修 Bug 升补丁位、新功能升次版本、破坏性改动升主版本
 2. **同步文档**：改代码的同时更新 README（版本/截图，如界面有变）与依赖清单（requirements / package.json）
-3. **本地验证**：跑通测试与构建（与 CI 同款命令），全绿才继续
-4. **合并**：以 PR 方式合入 `main`，CI 全绿后合并
+3. **本地验证**：`bash tests/run_all.sh` 必须全绿（后端 16 个套件 + 前端
+   typecheck/单测/构建/dist 新鲜度）；需要 E2E 时加 `--with-e2e`
+4. **合并**：以 PR 方式合入 `main`，门禁全绿后合并
 5. **打标签**：`git tag -a vX.Y.Z -m "vX.Y.Z"` 并推送（`git push origin vX.Y.Z`）
-6. **同步镜像**：主仓库在 GitCode（`gitcode.com/badhope/pocketmind`），CI 跑在 GitHub 镜像
-   （`github.com/X33834/pocketmind`）上。合入后必须把 `main` 与标签推到镜像，否则 Actions
-   检查的是旧代码，门禁形同虚设：`git push github main --tags`
+6. **同步镜像**：主仓库在 GitCode（`gitcode.com/badhope/pocketmind`），镜像在 Gitee
+   （`gitee.com/badhope/pocketmind`）与 GitHub（`github.com/X33834/pocketmind`）。
+   克隆默认只有 `origin`，先各加一个远程再推，保持三处内容一致：
+   `git remote add gitee https://gitee.com/badhope/pocketmind`、
+   `git remote add github https://github.com/X33834/pocketmind`，
+   然后 `git push gitee main --tags`、`git push github main --tags`
 7. **发布**：基于该 tag 在镜像仓库创建 Release，Release Notes 写清本次变更要点
    （官网 `website/index.html` 为自包含单页，随仓库静态托管，无独立的 Pages 流水线）
 

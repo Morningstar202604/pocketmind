@@ -177,4 +177,4 @@
    6. 更新 `FINAL_REPORT.md`/README 徽章与实际测试结果一致；
    7. 修复 `--home` 数据目录分裂问题；
    8. 提交前重建 dist，让 CI「dist freshness」门禁通过。
-3. **CI 信任度**：当前 CI 门禁（`ci.yml`）引用 11 个后端套件，但其中 4 个在当前代码上失败——建议先把 CI 跑绿作为提交硬门槛，并补上对 `tests/eval_approval.py` 的 pytest 收集步骤（在 CI 中显式 `python -m pytest tests/`）。
+3. **CI 信任度**：（当时）CI 门禁（`ci.yml`，已于 2026-10-18 移除，现由 `tests/run_all.sh` 承担）引用 11 个后端套件，但其中 4 个在当前代码上失败——建议先把 CI 跑绿作为提交硬门槛，并补上对 `tests/eval_approval.py` 的 pytest 收集步骤（在 CI 中显式 `python -m pytest tests/`）。

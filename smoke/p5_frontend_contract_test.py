@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P5 前端契约回归（需 mock 服务在 8799）：数据可携性 + 运行参数回环 + 工具分组。
+"""P5 前端契约回归（需 mock 服务；地址取 AGENTD_BASE，默认 8799）：数据可携性 + 运行参数回环 + 工具分组。
 
 对应 .aqg/code-construction/poketmind-frontend-brand.md 的 R1/R2 与工具分组可见性：
   R1 导出必须覆盖全部本机数据（档案记忆 / 任务清单 / 知识库）
@@ -11,11 +11,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
-BASE = "http://127.0.0.1:8799"
+BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
 passed, failed = [], []
 
 

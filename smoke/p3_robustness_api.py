@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""P3 健壮性 API 回归（需 mock 服务在 8799）：非法输入必须 400 而非 500。"""
+"""P3 健壮性 API 回归（需 mock 服务；地址取 AGENTD_BASE，默认 8799）：非法输入必须 400 而非 500。"""
 
 import json
+import os
 import sys
 import urllib.request
 
-BASE = "http://127.0.0.1:8799"
+BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
 passed, failed = [], []
 
 

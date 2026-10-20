@@ -11,6 +11,14 @@ DIR="${FAKETERMUX_DIR:-/tmp/faketermux}"
 rm -rf "$DIR"
 mkdir -p "$DIR"
 
+# Windows 的 shutil.which 按 PATHEXT 找可执行文件，裸文件名的 bash 脚本它认不出来
+# （服务端在那条路径上判定 "termux-api 未安装"，m5 的电池用例就被静默跳过）。
+# 所以非 POSIX 平台再补一个 .cmd 垫片，内容同样是打印固定的 JSON。
+IS_WINDOWS=0
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) IS_WINDOWS=1 ;;
+esac
+
 make_stub() {
   local name="$1" output="$2"
   cat > "$DIR/$name" <<EOF
@@ -21,6 +29,11 @@ $output
 STUB_EOF
 EOF
   chmod +x "$DIR/$name"
+  if [ "$IS_WINDOWS" = 1 ]; then
+    printf '@echo off
+%s
+' "$output" > "$DIR/$name.cmd"
+  fi
 }
 
 # 系统
@@ -85,5 +98,6 @@ make_stub termux-share '{"status": "ok"}'
 make_stub termux-download '{"status": "ok"}'
 make_stub termux-open '{"status": "ok"}'
 
-echo "faketermux stubs created at $DIR ($(ls "$DIR" | wc -l) commands)"
+COUNT=$(find "$DIR" -type f ! -name "*.cmd" | wc -l | tr -d " ")
+echo "faketermux stubs created at $DIR ($COUNT commands)"
 echo "Add to PATH: export PATH=\"$DIR:\$PATH\""

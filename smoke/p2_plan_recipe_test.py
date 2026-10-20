@@ -9,10 +9,11 @@
   - POST /api/recipes/{id}/apply 幂等地创建定时任务，列表里 applied 变 true。
 """
 import json
+import os
 import sys
 import urllib.request
 
-BASE = "http://127.0.0.1:8799"
+BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
 passed, failed = [], []
 
 

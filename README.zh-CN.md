@@ -2,8 +2,8 @@
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>口袋里能真正操作你手机的 always-on Agent</b> —— 本地优先 · 隐私保护 · Termux 原生</p>
-  <img src="https://img.shields.io/github/actions/workflow/status/X33834/pocketmind/ci.yml?branch=main&label=CI" alt="CI" />
-  <img src="https://img.shields.io/badge/tests-11%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-16%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="本地门禁" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
   <br />
@@ -21,7 +21,7 @@
 - **审批是安全模型，不是 UI 点缀**：三级授权（允许一次 / 本会话始终 / 全局）+ 全局拒绝名单，服务端强制执行；超时自动拒绝，外部 MCP 工具永远跳不过审批；
 - **桌面 / Telegram 远程遥控**：内置 stdio MCP Server 把 38 个工具暴露给 Claude Desktop / Cline / Codex；Telegram 网关可让 agent 从任何设备驱动与审批；
 - **手机端零 Node**：构建好的 `dist/` 直接入库，Termux 里只跑 `install.sh`；可装成 PWA，也可打 WebView 壳 APK（`termux/apk-shell/`）；
-- **验证而非口号**：CI 跑 11 个后端回归套件 + 前端类型检查、64 个单测、生产构建与 dist 新鲜度检查。
+- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完 16 个后端回归套件 + 前端类型检查、64 个单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。
 
 ## 架构
 
@@ -113,7 +113,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React 前端（Vite+TS），构建产物 `dist/` 由 agentd 直接托管 |
 | `termux/` | 手机端：`install.sh` 一键装依赖 / `start.sh` 启动 / `boot.sh` 开机自启 |
 | `config/` | 预设配方 `recipes.json`（定时任务模板）；LLM 厂商预设见 `agentd/config.py` 的 `PRESETS` |
-| `smoke/` | 回归测试 15 个套件（agent 深度 / 排队 / 定时任务 / 安全 / 配方 / MCP / Telegram / 横向审计 / 审批单测；POSIX 专用检查在非 Linux 上记为「跳过」而非失败） |
+| `smoke/` | 回归测试 14 个套件（agent 深度 / 排队 / 定时任务 / 安全 / 配方 / MCP / Telegram / 横向审计 / 审批单测；POSIX 专用检查在非 Linux 上记为「跳过」而非失败），全部由 `tests/run_all.sh` 统一调度 |
 
 ---
 
@@ -209,21 +209,33 @@ args=`["-m", "agentd.mcp_server"]`、cwd 指向本仓库根目录。
 `read_sms`、`run_shell` 等）；每个工具的 description 带风险前缀——
 `[safe]` 只读直跑，`[write]` / `[danger]` 桌面端模型应谨慎、高危操作需确认。
 
-## 验证（测试与 CI）
+## 验证（本地门禁）
 
-GitHub CI（镜像 `github.com/X33834/pocketmind`）每次 push 自动跑：
+一条命令跑完整个门禁——与仓库此前在 GitHub Actions 上执行的是同一套检查：
 
-- **后端**——11 个回归套件：compileall、ruff、p0/p4/eval_approval（不需起服务），
-  m5/p0_queue/p1_jobs/p5（对活动 mock 服务 + faketermux 桩），
-  security/p2/p3 健壮性/p3 性能泄漏、MCP 与 Telegram 网关、
-  部署链路自检（`--lan` 无令牌拒启 / `AGENT_TOKEN` 引导 / `--clear-token` 恢复）、
-  p6 首次使用（未配模型）与 p7 横向审计套件。
+```bash
+bash tests/run_all.sh              # 后端 + 前端
+bash tests/run_all.sh --backend    # 只跑后端
+bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
+```
+
+全部通过才返回 0；有失败项会在末尾汇总列出，并返回非 0。
+
+- **后端**——16 个 Python 套件，外加 compileall、ruff 与部署链路自检：p0 回归 / p4 agent 深度 / 审批单测 /
+  p3 健壮性单测 / 安全专项 / p3 性能与泄漏 / MCP / Telegram / p7 横向审计 /
+  p6 首次使用（未配模型）均无需起服务；m5 / p0 排队 / p1 定时任务 / p2 配方 /
+  p3 健壮性 API / p5 前端契约对活动 mock 服务执行（服务跑在自动挑选的空闲端口 +
+  faketermux 桩）。最后跑部署链路自检（`--lan` 无令牌拒启 / `AGENT_TOKEN` 引导 /
+  `--clear-token` 恢复）。
 - **前端**——`tsc -b --noEmit` + 64 个 Vitest 单测 + 生产构建 +
   dist 新鲜度检查（提交的 `dist/` 必须与当前源码一致，因为手机不做构建）。
-- **E2E**——Playwright（8 视口移动适配矩阵）仅手动触发。
+- **E2E**——Playwright（8 视口移动适配矩阵），用 `--with-e2e` 显式开启，
+  首次需 `npx playwright install chromium`。已知不稳定：`app.spec.ts` 的「收到：你好」
+  与「工具卡显示执行耗时」两例在空数据目录下会间歇超时（原始提交同样失败），
+  修好这两例之前，把它们偶发失败当噪音处理。
 
-本机自验：`cd agentd/web && npx tsc -b --noEmit && npm test`，
-以及按 `smoke/README.md` 逐个跑 `smoke/` 套件。
+逐个套件的说明见 `smoke/README.md`。也可以单独跑某个套件——
+需要服务的那些从环境变量 `AGENTD_BASE` 读取服务地址（默认 `http://127.0.0.1:8799`）。
 
 ## License
 

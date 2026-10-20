@@ -2,9 +2,19 @@
 
 ## 运行前提
 
-- `python -m agentd.main --mock --port 8799`（AGENT_HOME 用持久路径，如 `~/.agent-test/pa-test`）
+最省事的方式是从仓库根跑总门禁，它会把服务、桩和依赖都准备好：
+
+```bash
+bash tests/run_all.sh            # 后端全量 + 前端全量
+bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包含在内）
+```
+
+单独跑某个套件时才需要自己准备环境：
+
+- `python -m agentd.main --mock --port 8799`（AGENT_HOME 用持久路径，如 `~/.agent-test/pa-test`）。
+  端口可用环境变量改成别的地址：`AGENTD_BASE=http://127.0.0.1:9000 python smoke/m5_regression.py`
 - `/tmp/faketermux/` 25 个 termux 命令桩（**会被系统周期性清空**，出现"termux-api 未安装"时重建；
-  桩需返回真实格式，如 battery 输出 JSON 数组 `[{"status":...}]`）
+  桩需返回真实格式，如 battery 输出 JSON 数组 `[{"status":...}]`）；重建用 `bash tests/setup_faketermux.sh`（当前产出 24 个命令桩）
 
 ## 测试清单
 
@@ -17,7 +27,6 @@
 | `p7_cross_audit_test.py` | P7 横向审计修复回归：非 ASCII 令牌不 500、非法配置块不污染（否则设置页永久 500）、litellm/MCP env 密钥不回传、interval 极值 400、get_messages 取最近 N 条、run_shell 非零退出带 error、phone 写操作校验退出码、凭据目录不可读、MCP readOnlyHint 不降级、取消后不续跑、清空任务清单有服务端端点（刷新不复活）、delete_session 失败回滚、配置回退不绕范围收敛 | 49 |
 | `p0_queue_test.py` | P0 排队验收：并发——第一轮挂审批时第二轮应 `queued`，审批放行后自动执行 | 3 |
 | `p1_jobs_test.py` | P1 定时任务验收：创建 interval 任务 → 触发执行 → 启停 → 条件拒绝 → 删除 → jobs.db 持久化恢复 | 8 |
-| `mcp_demo_server.py` | MCP 最小 demo 服务器（stdio JSON-RPC），配合验证 agentd 的 MCP 客户端互通 | — |
 
 ## 单测链路（checkpoint/undo）
 

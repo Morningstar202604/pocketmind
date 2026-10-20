@@ -5,7 +5,7 @@
 ## 方式一：本机/VPS 一键部署（推荐）
 
 ```bash
-git clone https://gitcode.com/badhope/pocketmind && cd pocketmind   # 主仓库（GitHub 侧为 CI 镜像）
+git clone https://gitcode.com/badhope/pocketmind && cd pocketmind   # 主仓库（Gitee / GitHub 各有镜像）
 # root 用户：
 bash deploy/deploy.sh
 # 非 root：同样执行，自动走 nohup 分支（nginx 反代需 root，非 root 跳过）

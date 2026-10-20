@@ -6,7 +6,7 @@ import pathlib
 import sys
 import urllib.request
 
-BASE = "http://127.0.0.1:8799"
+BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
 passed, failed, skipped = [], [], []
 
 def req(method, path, body=None, timeout=20):

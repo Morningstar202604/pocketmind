@@ -24,11 +24,13 @@ python3 -m agentd.main --mock --port 8799   # 仓库根目录执行
 npm install -D @playwright/test
 npx playwright install chromium   # 首次安装浏览器（CI 用 --with-deps）
 npm run test:e2e                  # 自动拉起 mock 后端并跑 e2e/ 下用例
+# 或从仓库根一次跑全部门禁（含 E2E）：bash tests/run_all.sh --with-e2e
 ```
 
-- 配置见 `playwright.config.ts`：`webServer` 自动执行 `python -m agentd.main --mock --port 8799`，
+- 配置见 `playwright.config.ts`：`webServer` 自动执行 `python -m agentd.main --mock --port 8793`，
   并把 `AGENT_HOME` 指向 `/tmp/agentd-e2e`（隔离数据）。
-- 沙箱/离线环境装不了浏览器时：脚本与配置已就绪，在 CI 中以手动触发（`workflow_dispatch`）方式运行即可。
+- 沙箱/离线环境装不了浏览器时：脚本与配置已就绪，装好浏览器后本地 `bash tests/run_all.sh --with-e2e` 即可运行；
+  仓库已不依赖 GitHub Actions。
 - 本地若 `PLAYWRIGHT_BROWSERS_PATH` 指向旧目录，可临时覆盖：
   `PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npm run test:e2e`。
 

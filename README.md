@@ -2,8 +2,8 @@
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b> Local-first · Privacy-first · Native on Termux</p>
-  <img src="https://img.shields.io/github/actions/workflow/status/X33834/pocketmind/ci.yml?branch=main&label=CI" alt="CI" />
-  <img src="https://img.shields.io/badge/tests-11%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-16%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="Local gate" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
   <br />
@@ -21,7 +21,7 @@
 - **Approval is a security model, not a UI nicety** — three-level grants (once / always-this-session / global) plus a global deny list, all enforced server-side; timeouts auto-deny, and external MCP tools can never skip approval.
 - **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 38 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
 - **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
-- **Verified, not just claimed** — CI runs 11 backend regression suites, frontend typecheck + 64 unit tests + build + dist-freshness check.
+- **Verified, not just claimed** — `bash tests/run_all.sh` runs 16 backend regression suites plus frontend typecheck, 64 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
 
 ## Architecture
 
@@ -113,7 +113,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React frontend (Vite + TS); built `dist/` is served directly by agentd |
 | `termux/` | Phone side: `install.sh` one-click deps / `start.sh` launch / `boot.sh` boot autostart |
 | `config/` | Preset recipes `recipes.json` (job templates); LLM provider presets in `agentd/config.py` → `PRESETS` |
-| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit; 15 suites, all in CI) |
+| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit; 14 suites, all run by `tests/run_all.sh`) |
 
 ---
 
@@ -208,20 +208,33 @@ Same for Cline / Codex: add a stdio server entry — `command=python3`,
 
 ## Verification
 
-GitHub CI (mirror `github.com/X33834/pocketmind`) runs on every push:
+One command runs the whole gate — the same checks this repo used to run in GitHub Actions:
 
-- **Backend** — 11 regression suites: compileall, ruff, p0/p4/eval_approval (no-server),
-  m5/p0_queue/p1_jobs/p5 (against a live mock server + faketermux stubs),
-  security/p2/p3-robustness/p3-perf, MCP & Telegram gateways, deploy-path self-check
-  (`--lan` refuses to boot without a token, `AGENT_TOKEN` bootstrap, `--clear-token`),
-  p6 first-run (unconfigured) and p7 cross-audit suites.
+```bash
+bash tests/run_all.sh              # backend + frontend
+bash tests/run_all.sh --backend    # backend only
+bash tests/run_all.sh --with-e2e   # add Playwright (install browsers first)
+```
+
+Exit code is 0 only when everything passes; failures are listed in the summary at the end.
+
+- **Backend** — 16 Python suites plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
+  unit tests / p3 robustness unit / security / p3 perf & leaks / MCP / Telegram / p7
+  cross-audit / p6 first-run (unconfigured) need no server; m5 / p0_queue / p1_jobs /
+  p2 recipes / p3 robustness API / p5 frontend contract run against a mock server on an
+  auto-picked free port with faketermux stubs. A deploy-path self-check runs last
+  (`--lan` refuses to boot without a token, `AGENT_TOKEN` bootstrap, `--clear-token`).
 - **Frontend** — `tsc -b --noEmit` + 64 Vitest unit tests + production build +
   a dist-freshness check (the committed `dist/` must match the current source,
   since phones build nothing).
-- **E2E** — Playwright (8-viewport mobile matrix) runs on manual dispatch only.
+- **E2E** — Playwright (8-viewport mobile matrix), opt-in via `--with-e2e`; needs
+  `npx playwright install chromium` once. Known flaky: two specs (`app.spec.ts` "收到：你好"
+  and "工具卡显示执行耗时") intermittently time out on a cold data dir — they fail on the
+  pre-existing tree too, so treat an E2E failure there as noise until those specs are fixed.
 
-Locally: `cd agentd/web && npx tsc -b --noEmit && npm test`, and the `smoke/`
-suites per `smoke/README.md`.
+Per-suite details are in `smoke/README.md`. Single suites can still be run alone —
+the API-driven ones read the server base URL from `AGENTD_BASE` (default
+`http://127.0.0.1:8799`).
 
 ## License
 

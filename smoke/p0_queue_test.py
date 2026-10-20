@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """P0 排队验收（并发：第一轮挂审批时发第二轮）"""
 import json
+import os
 import sys
 import threading
 import time
 import urllib.request
 
-BASE = "http://127.0.0.1:8799"
+BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
 passed, failed = [], []
 
 def req(method, path, body=None, timeout=30):

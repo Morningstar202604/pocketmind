@@ -20,7 +20,8 @@
 ## 端口与目录
 
 - agentd 默认 `8787`，只绑 `127.0.0.1`；`--lan` 才绑 `0.0.0.0`
-- Vite 开发 `5173`（代理 `/api` → 8787）；CI 的 e2e mock 服务用 `8799`
+- Vite 开发 `5173`（代理 `/api` → 8787）；`tests/run_all.sh` 起 mock 服务时自动挑空闲端口，
+  单独跑某个 smoke 套件时默认打 `8799`，可用 `AGENTD_BASE` 覆盖
 - 数据目录 `AGENT_HOME`，默认 `~/.agent/termux-agent`（config.json / agent.db / jobs.db / checkpoints.db）
 - `AGENT_HOME` 与 `--home`：`settings_mgr` 是模块级单例，路径在 import 时解析，
   所以 **必须通过环境变量在启动前给定**；CLI `--home` 由 `main()` 显式重定位 path（否则会被静默忽略）
@@ -37,7 +38,7 @@
 ## 本地跑起来
 
 ```bash
-python3 -m pip install -r agentd/requirements.txt   # Python 3.11（CI 口径）
+python3 -m pip install -r agentd/requirements.txt   # Python 3.11（门禁口径）
 bash tests/setup_faketermux.sh                      # 造 termux-* 桩，否则手机工具全部报"未安装"
 export PATH=/tmp/faketermux:$PATH
 AGENT_HOME=/tmp/pa python3 -m agentd.main --mock --port 8787   # 离线全链路（不耗 API）
@@ -61,11 +62,13 @@ Windows 上可以跑后端与测试（`web/start.sh`、`tests/*.sh` 需要 Git B
 | `test_mcp_server.py`、`test_telegram_gateway.py` | 否 | MCP stdio 清单、TG 网关 |
 | `p3_perf_leak_test.py` | 否 | N+1、索引、子进程回收（POSIX） |
 
-CI 的 backend job 现在把上表**全部**纳入门禁，另含"部署链路自检"（无令牌 `--lan` 拒启 /
-`AGENT_TOKEN` 引导 / `--clear-token`）；frontend job 做 typecheck + vitest + build + `dist/` 新鲜度校验。
+上表**全部**由 `bash tests/run_all.sh` 统一调度（一条命令跑完，失败不中断、末尾汇总、有失败即非零退出），
+另含"部署链路自检"（无令牌 `--lan` 拒启 / `AGENT_TOKEN` 引导 / `--clear-token`）与前端
+typecheck + vitest + build + `dist/` 新鲜度校验。GitHub Actions 工作流已于 2026-10-18 移除，
+门禁改为本地/CI 自建流水线都可直接调用这个脚本。
 
 ## 仓库与镜像
 
-主仓库 `gitcode.com/badhope/pocketmind`；CI 跑在 GitHub 镜像 `github.com/X33834/pocketmind`
-（GitCode 不执行 `.github/workflows`）。**push 到 gitcode 后必须同步镜像**，否则 Actions 检查的是旧代码：
-`git push github main --tags`。
+主仓库 `gitcode.com/badhope/pocketmind`，镜像在 Gitee `gitee.com/badhope/pocketmind` 与
+GitHub `github.com/X33834/pocketmind`。三处内容应保持一致（同一 tree），**push 到 gitcode 后同步镜像**：
+`git push gitee main --tags`、`git push github main --tags`。仓库内已无 `.github/workflows`。
