@@ -21,13 +21,40 @@ step() { echo ""; echo "== $1 =="; }
 
 step "1/4 检查 Termux 基础组件"
 command -v pkg >/dev/null 2>&1 || { echo "❌ 请先在 Termux 里执行：pkg install termux-tools"; exit 1; }
-# python/git/编译工具链：pydantic-core(Rust) 与可能的 C 扩展需要 rust + binutils + build-essential
+# python/git/编译工具链：pydantic-core(Rust) 与可能的 C 扩展需要 rust + binutils + build-essential。
+#
+# 判断"是否已安装"不能一律用 command -v：
+#   - 元包（build-essential）不提供同名可执行文件 → command -v 恒失败 → 每次重装；
+#   - rust 的可执行文件叫 rustc，不叫 rust → 同样恒失败。
+# 在手机上重装一次要几分钟并耗流量，所以按包的真实"存在证据"分别判断。
+# 返回 0 表示"已安装"，非 0 表示"缺失"（与 if 的语义对齐，别写反）
+pkg_present() {
+  case "$1" in
+    python)   command -v python  >/dev/null 2>&1 ;;
+    git)      command -v git     >/dev/null 2>&1 ;;
+    rust)     command -v rustc   >/dev/null 2>&1 ;;
+    binutils) command -v ld      >/dev/null 2>&1 || command -v ar >/dev/null 2>&1 ;;
+    # 元包没有可执行文件：用编译器是否可用作为证据（它装的正是 gcc 工具链）
+    build-essential) command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 ;;
+    *)        command -v "$1"    >/dev/null 2>&1 ;;
+  esac
+}
+
 for pkg_name in python git rust binutils build-essential; do
-  command -v "$pkg_name" >/dev/null 2>&1 || { echo "安装 $pkg_name..."; pkg install -y "$pkg_name"; }
+  if ! pkg_present "$pkg_name"; then
+    echo "安装 $pkg_name..."
+    if ! pkg install -y "$pkg_name"; then
+      echo "⚠️  $pkg_name 安装失败（可稍后手动执行：pkg install $pkg_name）"
+    fi
+  fi
 done
+# termux-api：真正的证据是 termux-api 的可执行命令，不是包名
 if ! command -v termux-notification >/dev/null 2>&1; then
   echo "安装 termux-api（手机能力桥）..."
-  pkg install -y termux-api
+  if ! pkg install -y termux-api; then
+    echo "⚠️  termux-api 安装失败。手机能力将不可用，但不影响对话与文件操作。"
+    echo "   修复：pkg install termux-api，并安装应用商店里的 Termux:API 配套 App。"
+  fi
 fi
 # 存储权限（读 /sdcard、~/storage 需要）
 if [ ! -d "$HOME/storage" ]; then
@@ -40,10 +67,21 @@ python -m pip install --upgrade pip -q
 # Termux 新版 Python 3.12 可能标记为 externally-managed（PEP 668）：
 # 先按普通方式装，失败再回退 --break-system-packages（Termux 的 Python 即用户自己的环境，
 # 没有 root 系统 Python，加该参数是安全且常规的做法）。
-if ! python -m pip install -r agentd/requirements.txt -q; then
-  echo "首次 pip 安装失败（可能是 externally-managed），改用 --break-system-packages 重试..."
-  python -m pip install --break-system-packages -r agentd/requirements.txt -q
+if ! python -m pip install -r agentd/requirements.txt -q 2>"$HOME/.agent-pip-err.log"; then
+  echo "首次 pip 安装失败（可能是 externally-managed 或网络问题），改用 --break-system-packages 重试..."
+  if ! python -m pip install --break-system-packages -r agentd/requirements.txt -q 2>"$HOME/.agent-pip-err.log"; then
+    echo "❌ Python 依赖安装失败。最后 20 行错误："
+    tail -20 "$HOME/.agent-pip-err.log" 2>/dev/null || true
+    echo ""
+    echo "常见原因与处理："
+    echo "  1. 网络不通/镜像慢：换源后重试"
+    echo "     pip install -i https://mirrors.aliyun.com/pypi/simple --break-system-packages -r agentd/requirements.txt"
+    echo "  2. pydantic-core 需要编译：确认已装 rust（pkg install rust）"
+    echo "  3. 磁盘不足：df -h 查看剩余空间，至少需要约 500MB"
+    exit 1
+  fi
 fi
+rm -f "$HOME/.agent-pip-err.log"
 
 step "3/4 初始化数据目录（权限 700，仅自己可读）"
 DATA_DIR="$HOME/.agent/termux-agent"
