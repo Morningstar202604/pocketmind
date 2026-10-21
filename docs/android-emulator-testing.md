@@ -117,3 +117,53 @@ Termux 仓库里有预编译 deb，`apt-cache policy` 可查：
 | aarch64 编译 | ❌ | ❌ | **✅ 唯一** |
 
 结论：**容器跑逻辑，模拟器跑安装，真机跑硬件**。三者不互相替代。
+
+## 实测结论（2026-10-21 完整跑通）
+
+### 成功验证的完整链路
+
+```
+Windows 11 + HypervisorPresent=True
+  └─ Android SDK (cmdline-tools + emulator + android-35 x86_64)   4.8 GB
+      └─ AVD termux_test，无头启动约 40s
+          └─ Termux 0.118.3 debug APK（校验 35,189,933 字节）
+              └─ bootstrap 390 个命令
+                  ├─ pkg install python        → Python 3.14.8 + pip 26.2.2
+                  ├─ pkg install rust          → rust 1.99.1（pydantic-core 编译前提）
+                  ├─ pkg install python-cryptography python-rpds-py（预编译，省 30 分钟）
+                  ├─ pip install -r requirements.txt（阿里云镜像）→ 46 个包，耗时 2196s
+                  ├─ python -m agentd.main --mock --port 8787  → 服务起来了
+                  ├─ /api/health → {"ok":true,"components":{"db":"ok","llm":"ready","scheduler":"ok"}}
+                  └─ POST /api/chat → 收到流式回复
+```
+
+### 只在 Android 上暴露的缺陷
+
+**`zoneinfo.ZoneInfoNotFoundError: 'No time zone found with key GMT'`**
+—— Android/Termux 没有系统 tzdata，APScheduler 构造时猜本地时区直接抛异常，
+服务连端口都没绑上就退出。Windows 与 Docker 都有 tzdata，**永远复现不了**。
+已修：`SchedulerService` 显式解析时区，按 TZ → Asia/Shanghai → UTC → 固定偏移
+四级降级，永不因时区失败。
+
+### 安装耗时实测
+
+| 阶段 | 耗时 |
+|---|---|
+| SDK 下载 + 解压 | ~5 分钟（1.5GB+ 下载） |
+| 模拟器冷启动 | ~40 秒 |
+| Termux bootstrap | ~1 分钟 |
+| `pkg install python rust` | ~4 分钟 |
+| `pip install -r requirements.txt`（含 pydantic-core 编译） | **2196 秒 ≈ 37 分钟** |
+| **合计（首次）** | **约 50 分钟** |
+
+其中 pip 阶段在 x86_64 模拟器上的耗时远高于真机（模拟器有虚拟化开销），
+但 `pydantic-core` 的 Rust 编译在真机上同样需要数分钟到十几分钟。
+
+### 仍然无法验证的
+
+- **termux-api 硬件能力**：模拟器没有真实短信/电话/定位/传感器，
+  即使装上 `termux-api` 也只会返回空或错误。
+- **aarch64 编译**：本方案是 x86_64 镜像；真机多为 arm64，
+  `pydantic-core` 的编译路径与耗时不同。
+- **电源管理**：电池优化、锁屏后进程被杀、唤醒锁的真实行为。
+- **真实 SoC 性能**：模拟器 CPU 与手机 SoC 差异大，耗时不可直接外推。
