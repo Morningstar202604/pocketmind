@@ -273,8 +273,10 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
-  /* 触摸目标下限：手机上一排小字按钮极易点错 */
-  min-height: 28px;
+  /* 触摸目标下限：项目在 e2e/mobile.spec.ts 里用 36px 作硬标准
+   * （28px 会被移动端矩阵判失败——这是它该做的事，不是噪音）。 */
+  min-height: 36px;
+  padding: 6px 10px;
 }
 .msg-action:hover {
   color: var(--text);
@@ -767,7 +769,9 @@ body {
   color: var(--text-3);
   cursor: pointer;
   transition: color 0.15s, background 0.15s, border-color 0.15s;
-  min-height: 24px;
+  /* 与其余可点元素一致：移动端矩阵要求 ≥36px（web-toggle 曾是 24px 被拦下） */
+  min-height: 36px;
+  padding: 6px 12px;
 }
 /* 注意顺序与特异性：.on 必须排在 :hover 之后且用更高的特异性，
  * 否则鼠标悬停时会退回未开启的配色（实测：开关已 aria-pressed=true，
@@ -2133,7 +2137,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   color: #fff;
   margin-top: 1px;
@@ -2148,7 +2152,7 @@ body {
   margin-top: 2px;
   color: var(--text-2, var(--text));
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: 12px;
   word-break: break-word;
 }
 
@@ -2159,7 +2163,7 @@ body {
   padding-top: 8px;
 }
 .hits-head {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-3);
   padding: 0 4px 6px;
 }
