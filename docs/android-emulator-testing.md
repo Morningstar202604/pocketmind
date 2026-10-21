@@ -68,9 +68,39 @@ Rust not found, installing into a temporary directory
 必须先 `pkg install rust`（含 `rust-std-x86-64-linux-android`），让 pip 用系统 rustc。
 这验证了 `install.sh` 里 `pkg install rust` 是**必需步骤**而非可选优化。
 
-### 7. 编译耗时远超文档声称
-`install.sh` 原写「约 3-8 分钟」。实测在 x86_64 模拟器上，仅 `pydantic-core`
-的 Rust 编译就超过 20 分钟（模拟器 CPU 本身有虚拟化开销）。已改为「首次 10-30 分钟」。
+### 7. 编译耗时远超文档声称 —— 且真凶是 grpcio
+`install.sh` 原写「约 3-8 分钟」。实测在 x86_64 模拟器上超过 1 小时仍未装完。
+
+排查发现真正的瓶颈**不是** `pydantic-core`（Rust，几分钟），而是
+`opentelemetry-exporter-otlp-proto-grpc` → **`grpcio`**：它在 Termux 上没有
+预编译 wheel，要现场编译 BoringSSL / Abseil / gRPC 全套 C++（实测并发 5 个
+clang++ 进程，单文件 `ssl_lib.cc` 就要很久，内存峰值 2GB+）。
+
+而这个导出器是**可选功能**：`telemetry.py` 只在
+`OTEL_TRACES_EXPORTER=otlp` 时才 `import` 它，默认路径完全用不到。
+把它列进主依赖，等于让每个 Termux 用户为一个默认关闭的功能编译整套 gRPC。
+
+已从 `requirements.txt` 移出主清单并注明按需安装。
+
+### 7a. Tempux 有预编译的 cryptography / rpds-py，必须用
+实测依赖链：`mcp` → `pyjwt[crypto]` → **`cryptography`** → `cffi`。
+`cryptography` 的 Rust + OpenSSL 绑定在模拟器上编译 30 分钟以上，
+且中途把 5.8G 的 /data 吃到只剩 0（报 `No space left on device`，
+随后 rustc 因写入失败 SIGSEGV，看起来像编译器 bug，实际是磁盘满）。
+
+Termux 仓库里有预编译 deb，`apt-cache policy` 可查：
+- `python-cryptography` 50.0.2
+- `python-rpds-py` 2026.9.1
+- `python-numpy` / `python-lxml`
+
+先 `pkg install` 这几个，pip 会复用系统版本不再编译。
+注意：Termux 的 `python-cryptography` 包内部还会 `pip install cffi`，
+且它默认打 pypi.org（在模拟器里不通）——需要 `PIP_INDEX_URL` 指到镜像。
+
+### 7b. pydantic-core 没有 Android wheel
+用 `pip download --only-binary=:all:` 验证：`pydantic-core` 在 PyPI 上只有
+`0.0.1` 这个占位包提供纯 Python wheel，真实版本全部需要源码编译。
+所以 `pkg install rust` 是硬性前提，没有绕过的办法。
 
 ### 8. apt 锁竞争
 前一个 apt 未结束时启动第二个会无限等待 `lock-frontend`。且 `adb shell kill`

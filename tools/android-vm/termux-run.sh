@@ -30,15 +30,17 @@ run_in_termux() {
   local cmd="$1"
   local b64
   b64=$(printf '%s' "$cmd" | base64 | tr -d '\n')
-  "$ADB" shell "run-as com.termux $PREFIX_IN_APP/bin/bash -c 'export PATH=$PREFIX_IN_APP/bin:\$PATH; export PREFIX=$PREFIX_IN_APP; export HOME=$HOME_IN_APP; echo $b64 | base64 -d | bash'"
+  MSYS_NO_PATHCONV=1 "$ADB" shell "run-as com.termux $PREFIX_IN_APP/bin/bash -c 'export PATH=$PREFIX_IN_APP/bin:\$PATH; export PREFIX=$PREFIX_IN_APP; export HOME=$HOME_IN_APP; echo $b64 | base64 -d | bash'"
 }
 
 case "${1:-}" in
   --push)
     src="${2:?用法: --push <本地文件>}"
     name=$(basename "$src")
-    "$ADB" push "$src" "/data/local/tmp/$name" >/dev/null || exit 1
-    "$ADB" shell "run-as com.termux cp /data/local/tmp/$name $HOME_IN_APP/$name" || exit 1
+    # Git Bash 会把以 / 开头的参数改写成 Windows 路径：必须关掉转换，
+    # 否则 adb 收到的是 "C:/Program Files/Git/data/local/tmp/..."（实测踩到）。
+    MSYS_NO_PATHCONV=1 "$ADB" push "$src" "/data/local/tmp/$name" >/dev/null || exit 1
+    MSYS_NO_PATHCONV=1 "$ADB" shell "run-as com.termux cp /data/local/tmp/$name $HOME_IN_APP/$name" || exit 1
     echo "已推送: $HOME_IN_APP/$name"
     ;;
   ""|-h|--help)

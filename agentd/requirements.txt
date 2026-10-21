@@ -24,8 +24,13 @@ opentelemetry-sdk>=1.24
 # 按 PEP 440，0.46b0 < 0.46，所以写 ">=0.46" 会匹配不到任何版本——全新安装直接失败。
 # 必须显式带 beta 后缀，且与 opentelemetry-sdk 的 1.x 线配套使用（0.4x b0 ↔ 1.2x）。
 opentelemetry-instrumentation-fastapi>=0.46b0
-# OTEL OTLP/gRPC 导出（仅当设置 OTEL_TRACES_EXPORTER=otlp 时导入）
-opentelemetry-exporter-otlp-proto-grpc>=1.24
+# OTEL OTLP/gRPC 导出：**可选依赖**，不要放进主清单。
+# 原因（Android 模拟器实测）：它会拖入 grpcio，而 grpcio 在 Termux 上没有预编译
+# wheel，要现场编译 BoringSSL/Abseil/gRPC 全套 C++ —— 单这一步就超过 1 小时，
+# 内存峰值 2GB+，中低端手机会直接 OOM。而这个能力只在
+# OTEL_TRACES_EXPORTER=otlp 时才被 import，默认路径根本用不到。
+# 需要时手动装：pip install opentelemetry-exporter-otlp-proto-grpc
+# opentelemetry-exporter-otlp-proto-grpc>=1.24
 
 # 可选：离线语音（不装不影响主功能，见 termux/voice.md）
 # sherpa-onnx

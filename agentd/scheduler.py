@@ -126,7 +126,50 @@ class SchedulerService:
     def __init__(self, db_path: str | Path):
         # 官方 SQLAlchemyJobStore：url 形式内部自建同步 engine，表 apscheduler_jobs 自动创建
         self._jobstore = SQLAlchemyJobStore(url=f"sqlite:///{db_path}")
-        self._sched = AsyncIOScheduler(jobstores={"default": self._jobstore})
+        # 显式给时区，**不能让 APScheduler 去猜本地时区**：
+        # Android/Termux 没有系统 tzdata（也没有 /etc/localtime），tzlocal 会抛
+        # `ZoneInfoNotFoundError: No time zone found with key GMT`，直接导致服务启动失败
+        # （真机/模拟器实测）。这里按「环境变量 → tzdata → UTC」三级降级，永不因时区崩溃。
+        self._sched = AsyncIOScheduler(
+            jobstores={"default": self._jobstore},
+            timezone=self._resolve_timezone(),
+        )
+
+    @staticmethod
+    def _resolve_timezone():
+        """解析可用的时区，任何一步失败都退回 UTC。
+
+        Termux 上装 `termux-tools` 会提供 TZ 环境变量；未装时退回 UTC。
+        定时任务的语义是「到点执行」，用 UTC 只会让"每天 8 点"按 UTC 解释，
+        对个人助手可以接受（且可在设置里通过 TZ 覆盖），远好于启动即崩。
+        """
+        import logging as _logging
+        import os as _os
+
+        from apscheduler.util import timezone as _tz_util
+
+        candidates = []
+        tz_env = _os.environ.get("TZ", "").strip()
+        if tz_env:
+            candidates.append(tz_env.lstrip(":"))
+        candidates += ["Asia/Shanghai", "UTC"]
+        for name in candidates:
+            try:
+                return _tz_util(name)
+            except Exception:  # noqa: BLE001 —— 取不到就试下一个
+                continue
+        # 连 UTC 都取不到（tzdata 完全缺失）→ 用固定偏移时区，APScheduler 接受
+        # pytz 兼容对象；再失败就返回 None（APScheduler 会退回它自己的默认处理）。
+        _logging.getLogger(__name__).warning(
+            "系统无可用时区数据，定时任务按 UTC 运行；可设置 TZ 环境变量覆盖"
+        )
+        try:
+            from datetime import timedelta
+            from datetime import timezone as _dt_timezone
+
+            return _dt_timezone(timedelta(0), name="UTC")
+        except Exception:  # noqa: BLE001 —— 最后兜底：交给 APScheduler 默认
+            return None
 
     # ---------- trigger 构造 ----------
     @staticmethod

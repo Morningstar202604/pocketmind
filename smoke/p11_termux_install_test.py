@@ -169,6 +169,32 @@ def main() -> int:
         check("boot.sh 无 python 时非零退出", r.returncode != 0, f"exit={r.returncode}")
         check("boot.sh 无 python 时提示 pkg install python", "pkg install python" in out, out[-200:])
 
+    # --- 场景 7：tzlocal 取不到时区时调度器不得崩溃（Termux 实测缺陷） ---
+    # Android/Termux 没有系统 tzdata，APScheduler 构造期调用 tzlocal.get_localzone()
+    # 抛 ZoneInfoNotFoundError('No time zone found with key GMT')，服务直接起不来。
+    #
+    # 测试要点：必须 (a) 真正构造 SchedulerService，(b) 在子进程里 monkeypatch
+    # tzlocal 让它抛异常。只在 Windows 上跑是测不到的——本机有 tzdata，永远成功。
+    # 第一版只调 _resolve_timezone()，把修复回退后测试仍然通过，等于没锁住。
+    probe = """
+import tzlocal, tzlocal.unix
+def boom(*a, **k):
+    raise Exception("No time zone found with key GMT")
+tzlocal.unix._get_localzone = boom
+tzlocal.get_localzone = boom
+import tempfile, os
+from agentd.scheduler import SchedulerService
+d = tempfile.mkdtemp()
+svc = SchedulerService(os.path.join(d, "jobs.db"))
+print("SCHEDULER_OK", svc._sched.timezone)
+"""
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(ROOT), env=env,
+                       capture_output=True, text=True, timeout=120)
+    out = r.stdout + r.stderr
+    check("tzlocal 失效时 SchedulerService 仍能构造（Android 实况）",
+          r.returncode == 0 and "SCHEDULER_OK" in out, out[-400:])
+
     print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
     if failed:
         print("失败项：" + "；".join(failed))

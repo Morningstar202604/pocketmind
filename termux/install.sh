@@ -64,6 +64,17 @@ fi
 python --version
 
 step "2/4 安装 Python 依赖"
+# Termux 上有一条关键捷径：部分编译型依赖在 Termux 仓库里有**预编译** deb，
+# 用 pkg 装比让 pip 现场编译快一个数量级（实测 cryptography 的 Rust+OpenSSL
+# 编译要 30 分钟以上且吃掉 2GB+ 临时空间，模拟器因此直接 Enospc 失败）。
+# 先装这些，pip 就会复用系统已装的版本，不再自己编译。
+PREBUILT="python-cryptography python-rpds-py python-numpy python-lxml"
+for pkg in $PREBUILT; do
+  if apt-cache policy "$pkg" 2>/dev/null | grep -q "Installed: (none)"; then
+    echo "预装 $pkg（Termux 官方预编译包，避免源码编译）..."
+    pkg install -y "$pkg" >/dev/null 2>&1 || echo "⚠️  $pkg 预装失败，将由 pip 尝试编译（可能很慢）"
+  fi
+done
 # Termux 里 PyPI 官方源常常连不通（实测：pypi.org 连接被拒，清华/阿里云镜像正常）。
 # 先试官方源，失败自动换镜像重试——不能让用户对着 "Connection refused" 自己猜。
 PIP_MIRROR="${AGENT_PIP_MIRROR:-https://mirrors.aliyun.com/pypi/simple}"
