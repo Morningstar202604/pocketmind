@@ -35,8 +35,13 @@ export default function App() {
   const todos = useAgentStore((s) => s.todos);
   const clearTodos = useAgentStore((s) => s.clearTodos);
   const settings = useAgentStore((s) => s.settings);
+  const webSearch = useAgentStore((s) => s.webSearch);
+  const setWebSearch = useAgentStore((s) => s.setWebSearch);
 
   // 审批倒计时跟随后端配置（server.approval_timeout），拿不到时兜底 120s
+  // 「编辑消息」回填输入框的草稿：非空时 Composer 会消费并回调清空
+  const [draft, setDraft] = useState<string | undefined>(undefined);
+
   const approvalTimeout =
     Number((settings?.server as { approval_timeout?: number } | undefined)?.approval_timeout) || 120;
 
@@ -48,6 +53,9 @@ export default function App() {
   const init = useAgentStore((s) => s.init);
   const loadSession = useAgentStore((s) => s.loadSession);
   const send = useAgentStore((s) => s.send);
+  const deleteMessage = useAgentStore((s) => s.deleteMessage);
+  const regenerate = useAgentStore((s) => s.regenerate);
+  const truncateFrom = useAgentStore((s) => s.truncateFrom);
   const stop = useAgentStore((s) => s.stop);
   const onNewSession = useAgentStore((s) => s.onNewSession);
   const onDeleteSession = useAgentStore((s) => s.onDeleteSession);
@@ -112,9 +120,9 @@ export default function App() {
         </button>
         <div className="brand">
           <PocketLogo size={38} />
-          <div>
+          <div className="brand-text">
             <h1>口袋智灵</h1>
-            <p>{mock ? "离线演示模式" : "本地智能体 · 数据只在你设备上"}</p>
+            <p className="brand-sub">{mock ? "离线演示模式" : "本地智能体 · 数据只在你设备上"}</p>
           </div>
         </div>
         <div className="topbar-right">
@@ -167,6 +175,14 @@ export default function App() {
                     onEditPlan={editPlan}
                     onIgnorePlan={(aid) => void ignorePlan(aid)}
                     approvalTimeout={approvalTimeout}
+                    onDelete={(m) => {
+                      if (!window.confirm("删除这条消息及其之后的对话？此操作不可撤销。")) return;
+                      void deleteMessage(m);
+                    }}
+                    onRegenerate={(m) => void regenerate(m)}
+                    onEditUser={(m, text) => {
+                      void truncateFrom(m).then(() => setDraft(text));
+                    }}
                   />
                 ))}
               </div>
@@ -205,6 +221,10 @@ export default function App() {
         onStop={stop}
         error={error}
         onClearError={clearError}
+        draft={draft}
+        onDraftConsumed={() => setDraft(undefined)}
+        webSearch={webSearch}
+        onToggleWebSearch={() => setWebSearch(!webSearch)}
       />
 
       {showSessions && (

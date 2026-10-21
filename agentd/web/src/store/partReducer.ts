@@ -100,9 +100,9 @@ export function restore(msgs: StoredMessage[]): Msg[] {
   for (const m of msgs) {
     if (m.role === "user") {
       currentAsst = null;
-      out.push({ id: uid("u"), role: "user", parts: [{ type: "text", text: m.content }], done: true, createdAt: m.created_at });
+      out.push({ id: uid("u"), serverId: m.id, role: "user", parts: [{ type: "text", text: m.content }], done: true, createdAt: m.created_at });
     } else if (m.role === "assistant") {
-      const msg: Msg = { id: uid("a"), role: "assistant", parts: [], done: true, createdAt: m.created_at };
+      const msg: Msg = { id: uid("a"), serverId: m.id, role: "assistant", parts: [], done: true, createdAt: m.created_at };
       if (m.content.trim()) msg.parts.push({ type: "text", text: m.content });
       const tcs = (m.meta?.tool_calls as Array<{ id: string; name: string; args: string }> | undefined) ?? [];
       for (const tc of tcs) {

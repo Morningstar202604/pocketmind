@@ -30,6 +30,8 @@ export interface Session {
 }
 
 export interface StoredMessage {
+  /** 后端 messages 表主键；用于「编辑重发 / 重新生成」时按 id 截断历史 */
+  id: number;
   role: "user" | "assistant" | "tool" | "system";
   content: string;
   meta: Record<string, unknown>;

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import {
   api,
   clearApprovalRules,
@@ -396,6 +397,9 @@ export function SettingsPanel({
 
         {mock && <p className="mock-banner">当前是离线演示模式（--mock），下面的配置不影响演示。</p>}
 
+        {/* 环境自检：放在最前面——用户打开设置往往就是因为「哪里不对」 */}
+        <DiagnosticsPanel api={api} />
+
         {/* 外观 */}
         <CollapsibleGroup title="外观" summary={theme === "dark" ? "深色" : theme === "light" ? "浅色" : "跟随系统"} defaultOpen>
           <div className="field">
@@ -599,7 +603,7 @@ export function SettingsPanel({
         {/* 上下文与记忆 */}
         <CollapsibleGroup title="上下文与记忆" summary={form.context?.budget_tokens ? `${form.context.budget_tokens} tokens` : "不限制预算"}>
           <div className="field">
-            <label htmlFor="cfg-budget">上下文预算（tokens，0 = 不限制）</label>
+            <label htmlFor="cfg-budget">记住多长的对话（0 = 不限，推荐留空）</label>
             <input
               id="cfg-budget"
               type="number"
@@ -613,10 +617,10 @@ export function SettingsPanel({
                 )
               }
             />
-            <p className="hint">按估算占用触发早期历史归档；工具结果也会按该预算截断（留头留尾）。</p>
+            <p className="hint">单位是 token（约 1.5 个汉字算 1 个）。留 0 交给程序自动判断；填小了会更容易忘记前文，填大了更耗 token 费用。</p>
           </div>
           <div className="field">
-            <label htmlFor="cfg-threshold">压缩触发阈值（预算占用比例）</label>
+            <label htmlFor="cfg-threshold">多满开始压缩（0.5～0.95，推荐 0.8）</label>
             <input
               id="cfg-threshold"
               type="number"
@@ -648,7 +652,7 @@ export function SettingsPanel({
             <p className="hint">关闭后不做自动归档（仍会为不超窗口而裁剪上下文，但不写入长期记忆）。</p>
           </div>
           <div className="field">
-            <label htmlFor="cfg-search-limit">每轮注入的检索条数</label>
+            <label htmlFor="cfg-search-limit">每轮参考几条过往记忆（推荐 5）</label>
             <input
               id="cfg-search-limit"
               type="number"
@@ -661,10 +665,10 @@ export function SettingsPanel({
                 )
               }
             />
-            <p className="hint">跨会话记忆（向量 + 关键词 RRF 融合）注入 system 的条数上限。</p>
+            <p className="hint">每次回答前，从以前聊过的内容里挑几条最相关的塞给模型。条数越多越"记得住"，但更慢更贵。</p>
           </div>
           <div className="field">
-            <label htmlFor="cfg-summarize-turns">摘要触发轮数</label>
+            <label htmlFor="cfg-summarize-turns">每聊几轮做一次小结（推荐 10）</label>
             <input
               id="cfg-summarize-turns"
               type="number"
@@ -679,7 +683,7 @@ export function SettingsPanel({
             />
           </div>
           <div className="field">
-            <label htmlFor="cfg-retention">记忆保留天数（0 = 永久）</label>
+            <label htmlFor="cfg-retention">记忆保留多久（天，0 = 永久）</label>
             <input
               id="cfg-retention"
               type="number"
@@ -692,7 +696,7 @@ export function SettingsPanel({
                 )
               }
             />
-            <p className="hint">启动时清理超过该天数的消息与记忆（含分页归档）。</p>
+            <p className="hint">超过这个天数的聊天与记忆会在启动时自动清理。担心隐私就调小；想长期留底就填 0。</p>
           </div>
           <div className="field">
             <label>立即压缩当前会话</label>

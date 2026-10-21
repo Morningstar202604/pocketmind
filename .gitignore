@@ -162,3 +162,6 @@ website/_shots/
 .v2c/
 
 .aqg/
+
+# Windows 设备保留名，测试脚本（run_shell）误生成的空文件，不入库
+nul

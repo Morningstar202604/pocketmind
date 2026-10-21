@@ -182,7 +182,7 @@ def coerce_args(tool: Tool, args: dict) -> tuple[dict, str]:
 
 # 导入子模块完成注册（必须在 _REGISTRY 定义之后）
 # agent 自有能力（knowledge/todo）依赖 tools.ctx 提供的会话上下文
-from . import files, knowledge, shell, todo  # noqa: E402,F401
+from . import files, knowledge, net, shell, todo  # noqa: E402,F401
 from . import (  # noqa: E402,F401  # phone 是子包，统一注册 system/comm/sensors/network/media
     phone as _phone_pkg,
 )

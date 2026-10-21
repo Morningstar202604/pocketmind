@@ -64,6 +64,11 @@ function providerName(id: string): string {
     kimi: "Kimi",
     glm: "智谱",
     siliconflow: "硅基流动",
+    openai: "OpenAI",
+    moonshot: "Moonshot",
+    // custom 是「自定义 OpenAI 兼容端点」的内部 id；直接回显英文字面量对用户
+    // 毫无意义（截图巡检时发现的），这里给一个说人话的标签
+    custom: "自定义端点",
   };
   return map[id] || id || "";
 }
@@ -121,6 +126,18 @@ export interface AgentStore {
   send: (text: string) => Promise<void>;
   stop: () => void;
 
+  // 消息级操作（对标 Claude / ChatGPT：每条消息都能单独处理）
+  /** 把对话回退到该消息之前（连同它一起删），用于「编辑后重发」。 */
+  truncateFrom: (msg: Msg) => Promise<number>;
+  /** 删除该消息及其之后的历史（对话必须保持 user/assistant 配对完整）。 */
+  deleteMessage: (msg: Msg) => Promise<void>;
+  /** 重新生成：截断该助手回复及其后的历史，用上一句用户消息重跑。 */
+  regenerate: (msg: Msg) => Promise<void>;
+
+  // 联网搜索开关（本轮生效，持久化到 localStorage）
+  webSearch: boolean;
+  setWebSearch: (v: boolean) => void;
+
   // Plan/Act 模式
   setAgentMode: (m: "plan" | "act") => void;
   /** 批准某条计划卡片：切到 act 模式，把触发该计划的用户原话重发一轮。 */
@@ -153,8 +170,14 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     const ac = new AbortController();
     abortController = ac;
     const sessionId = get().sessionId;
+    // 联网开关：在用户原话前加一条系统级指令，让模型知道「这次可以查外网」。
+    // 不改后端契约（避免为一颗按钮新增字段），也不污染 UI 上显示的用户消息。
+    const outgoing = get().webSearch
+      ? "[联网搜索已开启：遇到需要实时信息或你不确定的事实，请先调用 web_search 查证；" +
+        "引用结果时给出链接。若搜索失败，如实说明失败原因，不要编造。]\n\n" + text
+      : text;
     try {
-      await api.sseChat(sessionId, text, (ev) => {
+      await api.sseChat(sessionId, outgoing, (ev) => {
         // 后端可能在首帧才返回真实 session_id（新建会话时），同步更新
         if (ev.type === "session" && ev.session_id !== get().sessionId) {
           set({ sessionId: ev.session_id });
@@ -235,6 +258,7 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     undoingId: null,
     // 默认 act（直接执行）；init 时若后端保存过 plan 模式会再纠正
     agentMode: "act",
+    webSearch: false,
     // 默认 approve mode；init 时若后端保存过其他值会再纠正
     permissionMode: "auto" as "auto" | "approve" | "chat",
     // 后端 settings 快照（脱敏后）
@@ -420,6 +444,45 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
       await driveQueue();
     },
 
+    async truncateFrom(msg: Msg) {
+      const sid = get().sessionId;
+      if (!sid) return 0;
+      // 没有 serverId = 还没落库（本地刚插入），只需从本地移除，不必请求后端
+      if (msg.serverId === undefined) {
+        set((s) => ({ messages: s.messages.slice(0, s.messages.findIndex((m) => m.id === msg.id)) }));
+        return 0;
+      }
+      if (running) get().stop();
+      const r = await api.del<{ removed: number }>(`/api/sessions/${sid}/messages/${msg.serverId}`);
+      set((s) => ({ messages: s.messages.slice(0, s.messages.findIndex((m) => m.id === msg.id)) }));
+      return r?.removed ?? 0;
+    },
+
+    async deleteMessage(msg: Msg) {
+      await get().truncateFrom(msg);
+      void get().refreshSessions();
+    },
+
+    async regenerate(msg: Msg) {
+      const sid = get().sessionId;
+      if (!sid) return;
+      // 找到该助手消息之前最近的一条用户消息，截断到它之前后原样重发
+      const msgs = get().messages;
+      const idx = msgs.findIndex((m) => m.id === msg.id);
+      if (idx < 0) return;
+      let userIdx = -1;
+      for (let i = idx - 1; i >= 0; i--) {
+        if (msgs[i].role === "user") { userIdx = i; break; }
+      }
+      if (userIdx < 0) return;
+      const text = msgs[userIdx].parts
+        .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
+        .map((p) => p.text)
+        .join("\n");
+      await get().truncateFrom(msgs[userIdx]);
+      await get().send(text);
+    },
+
     stop() {
       abortController?.abort();
       // 停止：同时清空排队中的消息，并移除对应占位
@@ -575,6 +638,11 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     },
 
     // ---------- Plan/Act 模式 ----------
+    setWebSearch: (v) => {
+      // 只存本地偏好：这是「这一次要不要外发查询」的选择，不该悄悄写进服务端配置
+      set({ webSearch: v });
+    },
+
     setAgentMode: (m) => {
       // 乐观更新本地状态；后端 settings.save 是合并写入，局部 PUT 不会冲掉其他配置
       set({ agentMode: m });
@@ -639,6 +707,7 @@ export const useAgentStore = create<AgentStore>()(
       theme: s.theme,
       agentMode: s.agentMode,
       providerLabel: s.providerLabel,
+      webSearch: s.webSearch,
       permissionMode: s.permissionMode,
       settings: s.settings,
     }),

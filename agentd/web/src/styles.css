@@ -246,9 +246,24 @@ body {
   position: relative;
 }
 /* 操作按钮（复制等）— hover 时淡入 */
+/* 消息操作栏：复制 / 编辑 / 重新生成 / 删除
+ *
+ * 触屏上必须**默认可见**：旧实现是 opacity:0 + :hover 才显示，
+ * 而手机没有 hover —— 用户永远看不到这些按钮，等于功能不存在。
+ * 桌面端保留「悬停才显形」以保持界面干净，用 @media (hover: hover) 精确区分。 */
+.msg-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2px;
+}
+.row.user .msg-actions {
+  justify-content: flex-end;
+}
+.row.agent .msg-actions {
+  justify-content: flex-start;
+}
 .msg-action {
-  position: absolute;
-  top: -10px;
   font-size: 12px;
   color: var(--text-3);
   background: var(--panel-2);
@@ -256,26 +271,31 @@ body {
   border-radius: var(--radius-sm);
   padding: 2px 8px;
   cursor: pointer;
-  opacity: 0;
-  transform: translateY(2px);
-  transition: opacity 0.15s, transform 0.15s;
-  z-index: 2;
   white-space: nowrap;
-}
-.row.user .msg-action {
-  right: 4px;
-}
-.row.agent .msg-action {
-  left: 4px;
-}
-.row:hover .msg-action,
-.row:focus-within .msg-action {
-  opacity: 1;
-  transform: translateY(0);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  /* 触摸目标下限：手机上一排小字按钮极易点错 */
+  min-height: 28px;
 }
 .msg-action:hover {
   color: var(--text);
   border-color: var(--brand);
+}
+.msg-action.danger:hover {
+  color: #fff;
+  background: var(--danger, #d4380d);
+  border-color: var(--danger, #d4380d);
+}
+/* 桌面也不藏：用户明确要「每一句话都能删」，隐藏等于不存在。
+ * 改用低对比度 + 悬停高亮来压住视觉噪音（比 opacity:0 更诚实）。 */
+@media (hover: hover) and (pointer: fine) {
+  .msg-actions {
+    opacity: 0.45;
+    transition: opacity 0.15s;
+  }
+  .row:hover .msg-actions,
+  .row:focus-within .msg-actions {
+    opacity: 1;
+  }
 }
 .row.user {
   display: flex;
@@ -715,6 +735,40 @@ body {
   justify-content: space-between;
   padding: 0 6px;
   min-height: 16px;
+}
+.composer-meta-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* 联网搜索开关：默认灰（不联网），开启后品牌色 + 实底，一眼可辨当前会外发查询 */
+.web-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  min-height: 24px;
+}
+.web-toggle:hover {
+  color: var(--text);
+  border-color: var(--brand);
+}
+.web-toggle.on {
+  color: #fff;
+  background: var(--brand);
+  border-color: var(--brand);
+}
+.web-toggle svg {
+  flex: none;
 }
 .composer-provider {
   font-size: 12px;
@@ -1735,6 +1789,16 @@ body {
   .bubble { max-width: 90%; }
   .todo-panel { margin-left: 10px; margin-right: 10px; }
   .sheet { padding: 16px 14px calc(16px + env(safe-area-inset-bottom, 0px)); }
+
+  /* 顶栏在 390px 上原本被 logo+标题+状态+两个按钮挤满（截图巡检实测）：
+   * 收窄内边距、隐藏副标题、压缩状态文案，保证每个可点目标仍有 ≥36px 的命中区。 */
+  .topbar { padding: 8px 10px; gap: 6px; }
+  .brand { gap: 6px; min-width: 0; }
+  .brand-sub { display: none; }
+  .brand h1 { font-size: 15px; }
+  .conn-pill { padding: 4px 8px; font-size: 11px; }
+  .topbar-right { gap: 4px; }
+  .topbar-right .icon-btn { width: 36px; height: 36px; }
 }
 
 /* 下拉刷新/橡皮筋会打断长对话且可能误触重载：应用内禁用纵向过滚动链 */
@@ -1999,4 +2063,76 @@ body {
   .bg-approval .btn {
     min-height: 44px;
   }
+}
+
+/* ---------- 环境自检面板 ---------- */
+.diag {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.diag-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.diag-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.diag-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diag-summary.ok { color: var(--brand); }
+.diag-summary.warn { color: #d97706; }
+.diag-summary.bad { color: var(--danger, #d4380d); }
+.diag-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.diag-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.diag-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  margin-top: 1px;
+}
+.diag-item.ok .diag-icon { background: var(--brand); }
+.diag-item.warn .diag-icon { background: #d97706; }
+.diag-item.fail .diag-icon { background: var(--danger, #d4380d); }
+.diag-body { min-width: 0; }
+.diag-line { display: flex; gap: 6px; flex-wrap: wrap; }
+.diag-detail { color: var(--text-3); }
+.diag-fix {
+  margin-top: 2px;
+  color: var(--text-2, var(--text));
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  word-break: break-word;
 }

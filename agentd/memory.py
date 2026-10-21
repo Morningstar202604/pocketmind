@@ -301,6 +301,29 @@ class Store:
                 raise
         return cur.rowcount > 0
 
+    async def delete_messages_from(self, sid: str, message_id: int) -> int:
+        """删除某条消息及其之后的所有消息（用于「编辑并重新发送」与「从这条重新生成」）。
+
+        为什么按 id 截断而不是删单条：对话历史必须保持 user → assistant → tool 的
+        配对完整。删掉中间一条会留下孤立 tool 响应或没有提问的回答，下一轮组装上下文
+        时模型看到的就是错乱的对话。截断到分叉点是唯一语义正确的做法——
+        这也是 Claude / ChatGPT 编辑消息时的行为。
+        """
+        assert self._conn is not None
+        async with self._write_lock:
+            try:
+                cur = await self._conn.execute(text(
+                    "DELETE FROM messages WHERE session_id=:s AND id >= :i"
+                ), {"s": sid, "i": message_id})
+                await self._conn.commit()
+            except BaseException:
+                try:
+                    await self._conn.rollback()
+                except BaseException:
+                    pass
+                raise
+            return cur.rowcount or 0
+
     async def cleanup_expired(self, retention_days: int = 0) -> int:
         """清理超过 retention_days 的旧 memory 与 messages。retention_days<=0 则跳过。"""
         if retention_days <= 0:

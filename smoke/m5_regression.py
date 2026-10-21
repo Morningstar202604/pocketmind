@@ -123,15 +123,17 @@ else:
     names = [x.get("title", "") for x in ss if isinstance(x, dict)]
     check("会话自动命名", any("电池" in n or "电量" in n for n in names), str(names)[:80])
 
-# 6. 工具清单（38 项：31 内建/手机/文件/语音 + agent 自有 7 项：
-#    todo_write / todo_clear / kb_add / kb_search / kb_list / read_skill / remember_fact）
+# 6. 工具清单：断言**下限**而不是精确值。
+#    精确值断言（曾经写死 38）的问题是：每加一个工具就要改测试，而这类改动
+#    本身没有风险——真正要防的是「工具批量丢失」，所以用下限 + 必含清单。
 tools = req("GET", "/api/tools")
 names = {t.get("name") for t in tools.get("tools", [])}
 required = {
-    "get_battery", "read_sms", "run_shell", "write_file",   # 既有核心工具未丢失
+    "get_battery", "read_sms", "run_shell", "write_file",      # 既有核心工具未丢失
     "todo_write", "kb_search", "read_skill", "remember_fact",  # 新增能力已注册
+    "web_search", "read_url",                                  # 联网能力已注册
 }
-check("工具清单 38 项", tools.get("count", 0) == 38, str(tools.get("count")))
+check("工具数量不少于 38 项", tools.get("count", 0) >= 38, str(tools.get("count")))
 check("工具清单含核心与新增能力", required <= names, str(sorted(required - names)))
 
 print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败" + (f" / {len(skipped)} 跳过" if skipped else ""))

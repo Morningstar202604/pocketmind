@@ -10,6 +10,10 @@ export function Composer({
   onStop,
   error,
   onClearError,
+  draft,
+  onDraftConsumed,
+  webSearch,
+  onToggleWebSearch,
 }: {
   busy: boolean;
   ready: boolean;
@@ -21,6 +25,12 @@ export function Composer({
   onStop: () => void;
   error: string;
   onClearError: () => void;
+  /** 「编辑消息」回填的草稿；消费后由父组件清空，避免反复覆盖用户输入 */
+  draft?: string;
+  onDraftConsumed?: () => void;
+  /** 联网搜索开关：开启后本轮会允许模型调用 web_search（对标 ChatGPT 的联网按钮） */
+  webSearch?: boolean;
+  onToggleWebSearch?: () => void;
 }) {
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -48,6 +58,19 @@ export function Composer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onStop]);
+
+  // 编辑消息：把原文填回输入框并把光标放到末尾，用户改完直接回车即重发
+  useEffect(() => {
+    if (draft === undefined) return;
+    setText(draft);
+    onDraftConsumed?.();
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+  }, [draft, onDraftConsumed]);
 
   const submit = () => {
     // busy 时不拦截：回复生成中继续发送会进入消息队列，自动排队执行
@@ -80,9 +103,24 @@ export function Composer({
       <div className="composer-box">
         {/* 状态标签行：左侧厂商 + 右侧字符计数 */}
         <div className="composer-meta">
-          {providerLabel && ready && (
-            <span className="composer-provider">{providerLabel}</span>
-          )}
+          <div className="composer-meta-left">
+            {providerLabel && ready && (
+              <span className="composer-provider">{providerLabel}</span>
+            )}
+            <button
+              type="button"
+              className={`web-toggle ${webSearch ? "on" : ""}`}
+              onClick={onToggleWebSearch}
+              aria-pressed={webSearch}
+              title={webSearch ? "联网搜索已开启：回答会先查外网（查询词会发送到搜索引擎）" : "联网搜索已关闭：只依据本机资料回答"}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" />
+              </svg>
+              联网
+            </button>
+          </div>
           {/* 只在接近上限时提示，且说人话（还差多少字），不在平时用裸数字占位 */}
           <span className={`composer-count ${overLimit ? "over" : ""}`}>
             {charCount >= 3200 && (overLimit ? `已超出 ${charCount - 4000} 字` : `还可输入 ${4000 - charCount} 字`)}

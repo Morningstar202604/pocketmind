@@ -229,6 +229,9 @@ export function MessageItem({
   onEditPlan,
   onIgnorePlan,
   approvalTimeout,
+  onDelete,
+  onRegenerate,
+  onEditUser,
 }: {
   msg: Msg;
   parts: Part[];
@@ -239,6 +242,12 @@ export function MessageItem({
   onEditPlan: (assistantMsgId: string) => void;
   onIgnorePlan: (assistantMsgId: string) => void;
   approvalTimeout?: number;
+  /** 删除这条消息及其之后的全部历史（对话必须保持配对完整） */
+  onDelete?: (msg: Msg) => void;
+  /** 用上一条用户消息重新生成（仅 assistant 消息） */
+  onRegenerate?: (msg: Msg) => void;
+  /** 把该用户消息放回输入框编辑（随之截断后续历史） */
+  onEditUser?: (msg: Msg, text: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -272,9 +281,27 @@ export function MessageItem({
       <div className="row user">
         <div className="bubble user">{text}</div>
         {formatTime(msg.createdAt) && <span className="msg-time">{formatTime(msg.createdAt)}</span>}
-        <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制用户消息">
-          {copied ? "已复制" : "复制"}
-        </button>
+        <div className="msg-actions">
+          <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制用户消息">
+            {copied ? "已复制" : "复制"}
+          </button>
+          <button
+            className="msg-action"
+            onClick={() => onEditUser?.(msg, text)}
+            title="编辑并重新发送"
+            aria-label="编辑这条消息"
+          >
+            编辑
+          </button>
+          <button
+            className="msg-action danger"
+            onClick={() => onDelete?.(msg)}
+            title="删除这条消息及其之后的对话"
+            aria-label="删除这条消息"
+          >
+            删除
+          </button>
+        </div>
       </div>
     );
   }
@@ -322,9 +349,27 @@ export function MessageItem({
         ) : null
       )}
       {hasContent && msg.done && (
-        <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制助手消息">
-          {copied ? "已复制" : "复制"}
-        </button>
+        <div className="msg-actions">
+          <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制助手消息">
+            {copied ? "已复制" : "复制"}
+          </button>
+          <button
+            className="msg-action"
+            onClick={() => onRegenerate?.(msg)}
+            title="用同一条提问重新生成"
+            aria-label="重新生成这条回复"
+          >
+            重新生成
+          </button>
+          <button
+            className="msg-action danger"
+            onClick={() => onDelete?.(msg)}
+            title="删除这条回复及其之后的对话"
+            aria-label="删除这条回复"
+          >
+            删除
+          </button>
+        </div>
       )}
       {!hasContent && !msg.done && (
         <div className="dots">

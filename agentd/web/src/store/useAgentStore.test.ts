@@ -97,13 +97,14 @@ describe("safeJson：宽松解析", () => {
 describe("restore：历史消息重建", () => {
   it("user/assistant 交替重建为 Msg[]", () => {
     const stored: StoredMessage[] = [
-      { role: "user", content: "列出文件", meta: {} },
+      { id: 1, role: "user", content: "列出文件", meta: {} },
       {
+        id: 2,
         role: "assistant",
         content: "这是文件列表",
         meta: { tool_calls: [{ id: "t1", name: "shell", args: '{"cmd":"ls"}' }] },
       },
-      { role: "tool", content: '["a.txt"]', meta: { tool_call_id: "t1", status: "completed" } },
+      { id: 3, role: "tool", content: '["a.txt"]', meta: { tool_call_id: "t1", status: "completed" } },
     ];
     const out = restore(stored);
     expect(out).toHaveLength(2);

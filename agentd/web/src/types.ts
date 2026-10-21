@@ -33,6 +33,8 @@ export type Part =
 
 export interface Msg {
   id: string;
+  /** 后端消息主键。前端本地创建的消息（尚未落库）没有这个字段。 */
+  serverId?: number;
   role: "user" | "assistant";
   parts: Part[];
   done: boolean;
