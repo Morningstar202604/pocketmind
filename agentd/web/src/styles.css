@@ -72,7 +72,7 @@ html[data-theme="light"] {
   --border: #e0e5ec;
   --text: #1a1f2a;
   --text-2: #5a6472;
-  --text-3: #6b7280;
+  --text-3: #666d79;
   --brand: #0d9d6e;
   --brand-2: #0a94ab;
   --brand-soft: rgba(13, 157, 110, 0.1);
@@ -287,14 +287,25 @@ body {
 }
 /* 桌面也不藏：用户明确要「每一句话都能删」，隐藏等于不存在。
  * 改用低对比度 + 悬停高亮来压住视觉噪音（比 opacity:0 更诚实）。 */
+/* 压低存在感不用 opacity：任何透明度都会把文字对比度拉到 WCAG 以下
+ * （实测 --text-3 本身在浅色底只有 4.8:1，再乘 0.62 掉到 2.3:1）。
+ * 改为降低边框与底色的存在感，文字保持可读；悬停时整体提亮。 */
 @media (hover: hover) and (pointer: fine) {
-  .msg-actions {
-    opacity: 0.45;
-    transition: opacity 0.15s;
+  .msg-actions .msg-action {
+    color: var(--text-3);
+    border-color: transparent;
+    background: transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
   }
-  .row:hover .msg-actions,
-  .row:focus-within .msg-actions {
-    opacity: 1;
+  .row:hover .msg-actions .msg-action,
+  .row:focus-within .msg-actions .msg-action {
+    border-color: var(--border);
+    background: var(--panel-2);
+  }
+  .row:hover .msg-actions .msg-action:hover,
+  .row:focus-within .msg-actions .msg-action:hover {
+    color: var(--text);
+    border-color: var(--brand);
   }
 }
 .row.user {
@@ -758,11 +769,15 @@ body {
   transition: color 0.15s, background 0.15s, border-color 0.15s;
   min-height: 24px;
 }
+/* 注意顺序与特异性：.on 必须排在 :hover 之后且用更高的特异性，
+ * 否则鼠标悬停时会退回未开启的配色（实测：开关已 aria-pressed=true，
+ * 截图上却看不出状态变化）。 */
 .web-toggle:hover {
   color: var(--text);
   border-color: var(--brand);
 }
-.web-toggle.on {
+.web-toggle.on,
+.web-toggle.on:hover {
   color: #fff;
   background: var(--brand);
   border-color: var(--brand);

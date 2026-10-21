@@ -132,6 +132,7 @@ if [ "$RUN_BACKEND" = 1 ]; then
 
   step "compileall：全部模块可编译" "$PY" -m compileall -q agentd/ tests/ smoke/
   step "ruff：静态检查" "$PY" -m ruff check agentd/ tests/ smoke/
+  step "p9 无障碍：主题文字对比度 ≥ 4.5:1" run_py smoke/p9_a11y_contrast_test.py
 
   # 不依赖服务的套件先跑，失败也不会挡住后面起服务
   step "p0 回归（重启恢复 / \$HOME 展开 / FTS 排除）" run_py smoke/p0_regression_test.py
