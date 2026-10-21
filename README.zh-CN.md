@@ -23,6 +23,16 @@
 - **手机端零 Node**：构建好的 `dist/` 直接入库，Termux 里只跑 `install.sh`；可装成 PWA，也可打 WebView 壳 APK（`termux/apk-shell/`）；
 - **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完 16 个后端回归套件 + 前端类型检查、64 个单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。
 
+## 什么设备能做什么
+
+能力取决于运行环境，**装之前请先看** [docs/capability-matrix.md](docs/capability-matrix.md)：
+它明确写了哪些工具只在真实安卓手机上存在、模拟器上为什么没有、Docker/VPS/桌面缺哪些。
+同样的矩阵随时可在程序内查看：设置 → 环境自检 → 设备能力（`GET /api/diagnostics`）。
+
+一句话：对话 / 文件 / 记忆 / 任务清单 / 定时任务在所有环境都可用；
+短信、电话、定位、传感器、电池、拍照需要**真实安卓手机** + termux-api；
+联网搜索与云端模型需要外网。
+
 ## 架构
 
 ```

@@ -23,6 +23,18 @@
 - **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
 - **Verified, not just claimed** — `bash tests/run_all.sh` runs 16 backend regression suites plus frontend typecheck, 64 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
 
+## What runs where
+
+This agent's capabilities depend on the device it runs on. Before install, check
+[docs/capability-matrix.md](docs/capability-matrix.md) — it states plainly which
+tools exist on a real Android phone, which do not exist on an emulator, and which
+are unavailable on Docker/VPS/desktop. The same matrix is available at runtime:
+Settings -> Environment check -> Device capabilities (`GET /api/diagnostics`).
+
+Short version: chat / files / memory / todo / scheduler work everywhere; SMS,
+phone calls, GPS, sensors, battery and camera require a **real Android phone**
+with termux-api; web search and cloud models require outbound network.
+
 ## Architecture
 
 ```

@@ -135,6 +135,7 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p9 无障碍：主题文字对比度 ≥ 4.5:1" run_py smoke/p9_a11y_contrast_test.py
   step "p10 子代理（工具收窄 / 禁止嵌套 / 不污染主会话）" run_py smoke/p10_subagent_test.py
   step "p11 Termux 安装脚本幂等性" run_py smoke/p11_termux_install_test.py
+  step "p12 能力矩阵（能做什么/不能做什么/怎么办）" run_py smoke/p12_capability_test.py
 
   # 不依赖服务的套件先跑，失败也不会挡住后面起服务
   step "p0 回归（重启恢复 / \$HOME 展开 / FTS 排除）" run_py smoke/p0_regression_test.py

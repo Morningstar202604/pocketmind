@@ -2201,3 +2201,82 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ---------- 设备能力清单 ---------- */
+.caps {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.caps-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-align: left;
+  min-height: 36px;
+}
+.caps-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  flex: none;
+}
+.caps-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caps-chev {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  transition: transform 0.15s;
+}
+.caps-chev.open { transform: rotate(180deg); }
+.caps-body { padding-top: 6px; }
+.caps-sec { margin-bottom: 10px; }
+.caps-sec-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.caps-sec-title.ok { color: var(--brand); }
+.caps-sec-title.warn { color: #b45309; }
+.caps-sec-title.bad { color: var(--danger, #d4380d); }
+.caps-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.cap-tag {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.cap-tag.ok {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 35%, transparent);
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+}
+.cap-row {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 5px 0 5px 8px;
+  border-left: 2px solid var(--border);
+  margin-bottom: 4px;
+}
+.cap-row.bad { border-left-color: var(--danger, #d4380d); }
+.cap-row.warn { border-left-color: #d97706; }
+.cap-name { font-weight: 600; color: var(--text-2, var(--text)); }
+.cap-reason { color: var(--text-3); margin-top: 1px; }
+.cap-fix {
+  color: var(--text-2, var(--text));
+  margin-top: 2px;
+  word-break: break-word;
+}

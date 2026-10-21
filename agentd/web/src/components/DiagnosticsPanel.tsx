@@ -17,10 +17,27 @@ export interface DiagItem {
   fix: string;
 }
 
+export interface CapItem {
+  id: string;
+  name: string;
+  status: "available" | "unavailable" | "degraded" | "conditional";
+  reason: string;
+  workaround: string;
+}
+
+export interface CapMatrix {
+  platform: { kind: string; abi: string; is_android: boolean; is_emulator: boolean };
+  available: CapItem[];
+  unavailable: CapItem[];
+  degraded: CapItem[];
+  summary: string;
+}
+
 export interface DiagReport {
   ok: boolean;
   summary: string;
   items: DiagItem[];
+  capabilities?: CapMatrix;
 }
 
 const ICON: Record<DiagItem["status"], string> = { ok: "✓", warn: "!", fail: "✕" };
@@ -88,6 +105,79 @@ export function DiagnosticsPanel({ api }: { api: { get: <T>(p: string) => Promis
 
       {report && problems.length === 0 && (
         <p className="hint">全部检查通过：Python 版本、数据目录、存储空间、端口、外网、模型配置均正常。</p>
+      )}
+
+      {report?.capabilities && <CapabilityList caps={report.capabilities} />}
+    </div>
+  );
+}
+
+
+/**
+ * 能力清单：把「这台设备能做什么」讲在使用之前。
+ *
+ * 为什么需要：有些能力缺失不是配置问题，而是环境给不了（模拟器没有真短信、
+ * PC 没有 termux-api、断网就没有实时信息）。用户不该发一句话才发现工具永远返回空。
+ * 不可用项必须带「怎么办」，只写"不支持"等于把问题丢回给用户。
+ */
+function CapabilityList({ caps }: { caps: CapMatrix }) {
+  const [open, setOpen] = useState(false);
+  const platformLabel: Record<string, string> = {
+    termux: "Android / Termux",
+    container: "Docker 容器",
+    windows: "Windows",
+    linux: "Linux",
+  };
+  const label = platformLabel[caps.platform.kind] || caps.platform.kind;
+  const bad = caps.unavailable.length;
+
+  return (
+    <div className="caps">
+      <button className="caps-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="caps-title">设备能力</span>
+        <span className="caps-summary">
+          {label} · {caps.summary}
+        </span>
+        <span className={`caps-chev ${open ? "open" : ""}`} aria-hidden="true">▾</span>
+      </button>
+
+      {open && (
+        <div className="caps-body">
+          <div className="caps-sec">
+            <div className="caps-sec-title ok">可用（{caps.available.length}）</div>
+            <div className="caps-tags">
+              {caps.available.map((c) => (
+                <span key={c.id} className="cap-tag ok">{c.name}</span>
+              ))}
+            </div>
+          </div>
+
+          {caps.degraded.length > 0 && (
+            <div className="caps-sec">
+              <div className="caps-sec-title warn">有条件可用（{caps.degraded.length}）</div>
+              {caps.degraded.map((c) => (
+                <div key={c.id} className="cap-row warn">
+                  <div className="cap-name">{c.name}</div>
+                  {c.reason && <div className="cap-reason">{c.reason}</div>}
+                  {c.workaround && <div className="cap-fix">→ {c.workaround}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {bad > 0 && (
+            <div className="caps-sec">
+              <div className="caps-sec-title bad">不可用（{bad}）</div>
+              {caps.unavailable.map((c) => (
+                <div key={c.id} className="cap-row bad">
+                  <div className="cap-name">{c.name}</div>
+                  {c.reason && <div className="cap-reason">{c.reason}</div>}
+                  {c.workaround && <div className="cap-fix">→ {c.workaround}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
