@@ -19,6 +19,16 @@ REQ = Path(__file__).resolve().parent.parent / "agentd" / "requirements.txt"
 # 已知只发布 beta 版本线的包：下界必须带预发布后缀
 PRERELEASE_ONLY = ("opentelemetry-instrumentation",)
 
+# 必须锁主版本的包：这些一旦跨大版本就会改 API，而 requirements 里只写 >=
+# 等于把"某天重装就挂"写进部署流程（本项目已因 mcp 1.x→2.x 做过一次兼容分支）。
+MAJOR_CAPPED = {
+    "pydantic",
+    "pydantic-settings",
+    "sqlalchemy",
+    "fastapi",
+    "starlette",
+}
+
 # 允许 extras 写法（如 sqlalchemy[asyncio]>=2.0）与环境标记
 LINE_RE = re.compile(r"^([A-Za-z0-9_.\-]+)(\[[^\]]*\])?\s*([<>=!~].*)?$")
 
@@ -49,6 +59,14 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001 —— 任何非法说明符都要报出来
             problems.append(f"{name}{spec}：说明符非法（{e}）")
             continue
+        if name in MAJOR_CAPPED:
+            has_upper = any(sp.operator in ("<", "<=", "~=", "==") for sp in specs)
+            if not has_upper:
+                problems.append(
+                    f"{name}{spec}：缺主版本上限（建议加 ,<N）；否则下一次大版本发布会"
+                    f"在不改一行代码的情况下破坏已部署环境"
+                )
+
         if not name.startswith(PRERELEASE_ONLY):
             continue
         for s in specs:

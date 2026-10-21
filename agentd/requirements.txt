@@ -1,4 +1,4 @@
-fastapi>=0.115
+fastapi>=0.115,<1
 # 注意：不要用 uvicorn[standard]。[standard] 会拉入 uvloop / httptools——二者在
 # Termux(aarch64/bionic) 上没有可用 wheel，必须本地编译，极易失败。本机低并发场景
 # 下 uvicorn 自带的纯 Python h11 完全够用，因此这里只装裸 uvicorn。
@@ -6,10 +6,13 @@ uvicorn>=0.30
 openai>=1.40
 apscheduler>=3.10
 sse-starlette>=2.1
-pydantic>=2.0
-pydantic-settings>=2.0
+# 上限不是摆设：pydantic v3 会改 API，而 >=2.0 会在某天被 pip 静默升上去，
+# 然后所有用户在重装时一起挂（本仓库已经因为 mcp 1.x→2.x 的改名做过一次兼容分支）。
+# 锁大版本 = 可预测的升级点；需要 v3 时改这里并跑全量回归。
+pydantic>=2.0,<3
+pydantic-settings>=2.0,<3
 mcp>=1.0
-sqlalchemy[asyncio]>=2.0
+sqlalchemy[asyncio]>=2.0,<3
 aiosqlite>=0.19
 # fastapi 传递依赖：python-multipart 0.0.20 有多个 CVE（PYSEC-2026-*），这里显式抬地板
 python-multipart>=0.0.31
