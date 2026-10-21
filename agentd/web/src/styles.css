@@ -2136,3 +2136,49 @@ body {
   font-size: 11px;
   word-break: break-word;
 }
+
+/* ---------- 会话抽屉：聊天内容搜索命中 ---------- */
+.hits {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.hits-head {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 0 4px 6px;
+}
+.hits ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hit {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.hit:hover {
+  background: var(--panel-2);
+}
+.hit-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2, var(--text));
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hit-snippet {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

@@ -1,5 +1,6 @@
-import { useState } from "react";
-import type { Session } from "../api";
+import { useEffect, useState } from "react";
+import type { MessageHit, Session } from "../api";
+import { searchMessages } from "../api";
 import { relativeTime } from "../lib/format";
 import { IconClose, IconPlus, IconTrash } from "./icons";
 
@@ -21,10 +22,40 @@ export function SessionList({
   onRename: (sid: string, title: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<MessageHit[]>([]);
+  const [searching, setSearching] = useState(false);
   const q = query.trim().toLowerCase();
+  // 标题命中：本地过滤，零延迟
   const filtered = q
     ? sessions.filter((s) => s.title.toLowerCase().includes(q))
     : sessions;
+
+  // 正文命中：防抖后问后端（只有标题搜不到时才值得发请求）
+  useEffect(() => {
+    const term = query.trim();
+    if (term.length < 2) {
+      setHits([]);
+      return;
+    }
+    let alive = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      searchMessages(term)
+        .then((r) => {
+          if (alive) setHits(r);
+        })
+        .catch(() => {
+          /* 搜索失败不打扰：标题过滤仍然可用 */
+        })
+        .finally(() => {
+          if (alive) setSearching(false);
+        });
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
 
   const rename = (s: Session) => {
     const title = window.prompt("给会话改个名字（留空 = 不改）", s.title);
@@ -55,13 +86,15 @@ export function SessionList({
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索会话…"
+            placeholder="搜索会话标题或聊天内容…"
             aria-label="搜索会话"
           />
         </div>
         <ul className="sessions">
-          {filtered.length === 0 && (
-            <li className="s-empty">{q ? "没有匹配的会话" : "还没有会话"}</li>
+          {filtered.length === 0 && hits.length === 0 && (
+            <li className="s-empty">
+              {q ? (searching ? "搜索中…" : `没有匹配「${query.trim()}」的会话或消息`) : "还没有会话"}
+            </li>
           )}
           {filtered.map((s) => (
             <li
@@ -107,6 +140,19 @@ export function SessionList({
             </li>
           ))}
         </ul>
+        {hits.length > 0 && (
+          <div className="hits">
+            <div className="hits-head">聊天内容命中 {hits.length} 条</div>
+            <ul>
+              {hits.map((h) => (
+                <li key={h.id} className="hit" onClick={() => onPick(h.session_id)}>
+                  <div className="hit-title">{h.title}</div>
+                  <div className="hit-snippet">{h.snippet}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );

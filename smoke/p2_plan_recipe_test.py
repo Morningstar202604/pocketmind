@@ -11,6 +11,7 @@
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
@@ -97,12 +98,14 @@ check("apply 后列表标记 applied=true", w2.get("applied") is True, str(w2))
 # 清理：删掉这个测试 job
 req("DELETE", f"/api/jobs/{job['id']}")
 
-# 未知配方 404
+# 未知配方必须返回 404（而不是"抛了异常就算"：断连/崩溃也会抛）
 try:
     req("POST", "/api/recipes/no_such_recipe/apply")
-    check("未知配方返回 404", False)
-except Exception:
-    check("未知配方返回 404", True)
+    check("未知配方返回 404", False, "未抛异常")
+except urllib.error.HTTPError as e:
+    check("未知配方返回 404", e.code == 404, f"实际 {e.code}")
+except Exception as e:  # noqa: BLE001
+    check("未知配方返回 404", False, f"{type(e).__name__}: {e}")
 
 print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
 sys.exit(1 if failed else 0)

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
@@ -56,11 +57,15 @@ check("会话有执行结果", found_result, detail)
 j2 = req("PUT", f"/api/jobs/{jid}", {"enabled": False})
 check("停用任务", j2["enabled"] is False)
 # 5. 非法条件拒绝
+# 必须确认是 **400**，不能"抛了任何异常就算通过"——连接断开、服务崩溃
+# 同样会抛异常，那样会把真故障记成成功（假阳性）。
 try:
     req("POST", "/api/jobs", {"name": "x", "trigger_type": "interval", "expr": "5", "message": "m", "condition": "foo == 1"})
-    check("非法条件被拒", False)
-except Exception:
-    check("非法条件被拒", True)
+    check("非法条件被拒（400）", False, "未抛异常")
+except urllib.error.HTTPError as e:
+    check("非法条件被拒（400）", e.code == 400, f"实际 {e.code}")
+except Exception as e:  # noqa: BLE001 —— 连接层面的问题必须算失败
+    check("非法条件被拒（400）", False, f"{type(e).__name__}: {e}")
 # 6. 删除
 check("删除任务", req("DELETE", f"/api/jobs/{jid}")["ok"] is True)
 # 7. 重启持久化：再创建一个，模拟重启后仍在（服务已带 jobs.db）

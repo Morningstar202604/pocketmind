@@ -751,6 +751,17 @@ def create_app() -> FastAPI:
         await store.touch_session(sid, title)
         return {"ok": True, "title": title}
 
+    @app.get("/api/sessions/search", dependencies=[Depends(check_token)])
+    async def search_messages(q: str = "", limit: int = 20):
+        """跨会话搜索消息正文（会话抽屉搜索框升级：标题 + 正文都能搜）。"""
+        if store is None:
+            raise HTTPException(503)
+        query = (q or "").strip()
+        if not query:
+            return {"query": "", "items": []}
+        items = await store.search_messages(query, limit=limit)
+        return {"query": query, "count": len(items), "items": items}
+
     @app.get("/api/sessions", dependencies=[Depends(check_token)])
     async def list_sessions():
         if store is None:

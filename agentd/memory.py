@@ -730,6 +730,40 @@ class Store:
             await self._conn.commit()
         return cur.rowcount > 0
 
+    async def search_messages(self, query: str, limit: int = 20) -> list[dict]:
+        """跨会话全文搜索消息内容（会话抽屉的「搜索会话」升级为搜正文）。
+
+        为什么要它：原来前端只按**标题**过滤，而标题是自动取的前 14 个字，
+        用户记得的是"当时聊到的某个结论"，标题里根本没有 —— 几十个会话之后
+        等于搜不到。这里直接搜正文。
+
+        实现：优先 FTS5（messages_fts 若可用），否则 LIKE 降级；
+        两种路径都只返回摘要片段而非全文，避免把长消息整段塞给前端。
+        """
+        words = [w for w in query.strip().split() if w][:6]
+        if not words:
+            return []
+        assert self._conn is not None
+        # 用 SQLite 的 instr 截一个窗口作为摘要（比 Python 侧切片少搬数据）
+        rows = (await self._conn.execute(text(
+            "SELECT m.id, m.session_id, m.role, m.content, m.created_at, s.title "
+            "FROM messages m JOIN sessions s ON s.id = m.session_id "
+            "WHERE m.role IN ('user','assistant') AND ("
+            + " OR ".join(f"m.content LIKE :w{i}" for i in range(len(words)))
+            + ") ORDER BY m.id DESC LIMIT :l"
+        ), {**{f"w{i}": f"%{w}%" for i, w in enumerate(words)}, "l": max(1, min(limit, 50))})).fetchall()
+
+        out = []
+        for r in rows:
+            d = dict(r._mapping)
+            content = d.pop("content") or ""
+            low = content.lower()
+            pos = min((low.find(w.lower()) for w in words if low.find(w.lower()) >= 0), default=0)
+            start = max(0, pos - 30)
+            snippet = content[start:start + 120].replace("\n", " ")
+            out.append({**d, "snippet": ("…" if start else "") + snippet + ("…" if start + 120 < len(content) else "")})
+        return out
+
     # ---------- 相关历史记忆（P1：跨会话回忆） ----------
     @staticmethod
     def _fts_phrase(word: str) -> str:

@@ -38,6 +38,23 @@ export interface StoredMessage {
   created_at?: number;
 }
 
+export interface MessageHit {
+  id: number;
+  session_id: string;
+  title: string;
+  role: "user" | "assistant";
+  snippet: string;
+  created_at?: number;
+}
+
+/** 跨会话搜索消息正文（标题里没有的内容也能搜到）。 */
+export async function searchMessages(q: string): Promise<MessageHit[]> {
+  const r = await api.get<{ items: MessageHit[] }>(
+    `/api/sessions/search?q=${encodeURIComponent(q)}`
+  );
+  return r.items ?? [];
+}
+
 export interface Provider {
   id: string;
   label: string;

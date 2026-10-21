@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = os.environ.get("AGENTD_BASE", "http://127.0.0.1:8799")
@@ -77,6 +78,20 @@ def main() -> int:
     # 越界 id：不存在的会话必须 404，而不是静默成功
     code, _ = req("DELETE", "/api/sessions/nope/messages/1")
     check("不存在的会话返回 404", code == 404, str(code))
+
+    # ---- 消息正文搜索：标题里没有的内容也必须能搜到 ----
+    _, s2 = req("POST", "/api/sessions", {})
+    sid2 = s2["session_id"]
+    chat("记住这个暗号：蓝色海豚七号", sid2)
+    _, hit = req("GET", "/api/sessions/search?q=" + urllib.parse.quote("蓝色海豚"))
+    check("搜索命中正文（不是标题）", hit.get("count", 0) >= 1, str(hit.get("count")))
+    check("命中项带摘要片段", bool((hit.get("items") or [{}])[0].get("snippet")))
+    check("命中项带所属会话 id", (hit.get("items") or [{}])[0].get("session_id") == sid2)
+    _, miss = req("GET", "/api/sessions/search?q=" + urllib.parse.quote("绝不存在的词xyz"))
+    check("无匹配时返回 0 而不是报错", miss.get("count") == 0, str(miss.get("count")))
+    _, empty = req("GET", "/api/sessions/search?q=")
+    check("空查询返回空列表", empty.get("items") == [], str(empty))
+    req("DELETE", f"/api/sessions/{sid2}")
 
     req("DELETE", f"/api/sessions/{sid}")
     print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
