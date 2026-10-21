@@ -6,7 +6,8 @@
 #   git clone <本仓库地址>
 #   cd pocketmind && bash termux/install.sh
 #
-# 安装内容（约 3-8 分钟；pydantic-core 在 Termux 上需用 Rust 现场编译一次）：
+# 安装内容（首次约 10-30 分钟，主要耗在 pydantic-core 的 Rust 现场编译；
+# 中低端手机可能更久。已装过的部分会自动跳过，重复执行只补缺的包）：
 #   1. Python 3 + 编译工具   pkg install python git rust binutils build-essential
 #      （pydantic-core 是 Rust 写的，Termux/aarch64 无预编译 wheel，必须本地编译）
 #   2. termux-api            手机能力桥（通知/剪贴板/电量/短信/电话…）
@@ -63,13 +64,21 @@ fi
 python --version
 
 step "2/4 安装 Python 依赖"
+# Termux 里 PyPI 官方源常常连不通（实测：pypi.org 连接被拒，清华/阿里云镜像正常）。
+# 先试官方源，失败自动换镜像重试——不能让用户对着 "Connection refused" 自己猜。
+PIP_MIRROR="${AGENT_PIP_MIRROR:-https://mirrors.aliyun.com/pypi/simple}"
 python -m pip install --upgrade pip -q
 # Termux 新版 Python 3.12 可能标记为 externally-managed（PEP 668）：
 # 先按普通方式装，失败再回退 --break-system-packages（Termux 的 Python 即用户自己的环境，
 # 没有 root 系统 Python，加该参数是安全且常规的做法）。
 if ! python -m pip install -r agentd/requirements.txt -q 2>"$HOME/.agent-pip-err.log"; then
-  echo "首次 pip 安装失败（可能是 externally-managed 或网络问题），改用 --break-system-packages 重试..."
-  if ! python -m pip install --break-system-packages -r agentd/requirements.txt -q 2>"$HOME/.agent-pip-err.log"; then
+  echo "官方 PyPI 失败（Termux 上常见），改用镜像 $PIP_MIRROR 重试..."
+  if ! python -m pip install -i "$PIP_MIRROR" -r agentd/requirements.txt -q 2>"$HOME/.agent-pip-err.log"; then
+    echo "镜像安装也失败，改用 --break-system-packages 再试..."
+  fi
+fi
+if ! python -c "import fastapi, pydantic" >/dev/null 2>&1; then
+  if ! python -m pip install --break-system-packages -i "$PIP_MIRROR" -r agentd/requirements.txt -q 2>"$HOME/.agent-pip-err.log"; then
     echo "❌ Python 依赖安装失败。最后 20 行错误："
     tail -20 "$HOME/.agent-pip-err.log" 2>/dev/null || true
     echo ""
