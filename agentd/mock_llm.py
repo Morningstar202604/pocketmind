@@ -65,6 +65,12 @@ class MockLLM:
             (re.compile(r"拍照|拍张|camera"), "take_photo", {}),
             (re.compile(r"wifi|WiFi|网络"), "get_wifi_info", {}),
             (re.compile(r"工具|执行|运行"), "run_shell", {"command": "echo 口袋智灵工具链路OK"}),
+            # 子代理：让 mock 也能演示「派活 → 独立上下文 → 只回结论」
+            (
+                re.compile(r"子代理|派个任务|交给子代理|subagent"),
+                "subagent",
+                {"task": "请统计当前目录下的文件数量，并用一句话回答。"},
+            ),
             # 任务清单：mock 也能演示 todo 面板与进度条（手机适配与演示都需要它）
             (
                 re.compile(r"任务清单|待办|todo"),

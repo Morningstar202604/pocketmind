@@ -22,3 +22,7 @@ current_store: ContextVar[Any] = ContextVar("current_store", default=None)
 current_emit: ContextVar[Callable[[dict], Awaitable[None]] | None] = ContextVar(
     "current_emit", default=None
 )
+# 当前 Agent 实例（subagent 工具需要它来构造独立上下文的子任务）
+current_agent: ContextVar[Any] = ContextVar("current_agent", default=None)
+# 当前审批回调（子代理调用需审批工具时复用，不能因"在子代理里"就免确认）
+current_ask: ContextVar[Callable | None] = ContextVar("current_ask", default=None)

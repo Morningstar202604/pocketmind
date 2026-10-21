@@ -75,6 +75,15 @@ function formatTime(ts?: number): string {
   return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
+// 少数工具的内部名对用户毫无意义，给中文标签；其余保持原名（技术用户认这个）
+const TOOL_LABEL: Record<string, string> = {
+  subagent: "子代理",
+  web_search: "联网搜索",
+  read_url: "读取网页",
+  todo_write: "任务清单",
+  todo_clear: "清空任务清单",
+};
+
 const STATUS_LABEL: Record<ToolPart["status"], string> = {
   running: "运行中",
   waiting: "需要确认",
@@ -146,7 +155,7 @@ function ToolCard({
         aria-controls={bodyId}
       >
         <span className={`tool-dot ${tool.status}`} />
-        <span className="tool-name">{tool.name}</span>
+        <span className="tool-name">{TOOL_LABEL[tool.name] || tool.name}</span>
         <span className={`tool-status ${tool.status}`}>{STATUS_LABEL[tool.status]}</span>
         {typeof tool.ms === "number" && tool.ms >= 300 && (
           <span className="tool-ms" title="执行耗时">

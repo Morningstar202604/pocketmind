@@ -41,15 +41,22 @@ def all_tools() -> list[Tool]:
     return list(_REGISTRY.values())
 
 
-def schemas() -> list[dict]:
+def schemas(only: set[str] | None = None, exclude: set[str] | None = None) -> list[dict]:
     """转成 OpenAI function calling 需要的 tools 参数。
 
     parameters 强制加 additionalProperties:false（strict mode），
     让 LLM 幻觉出的多余参数在 API 层报错而非静默忽略，
     OpenAI/DeepSeek/Kimi 均支持此属性。
+
+    only / exclude：按工具名筛选。子代理必须用它做**权限收窄**——把完整的
+    工具集交给子代理等于绕过了主代理的审批语义，是提权漏洞，不是便利。
     """
     out: list[dict] = []
     for t in all_tools():
+        if only is not None and t.name not in only:
+            continue
+        if exclude and t.name in exclude:
+            continue
         params = dict(t.parameters or {})
         # object 级别严格：禁止未知属性（LLM 幻觉参数在此层拦截）
         params["additionalProperties"] = False
@@ -182,7 +189,7 @@ def coerce_args(tool: Tool, args: dict) -> tuple[dict, str]:
 
 # 导入子模块完成注册（必须在 _REGISTRY 定义之后）
 # agent 自有能力（knowledge/todo）依赖 tools.ctx 提供的会话上下文
-from . import files, knowledge, net, shell, todo  # noqa: E402,F401
+from . import files, knowledge, net, shell, subagent_tool, todo  # noqa: E402,F401
 from . import (  # noqa: E402,F401  # phone 是子包，统一注册 system/comm/sensors/network/media
     phone as _phone_pkg,
 )

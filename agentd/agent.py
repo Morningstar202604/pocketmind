@@ -495,6 +495,9 @@ class Agent:
         _tok_s = tool_ctx.current_session.set(session_id)
         _tok_store = tool_ctx.current_store.set(self.store)
         _tok_emit = tool_ctx.current_emit.set(emit)
+        # 子代理需要 agent 本体（复用同一套 LLM 配置）与审批回调（审批不豁免）
+        _tok_agent = tool_ctx.current_agent.set(self)
+        _tok_ask = tool_ctx.current_ask.set(ask_approval)
         try:
             from .telemetry import agent_span
 
@@ -504,6 +507,8 @@ class Agent:
                     max_iters, retries, mem_cfg,
                 )
         finally:
+            tool_ctx.current_ask.reset(_tok_ask)
+            tool_ctx.current_agent.reset(_tok_agent)
             tool_ctx.current_emit.reset(_tok_emit)
             tool_ctx.current_store.reset(_tok_store)
             tool_ctx.current_session.reset(_tok_s)
