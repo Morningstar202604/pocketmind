@@ -470,6 +470,27 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=APP_NAME, version=VERSION, lifespan=lifespan)
 
+    # ---------- 运行指标（请求耗时/状态码/工具失败率） ----------
+    # 用中间件而非每个端点装饰器：端点有 43 个，逐个加会漏；
+    # 且中间件能统计到 404/500 这类"没有走到端点"的响应。
+    @app.middleware("http")
+    async def _metrics_mw(request, call_next):
+        import time as _time
+
+        from . import metrics as _m
+
+        t0 = _time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            _m.record_request(request.method, request.url.path, 500, _time.perf_counter() - t0)
+            _m.record_error("unhandled")
+            raise
+        _m.record_request(
+            request.method, request.url.path, response.status_code, _time.perf_counter() - t0
+        )
+        return response
+
     # ---------- 速率限制（保护高频写端点） ----------
     from .rate_limit import mount_rate_limit
     mount_rate_limit(app)  # default 30 次/分钟，超 429
@@ -1045,6 +1066,19 @@ def create_app() -> FastAPI:
             port=int(settings_mgr.data.get("server", {}).get("port", 8787) or 8787),
             data_dir=settings_mgr.path.parent,
         )
+
+    @app.get("/api/metrics", dependencies=[Depends(check_token)])
+    async def metrics_endpoint():
+        """Prometheus 文本格式指标。供 scrape，也方便 curl 直接看。
+
+        为什么需要 token：指标里含端点路径与工具名，虽然不是用户数据，
+        但暴露了内部能力面（装了哪些工具、哪些在失败），不该对未授权者开放。
+        """
+        from fastapi.responses import PlainTextResponse
+
+        from . import metrics as _m
+
+        return PlainTextResponse(_m.render_prometheus(), media_type="text/plain; version=0.0.4")
 
     @app.get("/api/stats", dependencies=[Depends(check_token)])
     async def stats():

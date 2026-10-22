@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
+from . import metrics as _m
 from . import permissions
 from .mem0_memory import Mem0Memory
 from .memory import Store
@@ -813,7 +815,9 @@ class Agent:
             status = "denied"
             await emit({"type": "tool_update", "id": tid, "name": name, "status": status, "result": result})
         else:
+            _t0 = time.perf_counter()
             result = await call_tool(name, args, retries=retries)
+            _m.record_tool(name, time.perf_counter() - _t0, not (result.get("error") or result.get("error_code")))
             # 危险文件操作的备份凭证：剥离出来登记，不进工具结果
             undoable = await self._record_checkpoint(session_id, tid, name, result.pop("_ckpt", None))
             # 状态判定：不能用 `"error" in result`（file 名可含 error 字样），

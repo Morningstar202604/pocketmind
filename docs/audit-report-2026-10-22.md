@@ -72,7 +72,7 @@ $ bash tests/run_all.sh --allow-dirty-dist
 | 指标 | 当前值 | 红线 | 判定 | 测量方式 |
 |---|---|---|---|---|
 | 行覆盖率（后端） | **59%**（审查时 48%） | ≥ 90% | ❌ 仍不通过 | `coverage run` 18 个套件合并（`coverage report`） |
-| 分支覆盖率 | `[未确认]` | ≥ 85% | `[未确认]` | 需 `coverage run --branch`，仍未采 |
+| 分支覆盖率 | **83.5%**（1434 分支覆盖 1198） | ≥ 85% | ⚠️ 差 1.5 点 | `coverage run --branch` 20 套件合并 |
 | 变异分数 | **100%**（28 个变异体全杀，1 个等价变异已证并排除；首测 55.2%） | ≥ 80% | ✅ 通过 | 自写 `smoke/p19_mutation_test.py`（AST 定位运算符 + 子进程跑测试） |
 | 圈复杂度（最大） | **33**（`Agent._loop` 拆后为 11；`create_app` 仍高） | ≤ 10 | ⚠️ 部分改善 | `radon cc -s` |
 | 圈复杂度（次大） | 47 → **2**（`Agent.chat`） | ≤ 10 | ✅ 通过 | 同上 |
@@ -80,7 +80,7 @@ $ bash tests/run_all.sh --allow-dirty-dist
 | 函数 > 50 行 | 16 个 | 0 | ❌ 不通过 | AST 统计（见 3.2） |
 | 技术债务比率 | `[未确认]` | ≤ 5% | `[未确认]` | 需 SonarQube，未接入 |
 | 重复行率 | **6.5%** | < 3% | ❌ 不通过 | 自写 AST 行去重（剔除 import/except 模板） |
-| Critical/High 漏洞 | **1**（SSRF，已修） | 0 | ✅ 修复后为 0 | 手工审计 + PoC 复现 |
+| Critical/High 漏洞 | 后端 1（SSRF，已修）；前端依赖原有 2 CRITICAL + 3 HIGH，已消除 | 0 | ✅ **0** | 手工审计 + OSV.dev 扫描（`p22`） |
 | 前端包体积（gzip） | 97 KB | — | ✅ 健康 | `vite build` + `gzip` |
 
 ---
@@ -105,8 +105,8 @@ $ bash tests/run_all.sh --allow-dirty-dist
 | F-014 | Low | 高 | 移动适配 | `agentd/web/src/styles.css:1867` | 320px 下标题折成两行、引导卡文字折行 | 截图 `empty-320.png` | 已修：`@media (max-width:360px)` + `.tasks` 单列 | **关闭差距** |
 | F-015 | Low | 高 | 依赖治理 | `agentd/requirements.txt:9-13` | 只有下界无上限，大版本发布会静默破坏部署 | 读过 `mcp 1.x→2.x` 的历史兼容分支 | 已修：关键包加 `<3` / `<1` + `check_requirements.py` 校验 | **关闭差距** |
 | F-016 | Low | 高 | 测试有效性 | `tests/` 全目录 | 后端测试是脚本式（自己统计 passed/failed），无法被 pytest 收集 → 覆盖率工具默认采不到 | `pytest --collect-only` 只收集 6 个 | 可选：给脚本套 runner 适配层，或接受现状并用 `coverage run` 逐脚本采集 | **承认差距** |
-| F-017 | `[未确认]` | — | 供应链 | `agentd/web/package-lock.json` | 未做 CVE 扫描 | 无扫描器 | 接入 `npm audit` / `pip-audit` | `[未确认]` |
-| F-018 | `[未确认]` | — | 分支覆盖 | — | 未采 `--branch` | — | 下次测量补 `coverage run --branch` | `[未确认]` |
+| F-017 | ~~Medium~~ **已修复** | 高 | 供应链 | `agentd/web/package-lock.json` | 前端依赖曾有 2 CRITICAL + 3 HIGH（tinypool RCE、vite 路径穿越、source-map-js DoS） | OSV.dev 实测（`p22`） | 升级 vite 5→7.3.7、vitest 2→5.0.5、`overrides` 强制 source-map-js ^1.2.2；现 0 Critical/High | **关闭差距** |
+| F-018 | Low | 高 | 分支覆盖 | — | 已采 `--branch`：**83.5%**，距 85% 红线差 1.5 点 | `coverage report` | 补 `main.py` 的错误分支（现 41%） | **承认差距** |
 
 ### F-001 的最小可复现 PoC（已执行）
 
@@ -261,8 +261,29 @@ risk×mode 判定）从嵌套五层的 if-else 变成四个带注释的早返回
 `test_a`，后面被当成 `sys.argv` —— 导致第二个套件的断言从未运行、变异被误判为存活。
 改成逐个跑后，`net.py` 从 33% 跳到 83%。
 
-**仍未完成**：`create_app` 拆分（F-002 的根治：1052 行、`lifespan` 180 行）、分支覆盖率。
-覆盖率维持 59%，离 90% 红线仍有 31 个百分点；但**变异分数 100%** 说明现有覆盖到的
+**第五轮：补齐可量化的缺口（分支覆盖 / 依赖漏洞 / 指标端点）**
+
+1. **分支覆盖率已采**：行 60% / 分支 **83.5%**（1434 个分支覆盖 1198），距 85% 红线差
+   1.5 个百分点。`main.py` 分支覆盖仅 41%，是主要拖累。
+
+2. **依赖漏洞扫描（F-017 关闭）**：`pip-audit` 在本机返回空且 exit 0——加 `-v` 才看出它
+   卡在访问 pypi.org（本机不通），**把网络失败静默当成"没有漏洞"**。改用 OSV.dev REST API
+   自建 `p22_dep_audit_test.py`，首扫就发现前端 **2 个 CRITICAL + 3 个 HIGH**：
+   - `tinypool@1.1.1` 原型污染 → RCE（CRITICAL ×2）
+   - `vite@5.4.21` 路径穿越 / launch-editor 注入（HIGH ×2）
+   - `source-map-js@1.2.1` 事件循环 DoS（HIGH）
+   全部是 `dev=True`（构建时依赖，不进 `dist/`），但开发机被攻破同样危险。
+   已升级 vite 5→7.3.7、vitest 2→5.0.5、`overrides` 锁 source-map-js ^1.2.2。
+   **复扫 0 Critical/High**；67 个前端单测 + 构建全过。
+
+3. **`/api/metrics`（F-012 部分关闭）**：`agentd/metrics.py` 进程内计数器 +
+   Prometheus 文本格式，无新依赖。中间件自动统计所有请求（含 404/500），
+   工具执行记录耗时与失败率。路径归一化到 `/{id}`，避免指标基数随会话数爆炸，
+   也避免把会话 id 灌进监控系统（`p23` 24 条断言，含"文本不含原始 id"）。
+
+**仍未完成**：`create_app` 拆分（F-002 的根治：1052 行、`lifespan` 180 行）。
+
+覆盖率 59-60%，离 90% 红线仍有 30 个百分点；但**变异分数 100%** 说明现有覆盖到的
 那部分代码，断言是有效的。
 
 ---
