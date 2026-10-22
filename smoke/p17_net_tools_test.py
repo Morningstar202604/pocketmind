@@ -208,6 +208,77 @@ def main() -> int:
 
     asyncio.run(run())
 
+    # ---------- 边界值（变异测试发现的缺口） ----------
+    # 1) DDG 只有 1 个结果块时 len(blocks)<=1 → 必须整页当一块处理
+    one_block = """<div class="result results_links">
+      <a class="result__a" href="https://only.example/x">唯一结果</a>
+      <a class="result__snippet">唯一摘要</a>
+    </div>"""
+    r = net._parse_ddg(one_block, 5)
+    check("DDG 单结果也能解析", len(r) == 1 and r[0]["url"] == "https://only.example/x", str(r))
+
+    # 关键边界：payload 里**一次都不出现** result 块容器时，len(blocks)==1，
+    # 代码必须把整页当作一块来解析（否则直接返回空，搜索引擎改版就全军覆没）。
+    no_container = """<html><body>
+      <a class="result__a" href="https://fallback.example/z">无容器结果</a>
+      <a class="result__snippet">无容器摘要</a>
+    </body></html>"""
+    import re as _re
+    check("构造的用例确实只有 1 个 split 块",
+          len(_re.split(r'<div class="result results_links', no_container)) == 1)
+    r = net._parse_ddg(no_container, 5)
+    check("无 result 容器时整页当一块解析（<=1 边界）",
+          len(r) == 1 and r[0]["url"] == "https://fallback.example/z", str(r))
+
+    # 2) web_search 的 limit 上限是 10：传 100 必须被钳到 10 而不是原样下传
+    # web_search 用的是 urllib.request.urlopen（不是 build_opener）。
+    # 注意 FakeResp 原本定义在 run() 内部，同步部分拿不到——这里另建一个同构的。
+    class _Resp:
+        def __init__(self, body: str):
+            self._b = body.encode("utf-8")
+            self.status = 200
+            self.headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def read(self, *a):
+            return self._b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    orig_open = urllib.request.urlopen
+    urllib.request.urlopen = lambda req, timeout=None: _Resp(BING_HTML)
+    try:
+        r = asyncio.run(net.web_search("边界", 100))
+    finally:
+        urllib.request.urlopen = orig_open
+    check("web_search limit=100 被钳到 10（返回不超过 10 条）", r.get("count", 99) <= 10, str(r.get("count")))
+
+    # 3) _check_url_allowed 的 scheme 白名单：ftp / gopher / javascript 都要拒
+    for bad_scheme in ("ftp://x.com/", "gopher://x.com/", "javascript:alert(1)", "data:text/html,x"):
+        reason = net._check_url_allowed(bad_scheme)
+        check(f"拒绝 scheme {bad_scheme.split(':')[0]}", bool(reason), bad_scheme)
+
+    # 4) host 缺失（只有 scheme）
+    reason = net._check_url_allowed("http:///path")
+    check("拒绝无主机名的 URL", bool(reason), str(reason))
+
+    # 5) 非字符串入参：`not isinstance(x, str) or not x.strip()` 里 or→and 的变异
+    #    只有传"非字符串"才能区分（传空字符串两者都为真，测不出差别）。
+    r = asyncio.run(net.web_search(123))  # type: ignore[arg-type]
+    check("web_search 非字符串入参 → error", "不能为空" in r.get("error", ""), str(r))
+    r = asyncio.run(net.read_url(123))  # type: ignore[arg-type]
+    check("read_url 非字符串入参 → error", "只支持" in r.get("error", ""), str(r))
+
+    # 6) _check_url_allowed 的 scheme 判断用 not in：
+    #    必须验证"合法 scheme 不报错"，否则 in/not in 互换测不出
+    for good_scheme in ("http://example.com/", "https://example.com/"):
+        reason = net._check_url_allowed(good_scheme)
+        check(f"合法 scheme {good_scheme.split(':')[0]} 不被 scheme 规则拒绝",
+              "只支持" not in reason, reason)
+
     # ---------- _healthcheck ----------
     h = net._healthcheck()
     check("_healthcheck 返回 ok 字段", "ok" in h, str(h))

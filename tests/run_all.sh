@@ -7,6 +7,7 @@
 #   bash tests/run_all.sh --fresh      # 强制 npm ci 重装前端依赖
 #   bash tests/run_all.sh --with-e2e   # 追加 Playwright E2E（需先装浏览器）
 #   bash tests/run_all.sh --allow-dirty-dist  # 提交前自检：dist 允许有未提交改动
+#   bash tests/run_all.sh --with-mutation     # 追加变异测试（慢，验证断言有效性）
 #
 # 退出码：0 = 请求的检查全部通过；1 = 有失败项；2 = 环境不满足（缺依赖/参数错误）。
 # 数据隔离：门禁只用自己的临时 AGENT_HOME，绝不读取、更不会删除外层 shell 里的同名变量。
@@ -20,6 +21,7 @@ RUN_FRONTEND=1
 FORCE_INSTALL=0
 WITH_E2E=0
 ALLOW_DIRTY_DIST=0
+WITH_MUTATION=0
 MODE_SEEN=""
 for arg in "$@"; do
   case "$arg" in
@@ -32,7 +34,9 @@ for arg in "$@"; do
     --with-e2e) WITH_E2E=1 ;;
     # 提交前自检：dist 允许有未提交改动（改完源码、build 完、还没 commit 是正常状态）。
     --allow-dirty-dist) ALLOW_DIRTY_DIST=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    # 变异测试较慢（每个变异体跑一遍测试套件），默认不进门禁
+    --with-mutation) WITH_MUTATION=1 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "未知参数：$arg（-h 查看用法）" >&2; exit 2 ;;
   esac
 done
@@ -142,6 +146,11 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p16 知识库（增删查 + 注入转义 + 边界）" run_py smoke/p16_knowledge_test.py
   step "p17 联网工具（解析器 + 引擎回退，全离线）" run_py smoke/p17_net_tools_test.py
   step "p18 Agent 主循环（Plan/审批/超时/失败/轮数上限）" run_py smoke/p18_agent_loop_test.py
+  step "p20 审批规则矩阵（risk × mode 九种组合）" run_py smoke/p20_permissions_test.py
+  step "p21 任务清单（上下文/截断/emit 失败降级）" run_py smoke/p21_todo_test.py
+  if [ "$WITH_MUTATION" = 1 ]; then
+    step "p19 变异测试（断言有效性，较慢）" run_py smoke/p19_mutation_test.py
+  fi
 
   # 不依赖服务的套件先跑，失败也不会挡住后面起服务
   step "p0 回归（重启恢复 / \$HOME 展开 / FTS 排除）" run_py smoke/p0_regression_test.py

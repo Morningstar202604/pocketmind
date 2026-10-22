@@ -130,6 +130,38 @@ async def main() -> int:
     r = await F.delete_file("../outside.txt")
     check("delete_file 越界被拒", "error" in r, str(r))
 
+    # ---------- 敏感目录黑名单（变异测试发现的断言缺口） ----------
+    # `if p == d or d in p.parents` 改成 `and` 之后，**子路径**会绕过黑名单
+    # （只有目录本身被拦，里面的 id_rsa 反而能读）。必须直接断言子路径。
+    for rel in (".ssh/id_rsa", ".ssh", ".gnupg/secring.gpg", ".agent/config.json"):
+        try:
+            F._resolve(str(tmp_home / rel))
+            check(f"敏感路径 {rel} 被拦", False, "未抛异常（可被读取）")
+        except ValueError:
+            check(f"敏感路径 {rel} 被拦", True)
+
+    # ---------- 边界值（> vs >= 的变异存活说明没测等号） ----------
+    exact = tmp_home / "docs" / "exact.txt"
+    exact.write_text("z" * F.MAX_TEXT, encoding="utf-8")
+    r = await F.read_file("docs/exact.txt")
+    check(f"恰好 {F.MAX_TEXT} 字节可读（不触发 > 限制）", "content" in r, str(r)[:80])
+
+    exact1 = tmp_home / "docs" / "exact1.txt"
+    exact1.write_text("z" * (F.MAX_TEXT + 1), encoding="utf-8")
+    r = await F.read_file("docs/exact1.txt")
+    check(f"{F.MAX_TEXT + 1} 字节被拒", "文件过大" in r.get("error", ""), str(r)[:80])
+
+    # write 的 1MB 边界同样要有等号断言
+    r = await F.write_file("docs/mb.txt", "y" * 1_000_000)
+    check("恰好 1000000 字节可写入", r.get("ok") is True, str(r)[:80])
+    r = await F.write_file("docs/mb2.txt", "y" * 1_000_001)
+    check("1000001 字节被拒", "内容过大" in r.get("error", ""), str(r)[:80])
+
+    # ---------- _roots() 去重 ----------
+    roots = F._roots()
+    strs = [str(x) for x in roots]
+    check("_roots 无重复项", len(strs) == len(set(strs)), str(strs))
+
     # ---------- 工具注册 ----------
     from agentd.tools import get_tool
 

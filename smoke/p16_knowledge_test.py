@@ -54,6 +54,12 @@ async def main() -> int:
         r = await K.kb_add("超长", "x" * 20001)
         check("kb_add 超 20000 字被拒", "过长" in r.get("error", ""), str(r))
 
+        # 边界等号：恰好 20000 字必须能存（变异测试发现 >/>= 互换没被测到）
+        r = await K.kb_add("恰好20000", "y" * 20000)
+        check("kb_add 恰好 20000 字可存", r.get("ok") is True, str(r)[:80])
+        r = await K.kb_add("再多一字", "z" * 20001)
+        check("kb_add 20001 字被拒（等号边界）", "过长" in r.get("error", ""), str(r))
+
         r = await K.kb_add("", "没有标题的内容")
         check("kb_add 空标题回退为「未命名」", r.get("title") == "未命名", str(r.get("title")))
 
