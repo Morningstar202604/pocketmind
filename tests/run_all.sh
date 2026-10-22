@@ -154,6 +154,7 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p21 任务清单（上下文/截断/emit 失败降级）" run_py smoke/p21_todo_test.py
   step "p23 运行指标（计数器/Prometheus 格式/不泄露 id）" run_py smoke/p23_metrics_test.py
   step "p24 聊天编排（run_agent / 队列续跑 / 取消 / 未配置 / 异常）" run_py smoke/p24_run_agent_test.py
+  step "p25 性能回归（N+1 查询数 / 工具结果硬顶）" run_py smoke/p25_perf_regression_test.py
   if [ "$WITH_DEP_AUDIT" = 1 ]; then
     step "p22 依赖漏洞扫描（OSV.dev，需外网）" run_py smoke/p22_dep_audit_test.py
   fi

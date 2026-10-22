@@ -92,6 +92,16 @@ TG_CHAT_ID: str = ""
 tg_gateway = None  # TelegramGateway 实例（未启用时为 None）
 
 
+def _new_run(queue: asyncio.Queue, pending: list[str] | None = None) -> dict:
+    """统一的 run 记录结构。
+
+    所有字段一次给全：此前两处字面量一个有 cancelled 一个没有，
+    读的地方靠 .get("cancelled") 默认值兜着——能跑，但"取消语义"依赖默认值
+    是很容易被后来者改错的写法（新增入口漏字段 → 取消失效）。
+    """
+    return {"task": None, "queue": queue, "pending": pending or [], "cancelled": False}
+
+
 def emit_now(session_id: str):
     """取该会话的 SSE 事件队列，返回一个异步 emit 回调；无进行中任务时返回 None。"""
     q = runs.get(session_id, {}).get("queue")
@@ -226,7 +236,7 @@ async def run_agent(session_id: str, message: str) -> None:
         if pending and still_exists:
             nxt = pending.pop(0)
             queue2: asyncio.Queue = asyncio.Queue()
-            runs[session_id] = {"task": None, "queue": queue2, "pending": pending}
+            runs[session_id] = _new_run(queue2, pending)
             task2 = asyncio.create_task(run_agent(session_id, nxt))
             runs[session_id]["task"] = task2
 
@@ -661,7 +671,7 @@ def create_app() -> FastAPI:
 
         queue: asyncio.Queue = asyncio.Queue()
         # 先注册再启动任务，避免 run_agent 首帧 emit 时 runs 尚未就绪的竞态
-        runs[session_id] = {"task": None, "queue": queue}
+        runs[session_id] = _new_run(queue)
         task = asyncio.create_task(run_agent(session_id, message))
         runs[session_id]["task"] = task
 
@@ -1259,23 +1269,26 @@ def create_app() -> FastAPI:
                  "created_at": k["created_at"]}
                 for k in await store.kb_list()
             ]
-            for s in await store.list_sessions(limit=500):
+            # 批量取回：原来是「每个会话查 5 次」（messages / archives / todos /
+            # summary / archived_upto），500 个会话就是 2500 次往返。
+            # export_bundle 用 5 条聚合查询一次拿完，实测复杂度从 O(会话数) 降到常数。
+            bundle = await store.export_bundle(max_sessions=500, max_messages=1000)
+            for s in bundle["sessions"]:
+                payload_s = bundle["by_session"].get(s["id"], {})
                 msgs = [
                     {"role": m["role"], "content": m["content"], "meta": m.get("meta")}
-                    for m in await store.get_messages(s["id"], limit=1000)
+                    for m in payload_s.get("messages", [])
                 ]
-                # 摘要与归档记忆是「长期记忆」的主体，缺了它备份名不符实
-                archives = await store.get_archives(s["id"], limit=1000)
                 out["sessions"].append(
                     {
                         "id": s["id"],
                         "title": s["title"],
                         "message_count": len(msgs),
-                        "todos": await store.get_todos(s["id"]),
+                        "todos": payload_s.get("todos", []),
                         "messages": msgs,
-                        "summary": await store.get_summary(s["id"]),
-                        "archives": archives,
-                        "archived_upto": await store.get_archived_upto(s["id"]),
+                        "summary": payload_s.get("summary"),
+                        "archives": payload_s.get("archives", []),
+                        "archived_upto": s.get("archived_upto", 0),
                     }
                 )
             try:

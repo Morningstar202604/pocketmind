@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 20      # 兜底：一轮最多工具调用次数（配置项 agent.max_tool_chain_depth）
 MAX_CONTEXT = 80         # 上下文消息上限，超出做安全裁剪（消息条数兜底，非 token 预算）
 MAX_HISTORY_WINDOW = 60  # 长程记忆分页：近期原始消息窗口，更早的历史滚动归档为摘要
-MAX_TOOL_TEXT = 6000     # 回传给模型的工具结果上限
+MAX_TOOL_TEXT = 6000     # 回传给模型的工具结果默认上限
+MAX_TOOL_TEXT_HARD_CAP = 60_000  # 按预算放大时的硬顶（约 1.5 万 token）
 CHARS_PER_TOKEN = 4      # 粗略 token 估算口径（与 _tool_result_limited 保持一致）
 
 Emit = Callable[[dict], Awaitable[None]]
@@ -124,7 +125,11 @@ def _tool_result_limited(text: str, settings) -> str:
             ctx = {}
         budget = int((ctx or {}).get("budget_tokens", 0) or 0)
         if budget > 0:
-            limit = max(400, int(budget * 0.15 * 4))
+            # 单条工具结果的预算上限。
+            # 必须有**硬顶**：按比例算时 budget=200000 会给出 12 万字符（≈3 万 token），
+            # 一条 cat 大文件的结果就能把整个上下文挤爆（手机更明显）。
+            # 60000 字符 ≈ 1.5 万 token，已是单条工具结果的实际上限。
+            limit = max(400, min(int(budget * 0.15 * 4), MAX_TOOL_TEXT_HARD_CAP))
     except Exception:  # noqa: BLE001
         limit = MAX_TOOL_TEXT
     if len(text) <= limit:
