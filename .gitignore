@@ -165,3 +165,8 @@ website/_shots/
 
 # Windows 设备保留名，测试脚本（run_shell）误生成的空文件，不入库
 nul
+
+# 覆盖率临时文件（coverage run 会产生 .coverage* / .cov.t*）
+.coverage
+.coverage.*
+.cov.t*
