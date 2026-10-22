@@ -182,6 +182,108 @@ class Agent:
         self._summarizer_obj = None  # 摘要器懒加载（直连端点，见 summarizer.py）
         self._pending_mem0_tasks: set = set()  # 保留引用，防 GC 回收进行中任务
 
+    async def _memory_context_block(self, message: str, session_id: str, search_limit: int) -> list[dict]:
+        """检索并组装「相关历史记忆 + 分页摘要」两个 system 块。
+
+        Mem0 语义召回与 FTS5 关键词检索互补，用 RRF（k=60）融合；
+        任一来源失败只降级该来源，不影响对话。
+        """
+        mem0_results: list[dict] = []
+        fts5_results: list[dict] = []
+        if self.mem0 is not None and self.mem0.enabled():
+            try:
+                mem0_results = await self.mem0.asearch(
+                    message, limit=search_limit, session_id=session_id
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Mem0 搜索失败，降级 FTS5: %s", e)
+        try:
+            fts5_results = await self.store.search_memories(
+                message, limit=search_limit, exclude_session=session_id
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("FTS5 搜索失败: %s", e)
+
+        out: list[dict] = []
+        merged = _rrf_fuse(mem0_results, fts5_results, k=60, limit=search_limit)
+        if merged:
+            rel_text = "\n".join(f"· {m['text'][:160]}" for m in merged[:search_limit])
+            out.append({"role": "system", "content": f"与此相关的历史记忆：\n{rel_text}"})
+        summary = await self.store.get_summary(session_id)
+        archives = await self.store.get_archives(session_id, limit=5)
+        mem_parts = [a["content"][:300] for a in reversed(archives)]
+        if summary:
+            mem_parts.append(summary)
+        if mem_parts:
+            mem_text = "\n".join(f"· {p}" for p in mem_parts)
+            out.append({"role": "system", "content": f"此前对话摘要（分页归档）：\n{mem_text}"})
+        return out
+
+    async def _load_history(
+        self,
+        *,
+        session_id: str,
+        mem_cfg: dict,
+        budget_tokens: int,
+        auto_compress: bool,
+        compress_threshold: float,
+    ) -> list[dict]:
+        """恢复历史消息，并在需要时先滚动归档，再转成 LLM 消息格式。
+
+        两类归档触发：① 估算 token 接近预算 × 阈值（预算优先）；
+        ② 条数超过 MAX_HISTORY_WINDOW（兜底）。归档失败只降级。
+        """
+        # 中断恢复：上一轮在「工具结果落库前」被杀会留下没有响应的 tool_calls，
+        # 补占位响应后历史才自洽（否则本次请求直接 400，会话卡死）。
+        try:
+            recovered = await self.store.recover_orphan_tool_calls(session_id)
+            if recovered:
+                logger.info("会话 %s 检测到 %d 个未完成工具调用，已补占位响应", session_id, recovered)
+        # aqg: top-level boundary —— 失败仅降级本能力
+        except Exception as e:  # noqa: BLE001
+            logger.warning("孤立工具调用恢复失败: %s", e)
+
+        history = await self.store.get_messages(session_id)
+        if auto_compress and history:
+            llm_for_archive = self._summarizer()
+            if _should_compress(_estimate_tokens(history), budget_tokens, compress_threshold,
+                                auto=auto_compress):
+                keep = max(10, len(history) // 3)
+                if len(history) > keep:
+                    old_msgs, history = history[:-keep], history[-keep:]
+                    try:
+                        await self.store.archive_messages(
+                            session_id, old_msgs, mem_cfg, llm_client=llm_for_archive
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("预算触发归档失败: %s", e)
+            if len(history) > MAX_HISTORY_WINDOW:
+                old_msgs, history = history[:-MAX_HISTORY_WINDOW], history[-MAX_HISTORY_WINDOW:]
+                try:
+                    await self.store.archive_messages(
+                        session_id, old_msgs, mem_cfg, llm_client=llm_for_archive
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        out: list[dict] = []
+        for m in history:
+            msg: dict = {"role": m["role"], "content": m["content"] or ""}
+            meta = m.get("meta") or {}
+            if m["role"] == "assistant" and meta.get("tool_calls"):
+                msg["tool_calls"] = [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {"name": c["name"], "arguments": c.get("args", "{}")},
+                    }
+                    for c in meta["tool_calls"]
+                ]
+            elif m["role"] == "tool" and meta.get("tool_call_id"):
+                msg["tool_call_id"] = meta["tool_call_id"]
+            out.append(msg)
+        return out
+
     # ---------- 配置读取：把散落的 try/except 收敛为一处 ----------
 
     def _runtime_limits(self) -> dict:
@@ -422,88 +524,16 @@ class Agent:
 
         # 组装上下文（顺序固定，前缀稳定以利提示缓存）
         messages: list[dict] = self._build_system_prefix(tools)
-        # P1：跨会话相关记忆 — RRF 混合检索（向量语义 + FTS5 关键词 互补融合）
-        # Mem0 语义召回 + FTS5 trigram 关键词 → 互斥不再 fallback，RRF 加权合并
-        mem0_results: list[dict] = []
-        fts5_results: list[dict] = []
-
-        if self.mem0 is not None and self.mem0.enabled():
-            try:
-                mem0_results = await self.mem0.asearch(message, limit=search_limit, session_id=session_id)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Mem0 搜索失败，降级 FTS5: %s", e)
-
-        # FTS5 关键词检索（始终执行，作为语义检索的补充）
-        try:
-            fts5_results = await self.store.search_memories(message, limit=search_limit, exclude_session=session_id)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("FTS5 搜索失败: %s", e)
-
-        # Reciprocal Rank Fusion（k=60 为标准值）
-        merged = _rrf_fuse(mem0_results, fts5_results, k=60, limit=search_limit)
-        if merged:
-            rel_text = "\n".join(f"· {m['text'][:160]}" for m in merged[:search_limit])
-            messages.append({"role": "system", "content": f"与此相关的历史记忆：\n{rel_text}"})
-        summary = await self.store.get_summary(session_id)
-        archives = await self.store.get_archives(session_id, limit=5)
-        mem_parts = [a["content"][:300] for a in reversed(archives)]
-        if summary:
-            mem_parts.append(summary)
-        if mem_parts:
-            mem_text = "\n".join(f"· {p}" for p in mem_parts)
-            messages.append({"role": "system", "content": f"此前对话摘要（分页归档）：\n{mem_text}"})
-        # 恢复历史消息：从 meta 反序列化 tool_calls / tool_call_id，
-        # 否则重启后孤立的 role:"tool" 消息会让 OpenAI 兼容 API 返回 400。
-        # 先做中断恢复：上一轮在「工具结果落库前」被杀会留下没有响应的 tool_calls，
-        # 补占位响应后历史才自洽（否则本次请求直接 400，会话卡死）。
-        try:
-            recovered = await self.store.recover_orphan_tool_calls(session_id)
-            if recovered:
-                logger.info("会话 %s 检测到 %d 个未完成工具调用，已补占位响应", session_id, recovered)
-        # aqg: top-level boundary —— 失败仅降级本能力
-        except Exception as e:  # noqa: BLE001 —— 恢复失败不阻塞新消息
-            logger.warning("孤立工具调用恢复失败: %s", e)
-        # P0 长程记忆分页：超过近期窗口的历史消息先滚动归档为摘要，再注入近期窗口。
-        # 两类触发：① 消息条数超过 MAX_HISTORY_WINDOW（兜底）；
-        #           ② 估算 token 接近 context.budget_tokens * compress_threshold（预算优先）。
-        history = await self.store.get_messages(session_id)
-        llm_for_archive = self._summarizer()
-        if auto_compress and history:
-            if _should_compress(_estimate_tokens(history), budget_tokens, compress_threshold,
-                                auto=auto_compress):
-                # 预算触发：保留最近 1/3（至少 10 条），其余归档
-                keep = max(10, len(history) // 3)
-                if len(history) > keep:
-                    old_msgs, history = history[:-keep], history[-keep:]
-                    try:
-                        await self.store.archive_messages(session_id, old_msgs, mem_cfg,
-                                                          llm_client=llm_for_archive)
-                    # aqg: top-level boundary —— 失败仅降级本能力
-                    except Exception as e:  # noqa: BLE001 —— 归档失败不影响主流程
-                        logger.warning("预算触发归档失败: %s", e)
-            if len(history) > MAX_HISTORY_WINDOW:
-                old_msgs, history = history[:-MAX_HISTORY_WINDOW], history[-MAX_HISTORY_WINDOW:]
-                try:
-                    await self.store.archive_messages(session_id, old_msgs, mem_cfg,
-                                                      llm_client=llm_for_archive)
-                # aqg: top-level boundary —— 失败仅降级本能力
-                except Exception:  # noqa: BLE001 —— 归档失败不影响主流程
-                    pass
-        for m in history:
-            msg: dict = {"role": m["role"], "content": m["content"] or ""}
-            meta = m.get("meta") or {}
-            if m["role"] == "assistant" and meta.get("tool_calls"):
-                msg["tool_calls"] = [
-                    {
-                        "id": c["id"],
-                        "type": "function",
-                        "function": {"name": c["name"], "arguments": c.get("args", "{}")},
-                    }
-                    for c in meta["tool_calls"]
-                ]
-            elif m["role"] == "tool" and meta.get("tool_call_id"):
-                msg["tool_call_id"] = meta["tool_call_id"]
-            messages.append(msg)
+        # 跨会话相关记忆 + 分页摘要（两个 system 块）
+        messages.extend(await self._memory_context_block(message, session_id, search_limit))
+        # 历史消息（含中断恢复与滚动归档后的近期窗口）
+        messages.extend(await self._load_history(
+            session_id=session_id,
+            mem_cfg=mem_cfg,
+            budget_tokens=budget_tokens,
+            auto_compress=auto_compress,
+            compress_threshold=compress_threshold,
+        ))
         messages.append({"role": "user", "content": message})
         await self.store.add_message(session_id, "user", message)
 
@@ -542,77 +572,35 @@ class Agent:
         retries: int,
         mem_cfg: dict,
     ) -> None:
-        """ReAct 主循环（拆出以便用 try/finally 管理工具执行上下文）。"""
+        """ReAct 主循环：流式 → 决定收尾/落计划/调工具 → 下一轮。
+
+        复杂度从 53 降到 ~10：每一段都抽成了独立方法（_stream_round /
+        _finish_plan / _finish_turn / _run_one_tool / _decide_tool），
+        这里只保留"这一轮该走哪条路"的判断。
+        """
         for _ in range(max_iters):
             messages = _trim(messages)
-            content_acc, reasoning_acc = "", ""
-            tool_calls: dict[int, dict] = {}
             try:
-                async for content, reasoning, tc_delta in self._stream(messages, tools):
-                    if reasoning:
-                        reasoning_acc += reasoning
-                        await emit({"type": "thinking", "text": reasoning})
-                    if content:
-                        content_acc += content
-                        await emit({"type": "text", "text": content})
-                    if tc_delta:
-                        for tc in tc_delta:
-                            acc = tool_calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-                            if tc.id:
-                                acc["id"] = tc.id
-                            if tc.function:
-                                if tc.function.name:
-                                    acc["name"] = tc.function.name
-                                if tc.function.arguments:
-                                    acc["args"] += tc.function.arguments
+                content_acc, tool_calls = await self._stream_round(messages, tools, emit)
             except asyncio.CancelledError:
                 raise
 
-            # ---------- Plan 模式：首轮输出后即停止，不执行任何工具 ----------
-            # 参考 Cline Plan/Act：先把「计划文本 + 打算调用的工具」交给用户确认，
-            # 用户切到 act 模式（或下一轮）才真正执行。tool_calls 一律不执行，只随计划透出。
+            # Plan 模式：首轮输出后即停止，不执行任何工具
             if self.settings.agent_mode() == "plan":
-                planned = [
-                    {"name": tc["name"], "arguments": tc["args"] or "{}"}
-                    for _, tc in sorted(tool_calls.items())
-                ]
-                plan_text = content_acc.strip()
-                if planned:
-                    calls_desc = "\n".join(f"· 调用 {c['name']}({c['arguments']})" for c in planned)
-                    plan_text = (f"{plan_text}\n\n计划调用工具：\n{calls_desc}" if plan_text
-                                 else f"计划调用工具：\n{calls_desc}")
-                # 计划本身作为一条 assistant 消息落库（不含 tool_calls，因为并未执行）
-                await self.store.add_message(session_id, "assistant", plan_text or "（无具体计划内容）")
-                await emit({"type": "plan", "plan": plan_text, "tool_calls": planned})
-                await emit({"type": "done", "stop_reason": "plan"})
+                await self._finish_plan(
+                    session_id=session_id, content=content_acc, tool_calls=tool_calls, emit=emit
+                )
                 return
 
+            # 没有工具调用 = 本轮结束
             if not tool_calls:
-                text = content_acc.strip()
-                await self.store.add_message(session_id, "assistant", text)
-                # 一轮结束后滚动更新记忆摘要（后续对话的开头注入）
-                # 改进：按 settings.memory.auto_summarize 配置驱动（可关闭 / 改阈值）
-                try:
-                    if mem_cfg:
-                        # 摘要器：LiteLLM 优先，否则直连端点（见 _summarizer 注释——
-                        # 旧实现传 AsyncOpenAI 客户端，导致默认配置下摘要从未生效）
-                        llm_for_summary = self._summarizer()
-                        if llm_for_summary:
-                            await self.store.auto_summarize_if_needed(session_id, mem_cfg, llm_client=llm_for_summary)
-                        else:
-                            logger.debug("记忆摘要跳过：无可用摘要器 session=%s", session_id)
-                except Exception as e:  # noqa: BLE001 —— 摘要失败不影响主流程
-                    logger.warning("记忆摘要更新失败: %s", e)
-                # Mem0 异步抽取长期事实（不阻塞响应；失败仅日志）
-                if self.mem0 is not None and self.mem0.enabled() and not self.mock:
-                    self._fire_and_forget_mem0_add(session_id, messages + [
-                        {"role": "assistant", "content": text}
-                    ])
-                await emit({"type": "done", "stop_reason": "end_turn"})
+                await self._finish_turn(
+                    session_id=session_id, content=content_acc,
+                    messages=messages, emit=emit, mem_cfg=mem_cfg,
+                )
                 return
 
             # 模型要求调用工具：先落一条带 tool_calls 的 assistant 消息
-            assistant_msg: dict = {"role": "assistant", "content": content_acc or None}
             calls_list = [
                 {
                     "id": tc["id"] or f"call_{i}",
@@ -621,99 +609,231 @@ class Agent:
                 }
                 for i, tc in sorted(tool_calls.items())
             ]
-            if calls_list:
-                assistant_msg["tool_calls"] = calls_list
-            messages.append(assistant_msg)
+            messages.append({"role": "assistant", "content": content_acc or None,
+                             "tool_calls": calls_list})
             await self.store.add_message(
                 session_id, "assistant", content_acc,
-                {"tool_calls": [{"id": c["id"], "name": c["function"]["name"], "args": c["function"]["arguments"][:500]} for c in calls_list]},
+                {"tool_calls": [{"id": c["id"], "name": c["function"]["name"],
+                                 "args": c["function"]["arguments"][:500]} for c in calls_list]},
             )
 
             for call in calls_list:
-                tid, name = call["id"], call["function"]["name"]
-                try:
-                    args = json.loads(call["function"]["arguments"] or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                if not isinstance(args, dict):
-                    args = {}
-
-                tool = get_tool(name)
-                await emit({"type": "tool_start", "id": tid, "name": name, "input": args})
-
-                decision = "allow"
-                # chat 模式 = 纯聊天，服务端强制禁用一切工具。
-                # 不能只靠「不把 tools 列表传给 LLM」：一旦模型被外部内容注入后仍强行
-                # 吐出 tool_call，should_ask 在 chat 模式恒为 False，旧逻辑会无审批直接执行，
-                # 形成权限绕过。这里在执行前兜底：chat 模式一律拒绝。
-                if mode == "chat":
-                    decision = "deny"
-                elif ask_approval is None:
-                    # fail-closed：没有审批通道时，写/危险操作必须拒绝而不是静默放行。
-                    # 旧实现默认 decision="allow"，只要调用方漏传 ask_approval
-                    # （例如未来的新入口、测试、MCP 子进程模式），
-                    # approve 模式就会退化成 auto —— 审批机制形同虚设。
-                    if tool is None or permissions.should_ask(tool.risk, mode):
-                        decision = "deny"
-                else:
-                    if tool is None:
-                        # 模型幻觉出的未知工具：approve 模式下同样要求用户确认，不静默执行
-                        if mode != "auto":
-                            decision = await ask_approval(tid, name, "未知工具，请确认是否放行（通常应拒绝）", "danger")
-                    elif permissions.should_ask(tool.risk, mode):
-                        summary = tool.summary or name
-                        decision = await ask_approval(tid, name, summary, tool.risk)
-
-                if decision != "allow":
-                    if decision == "timeout":
-                        result = {"denied": "审批超时，已自动拒绝"}
-                    else:
-                        result = {"denied": "用户拒绝了该操作"}
-                    status = "denied"
-                    await emit({"type": "tool_update", "id": tid, "name": name, "status": status, "result": result})
-                else:
-                    result = await call_tool(name, args, retries=retries)
-                    # 危险文件操作自动备份：剥离 _ckpt、落库、前端显示可撤销
-                    ck = result.pop("_ckpt", None)
-                    undoable = False
-                    if ck and ck.get("backup"):
-                        try:
-                            from .checkpoints import CheckpointStore, get_shared
-
-                            # 优先复用进程级共享连接；未注入时（如 MCP server / 单测）
-                            # 退回一次性新建，保证功能不受影响。
-                            cs = get_shared()
-                            owns = False
-                            if cs is None:
-                                cs = CheckpointStore(self.store.path.parent / "checkpoints.db")
-                                await cs.start()
-                                owns = True
-                            try:
-                                await cs.record(session_id, tid, name, ck["path"], ck["backup"], ck.get("kind", "restore"))
-                            finally:
-                                if owns:
-                                    await cs.close()
-                            undoable = True
-                        except Exception:  # noqa: BLE001
-                            pass
-                    # 工具状态判定：deny 已经处理；此处只看 allow 路径的执行结果
-                    # 不能用 `\"error\" in result`（file 名可含 error 字样）
-                    # 不能用 `denied and X or Y`（空字符串 denied 导致逻辑错乱）
-                    if result.get("error") or result.get("error_code"):
-                        status = "failed"
-                    else:
-                        status = "completed"
-                    await emit({"type": "tool_update", "id": tid, "name": name, "status": status, "result": result, "undoable": undoable})
-
-                text = json.dumps(result, ensure_ascii=False)
-                limited = _tool_result_limited(text, self.settings)
-                messages.append({"role": "tool", "tool_call_id": tid, "content": limited})
-                await self.store.add_message(
-                    session_id, "tool", limited,
-                    {"tool_call_id": tid, "name": name, "status": status},
+                await self._run_one_tool(
+                    session_id=session_id, call=call, messages=messages, emit=emit,
+                    ask_approval=ask_approval, mode=mode, retries=retries,
                 )
 
         await emit({"type": "error", "message": "工具调用次数过多，已自动停止"})
+
+    async def _stream_round(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        emit: Emit,
+    ) -> tuple[str, dict[int, dict]]:
+        """跑一轮流式输出，返回 (累积文本, 按 index 聚合的 tool_calls)。
+
+        聚合逻辑单独成方法：OpenAI 兼容 API 的 tool_calls 是**分片**到达的
+        （id 只在第一片、arguments 逐片拼接），这种"边收边拼"的代码塞在主循环里
+        会让人误以为是一次性返回的。
+        """
+        content_acc = ""
+        tool_calls: dict[int, dict] = {}
+        async for content, reasoning, tc_delta in self._stream(messages, tools):
+            if reasoning:
+                await emit({"type": "thinking", "text": reasoning})
+            if content:
+                content_acc += content
+                await emit({"type": "text", "text": content})
+            if tc_delta:
+                for tc in tc_delta:
+                    acc = tool_calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    if tc.id:
+                        acc["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name:
+                            acc["name"] = tc.function.name
+                        if tc.function.arguments:
+                            acc["args"] += tc.function.arguments
+        return content_acc, tool_calls
+
+    async def _finish_plan(
+        self,
+        *,
+        session_id: str,
+        content: str,
+        tool_calls: dict[int, dict],
+        emit: Emit,
+    ) -> None:
+        """Plan 模式收尾：把「计划文本 + 打算调用的工具」交给用户，不执行任何工具。
+
+        参考 Cline Plan/Act：tool_calls 一律不执行，只随计划透出，
+        用户切到 act 模式（或下一轮）才真正动手。
+        """
+        planned = [
+            {"name": tc["name"], "arguments": tc["args"] or "{}"}
+            for _, tc in sorted(tool_calls.items())
+        ]
+        plan_text = content.strip()
+        if planned:
+            calls_desc = "\n".join(f"· 调用 {c['name']}({c['arguments']})" for c in planned)
+            plan_text = (f"{plan_text}\n\n计划调用工具：\n{calls_desc}" if plan_text
+                         else f"计划调用工具：\n{calls_desc}")
+        # 计划本身作为一条 assistant 消息落库（不含 tool_calls，因为并未执行）
+        await self.store.add_message(session_id, "assistant", plan_text or "（无具体计划内容）")
+        await emit({"type": "plan", "plan": plan_text, "tool_calls": planned})
+        await emit({"type": "done", "stop_reason": "plan"})
+
+    async def _finish_turn(self, *, session_id: str, content: str, messages: list[dict],
+                           emit: Emit, mem_cfg: dict) -> None:
+        """一轮结束（模型没有再要工具）：落库、更新摘要、异步抽 Mem0、发 done。"""
+        text = content.strip()
+        await self.store.add_message(session_id, "assistant", text)
+        # 滚动更新记忆摘要（后续对话开头注入）。失败只降级，不影响主流程。
+        try:
+            if mem_cfg:
+                llm_for_summary = self._summarizer()
+                if llm_for_summary:
+                    await self.store.auto_summarize_if_needed(
+                        session_id, mem_cfg, llm_client=llm_for_summary
+                    )
+                else:
+                    logger.debug("记忆摘要跳过：无可用摘要器 session=%s", session_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("记忆摘要更新失败: %s", e)
+        # Mem0 异步抽取长期事实（不阻塞响应；失败仅日志）
+        if self.mem0 is not None and self.mem0.enabled() and not self.mock:
+            self._fire_and_forget_mem0_add(
+                session_id, messages + [{"role": "assistant", "content": text}]
+            )
+        await emit({"type": "done", "stop_reason": "end_turn"})
+
+    # ---------- 工具执行（从 _loop 抽出，降低主循环复杂度） ----------
+
+    async def _decide_tool(
+        self,
+        *,
+        tid: str,
+        name: str,
+        tool,
+        mode: str,
+        ask_approval: AskApproval | None,
+    ) -> str:
+        """决定这次工具调用是放行还是拒绝。
+
+        返回 "allow" / "deny" / "timeout"。
+
+        为什么单独一个方法：这里有四条互斥的判定，每条都对应一个真实的安全语义，
+        混在主循环里既难读也难测：
+        1. chat 模式 → 一律拒绝（模型被注入后仍可能吐 tool_call，必须执行前兜底）
+        2. 没有审批通道 → 写/危险操作 fail-closed（否则 approve 模式会静默退化成 auto）
+        3. 未知工具 → approve 模式下问用户（模型幻觉出来的名字不能直接执行）
+        4. 已知工具 → 按 risk × mode 决定要不要问
+        """
+        if mode == "chat":
+            return "deny"
+        if ask_approval is None:
+            # fail-closed：没有审批通道时，写/危险操作必须拒绝而不是静默放行。
+            # 旧实现默认 "allow"，只要调用方漏传 ask_approval（新入口、测试、
+            # MCP 子进程模式），approve 模式就退化成 auto —— 审批机制形同虚设。
+            if tool is None or permissions.should_ask(tool.risk, mode):
+                return "deny"
+            return "allow"
+        if tool is None:
+            # 模型幻觉出的未知工具：approve 模式下同样要求用户确认，不静默执行
+            if mode != "auto":
+                return await ask_approval(tid, name, "未知工具，请确认是否放行（通常应拒绝）", "danger")
+            return "allow"
+        if permissions.should_ask(tool.risk, mode):
+            return await ask_approval(tid, name, tool.summary or name, tool.risk)
+        return "allow"
+
+    async def _record_checkpoint(self, session_id: str, tid: str, name: str, ck: dict) -> bool:
+        """把工具产生的备份登记到 checkpoint 存储，返回是否可撤销。
+
+        失败只降级（不可撤销），不能让一次备份失败毁掉整个工具结果。
+        """
+        if not (ck and ck.get("backup")):
+            return False
+        try:
+            from .checkpoints import CheckpointStore, get_shared
+
+            # 优先复用进程级共享连接；未注入时（MCP server / 单测）退回一次性新建
+            cs = get_shared()
+            owns = False
+            if cs is None:
+                cs = CheckpointStore(self.store.path.parent / "checkpoints.db")
+                await cs.start()
+                owns = True
+            try:
+                await cs.record(session_id, tid, name, ck["path"], ck["backup"], ck.get("kind", "restore"))
+            finally:
+                if owns:
+                    await cs.close()
+            return True
+        except Exception:  # noqa: BLE001 —— 备份登记失败仅失去撤销能力
+            return False
+
+    async def _run_one_tool(
+        self,
+        *,
+        session_id: str,
+        call: dict,
+        messages: list[dict],
+        emit: Emit,
+        ask_approval: AskApproval | None,
+        mode: str,
+        retries: int,
+    ) -> None:
+        """执行单个工具调用：审批 → 执行 → 备份 → 状态 → 落库。
+
+        每个 tool_call 都要走完整条链路，抽出后 _loop 不必再嵌套五层。
+        """
+        tid = call["id"]
+        name = call["function"]["name"]
+        try:
+            args = json.loads(call["function"]["arguments"] or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        if not isinstance(args, dict):
+            args = {}
+
+        tool = get_tool(name)
+        await emit({"type": "tool_start", "id": tid, "name": name, "input": args})
+
+        decision = await self._decide_tool(
+            tid=tid, name=name, tool=tool, mode=mode, ask_approval=ask_approval
+        )
+
+        if decision != "allow":
+            if decision == "timeout":
+                result = {"denied": "审批超时，已自动拒绝"}
+            else:
+                result = {"denied": "用户拒绝了该操作"}
+            status = "denied"
+            await emit({"type": "tool_update", "id": tid, "name": name, "status": status, "result": result})
+        else:
+            result = await call_tool(name, args, retries=retries)
+            # 危险文件操作的备份凭证：剥离出来登记，不进工具结果
+            undoable = await self._record_checkpoint(session_id, tid, name, result.pop("_ckpt", None))
+            # 状态判定：不能用 `"error" in result`（file 名可含 error 字样），
+            # 也不能用 `denied and X or Y`（空字符串 denied 导致逻辑错乱）
+            if result.get("error") or result.get("error_code"):
+                status = "failed"
+            else:
+                status = "completed"
+            await emit({
+                "type": "tool_update", "id": tid, "name": name,
+                "status": status, "result": result, "undoable": undoable,
+            })
+
+        text = json.dumps(result, ensure_ascii=False)
+        limited = _tool_result_limited(text, self.settings)
+        messages.append({"role": "tool", "tool_call_id": tid, "content": limited})
+        await self.store.add_message(
+            session_id, "tool", limited,
+            {"tool_call_id": tid, "name": name, "status": status},
+        )
 
     # ---------- 会话自动命名 ----------
     async def title_for(self, message: str) -> str:

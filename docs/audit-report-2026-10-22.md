@@ -74,9 +74,9 @@ $ bash tests/run_all.sh --allow-dirty-dist
 | 行覆盖率（后端） | **59%**（审查时 48%） | ≥ 90% | ❌ 仍不通过 | `coverage run` 18 个套件合并（`coverage report`） |
 | 分支覆盖率 | `[未确认]` | ≥ 85% | `[未确认]` | 需 `coverage run --branch`，本次未采 |
 | 变异分数 | `[未确认]` | ≥ 80% | `[未确认]` | 需引入 `mutmut` / `cosmic-ray`，未接入 |
-| 圈复杂度（最大） | **53**（`Agent._loop`） | ≤ 10 | ❌ 不通过 | `radon cc -s` |
-| 圈复杂度（次大） | 47 → 重构后 **29**（`Agent.chat`） | ≤ 10 | ❌ 仍不通过 | 同上 |
-| 超出 CC>10 的块 | 6 个 | 0 | ❌ 不通过 | `radon cc -n D` |
+| 圈复杂度（最大） | **33**（`Agent._loop` 拆后为 11；`create_app` 仍高） | ≤ 10 | ⚠️ 部分改善 | `radon cc -s` |
+| 圈复杂度（次大） | 47 → **2**（`Agent.chat`） | ≤ 10 | ✅ 通过 | 同上 |
+| 超出 CC>10 的块 | 31 个（`agent.py` 内从 6 降到 5） | 0 | ❌ 不通过 | `radon cc -n C` |
 | 函数 > 50 行 | 16 个 | 0 | ❌ 不通过 | AST 统计（见 3.2） |
 | 技术债务比率 | `[未确认]` | ≤ 5% | `[未确认]` | 需 SonarQube，未接入 |
 | 重复行率 | **6.5%** | < 3% | ❌ 不通过 | 自写 AST 行去重（剔除 import/except 模板） |
@@ -91,7 +91,7 @@ $ bash tests/run_all.sh --allow-dirty-dist
 |---|---|---|---|---|---|---|---|---|
 | F-001 | **Critical** | 高 | 安全 A01 | `agentd/tools/net.py:183` | `read_url` 只校验 `http(s)://` 前缀，未限制目标 IP。模型可读取本机任意 HTTP 服务 | 已复现：`read_url("http://127.0.0.1:64995/api/export")` 返回 `{"app":"口袋智灵",...,"settings":...}`（全量导出）；`169.254.169.254` 在云主机上等同获取临时凭据 | 已修：新增 `_check_url_allowed()`（IP 段 + 端口白名单 + DNS 解析后再判）+ `_SafeRedirectHandler`（重定向逐跳校验）。`smoke/p13_ssrf_test.py` 22 条断言 | **关闭差距**。Claude Code 的 WebFetch 默认拒绝内网地址；本项目此前完全没有防护 |
 | F-002 | High | 高 | 测试有效性 | `agentd/main.py:276` | `create_app()` 单函数 **1052 行**，所有路由定义在闭包内，无法被单元测试直接调用 → `main.py` 覆盖率仅 **19%** | `radon cc` + AST 统计；`coverage report` 显示 `main.py 19%` | 把路由拆成 `APIRouter` 模块（`routes/sessions.py`、`routes/jobs.py`…），`create_app` 只做装配 | **关闭差距**。FastAPI 官方推荐做法就是分 router；单文件闭包是覆盖率天花板的结构原因 |
-| F-003 | High | 高 | 可维护性 | `agentd/agent.py:533` | `Agent._loop` 圈复杂度 **53**，184 行；`Agent.chat` 原 47（已降至 29） | `radon cc -s` 实测 | `chat` 已拆出 `_runtime_limits` / `_build_system_prefix`；`_loop` 的工具执行段（约 90 行）应再拆 `_execute_tool_calls` | **承认差距**。Claude Code 的 agent loop 同样复杂，但用大量集成测试兜底；本项目没有等价测试密度之前不宜大改 |
+| F-003 | ~~High~~ **已修复** | 高 | 可维护性 | `agentd/agent.py:563` | `Agent._loop` 圈复杂度原 **53**（184 行），`Agent.chat` 原 **47** | `radon cc -s` 前后对比 | 已拆为 10 个方法：`chat`→**2**、`_loop`→**11**；行为由 p18 的 22 条基线锁定 | **关闭差距**。先建基线再重构，p4/p10/p18 全过后才提交 |
 | F-004 | High | 高 | 测试有效性 | `smoke/p1_jobs_test.py:58`、`smoke/p2_plan_recipe_test.py:100` | 用 `except Exception: check(..., True)` 断言「非法输入被拒」——服务挂掉也会抛异常并判通过 | 读代码；已改为只接受具体 `HTTPError` 状态码 | 已修（提交 `6b50786`） | **关闭差距** |
 | F-005 | Medium | 高 | 可维护性 | `agentd/main.py:290` | `lifespan` 180 行，`main()` 100 行 | AST 统计 | 拆出 `_startup_store` / `_startup_mcp` / `_startup_scheduler` | **承认差距** |
 | F-006 | Medium | 高 | 性能（前端） | `agentd/web/src/App.tsx:166` | 消息列表无虚拟化，`messages.map` 每帧全量渲染；`MessageItem` 未 memo | 读代码；已修：`memo` + `useCallback` + `messageMemo.test.tsx` 回归 | 已修（本轮） | **承认差距**。Claude/ChatGPT 的对话列表都做虚拟化；本项目单机 200 条以内够用 |
@@ -194,7 +194,7 @@ r = await read_url("http://127.0.0.1:64995/api/export", 400)
 | **P0（已完成）** | 修假测试（`except Exception` 判通过） | F-004 | S | 服死时测试必须失败 |
 | **P0（已完成）** | 关键包加主版本上限 | F-015 | S | `check_requirements.py` 报错 |
 | **P1** | 拆 `create_app` 为 APIRouter 模块 | F-002 | **L** | `main.py` 覆盖率从 19% → 60%+；新增路由单测可直接 `import` router 测试 |
-| **P1** | 拆 `Agent._loop` 工具执行段 | F-003 | M | `_loop` CC ≤ 20；`p4` 53 项仍全过 |
+| ~~P1~~ **已完成** | 拆 `Agent._loop` / `Agent.chat` | F-003 | M | 已达成：`_loop` 53→11、`chat` 47→2；p4 53 项 + p10 14 项 + p18 22 项全过 |
 | **P1** | 引入变异测试（`mutmut`） | F-006(指标) | M | 变异分数 ≥ 60%（先设可达基线） |
 | **P1** | 采分支覆盖率 | F-018 | S | 报告出 branch% |
 | **P2** | 并行子代理 | 对标差距 | M | 同时派 2 个子任务，总耗时 < 串行 70% |
@@ -222,7 +222,20 @@ r = await read_url("http://127.0.0.1:64995/api/export", 400)
   批准/拒绝/超时三条审批分支、工具报错不中断循环、轮数用尽 emit error。`agent.py` 59% → **66%**。
   这是重构 `_loop` 前的安全网；已验证破坏 Plan 的 early-return 会让它立刻失败。
 
-**仍未完成（P1 剩余）**：`create_app` 拆分（F-002 的根治）、`Agent._loop` 拆分（F-003）、
+**第三轮：F-003 完成（`Agent._loop` 重构）**
+
+在 p18 的 22 条行为基线保护下拆分 `agentd/agent.py`，**行为零变化**（p4 53 项、p10 14 项、p18 22 项全过）：
+
+| 函数 | 重构前 CC | 重构后 CC | 拆分出的方法 |
+|---|---|---|---|
+| `Agent.chat` | 47 | **2** | `_runtime_limits` / `_build_system_prefix` / `_memory_context_block` / `_load_history` |
+| `Agent._loop` | 53 | **11** | `_stream_round` / `_finish_plan` / `_finish_turn` / `_run_one_tool` / `_decide_tool` / `_record_checkpoint` |
+
+`_decide_tool` 把四条审批语义（chat 模式拒绝 / 无通道 fail-closed / 未知工具询问 /
+risk×mode 判定）从嵌套五层的 if-else 变成四个带注释的早返回——这是本轮最值得的一处，
+因为它此前只能靠读代码确认安全语义。
+
+**仍未完成（P1 剩余）**：`create_app` 拆分（F-002 的根治：1052 行、`lifespan` 180 行）、
 变异测试、分支覆盖率。覆盖率离 90% 红线仍有 31 个百分点。
 
 ---
