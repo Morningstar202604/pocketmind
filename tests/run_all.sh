@@ -140,6 +140,8 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p14 路由层（43 端点进程内：错误分支 + 契约）" run_py smoke/p14_router_test.py
   step "p15 文件工具（读写删 + 越界 + 备份）" run_py smoke/p15_file_tools_test.py
   step "p16 知识库（增删查 + 注入转义 + 边界）" run_py smoke/p16_knowledge_test.py
+  step "p17 联网工具（解析器 + 引擎回退，全离线）" run_py smoke/p17_net_tools_test.py
+  step "p18 Agent 主循环（Plan/审批/超时/失败/轮数上限）" run_py smoke/p18_agent_loop_test.py
 
   # 不依赖服务的套件先跑，失败也不会挡住后面起服务
   step "p0 回归（重启恢复 / \$HOME 展开 / FTS 排除）" run_py smoke/p0_regression_test.py

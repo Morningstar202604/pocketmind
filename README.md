@@ -21,7 +21,7 @@
 - **Approval is a security model, not a UI nicety** — three-level grants (once / always-this-session / global) plus a global deny list, all enforced server-side; timeouts auto-deny, and external MCP tools can never skip approval.
 - **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 38 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
 - **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
-- **Verified, not just claimed** — `bash tests/run_all.sh` runs 30 backend regression suites plus frontend typecheck, 67 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
+- **Verified, not just claimed** — `bash tests/run_all.sh` runs 32 backend regression suites plus frontend typecheck, 67 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
 
 ## What runs where
 
@@ -133,7 +133,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React frontend (Vite + TS); built `dist/` is served directly by agentd |
 | `termux/` | Phone side: `install.sh` one-click deps / `start.sh` launch / `boot.sh` boot autostart |
 | `config/` | Preset recipes `recipes.json` (job templates); LLM provider presets in `agentd/config.py` → `PRESETS` |
-| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit / subagent / termux / capability / ssrf / a11y / router / files / kb; 26 suites, all run by `tests/run_all.sh`) |
+| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit / subagent / termux / capability / ssrf / a11y / router / files / kb / net / agent-loop; 28 suites, all run by `tests/run_all.sh`) |
 
 ---
 
@@ -238,7 +238,7 @@ bash tests/run_all.sh --with-e2e   # add Playwright (install browsers first)
 
 Exit code is 0 only when everything passes; failures are listed in the summary at the end.
 
-- **Backend** — 30 Python suites plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
+- **Backend** — 32 Python suites plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
   unit tests / p3 robustness unit / security / p3 perf & leaks / MCP / Telegram / p7
   cross-audit / p6 first-run (unconfigured) need no server; m5 / p0_queue / p1_jobs /
   p2 recipes / p3 robustness API / p5 frontend contract run against a mock server on an

@@ -71,7 +71,7 @@ $ bash tests/run_all.sh --allow-dirty-dist
 
 | 指标 | 当前值 | 红线 | 判定 | 测量方式 |
 |---|---|---|---|---|
-| 行覆盖率（后端） | **57%**（审查时 48%） | ≥ 90% | ❌ 仍不通过 | `coverage run` 16 个套件合并（`coverage report`） |
+| 行覆盖率（后端） | **59%**（审查时 48%） | ≥ 90% | ❌ 仍不通过 | `coverage run` 18 个套件合并（`coverage report`） |
 | 分支覆盖率 | `[未确认]` | ≥ 85% | `[未确认]` | 需 `coverage run --branch`，本次未采 |
 | 变异分数 | `[未确认]` | ≥ 80% | `[未确认]` | 需引入 `mutmut` / `cosmic-ray`，未接入 |
 | 圈复杂度（最大） | **53**（`Agent._loop`） | ≤ 10 | ❌ 不通过 | `radon cc -s` |
@@ -213,8 +213,17 @@ r = await read_url("http://127.0.0.1:64995/api/export", 400)
   `files.py` 39% → **89%**；新增 `p16_knowledge_test.py`（24 断言），`knowledge.py` 31% → **100%**。
   总覆盖率 48% → **57%**。
 
+**第二轮补充（覆盖率 57% → 59%）**：
+
+- `p17_net_tools_test.py`（38 断言，**全离线**）：`net.py` 31% → **84%**。用固定 HTML
+  喂解析器 + monkeypatch `urlopen`，覆盖"Bing 改版 → 回退 DDG""两引擎全挂 → 错误列出
+  每个原因""确实没搜到 → 空结果而非报错"。
+- `p18_agent_loop_test.py`（22 断言）：为 `_loop` 建立**行为基线**——Plan 模式不执行工具、
+  批准/拒绝/超时三条审批分支、工具报错不中断循环、轮数用尽 emit error。`agent.py` 59% → **66%**。
+  这是重构 `_loop` 前的安全网；已验证破坏 Plan 的 early-return 会让它立刻失败。
+
 **仍未完成（P1 剩余）**：`create_app` 拆分（F-002 的根治）、`Agent._loop` 拆分（F-003）、
-变异测试、分支覆盖率。覆盖率离 90% 红线仍有 33 个百分点。
+变异测试、分支覆盖率。覆盖率离 90% 红线仍有 31 个百分点。
 
 ---
 
