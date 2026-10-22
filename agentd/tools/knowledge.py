@@ -43,8 +43,11 @@ async def kb_add(title: str, content: str) -> dict:
         return {"error": "content 不能为空"}
     if len(text) > 20000:
         return {"error": "单条内容过长（>20000 字），请拆分后再存"}
-    kid = await store.kb_add(str(title or "").strip()[:120] or "未命名", text)
-    return {"ok": True, "id": kid, "title": str(title or "")[:120], "chars": len(text)}
+    # 标题回退只算一次：此前"存库用未命名、返回用原始空串"，
+    # 导致 kb_list 里显示空标题（实测发现的不一致）。
+    safe_title = str(title or "").strip()[:120] or "未命名"
+    kid = await store.kb_add(safe_title, text)
+    return {"ok": True, "id": kid, "title": safe_title, "chars": len(text)}
 
 
 async def kb_search(query: str, limit: int = 5) -> dict:

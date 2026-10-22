@@ -137,6 +137,9 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p11 Termux 安装脚本幂等性" run_py smoke/p11_termux_install_test.py
   step "p12 能力矩阵（能做什么/不能做什么/怎么办）" run_py smoke/p12_capability_test.py
   step "p13 SSRF 防护（内网/元数据/任意端口）" run_py smoke/p13_ssrf_test.py
+  step "p14 路由层（43 端点进程内：错误分支 + 契约）" run_py smoke/p14_router_test.py
+  step "p15 文件工具（读写删 + 越界 + 备份）" run_py smoke/p15_file_tools_test.py
+  step "p16 知识库（增删查 + 注入转义 + 边界）" run_py smoke/p16_knowledge_test.py
 
   # 不依赖服务的套件先跑，失败也不会挡住后面起服务
   step "p0 回归（重启恢复 / \$HOME 展开 / FTS 排除）" run_py smoke/p0_regression_test.py
