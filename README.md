@@ -21,7 +21,7 @@
 - **Approval is a security model, not a UI nicety** — three-level grants (once / always-this-session / global) plus a global deny list, all enforced server-side; timeouts auto-deny, and external MCP tools can never skip approval.
 - **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 38 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
 - **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
-- **Verified, not just claimed** — `bash tests/run_all.sh` runs 16 backend regression suites plus frontend typecheck, 64 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
+- **Verified, not just claimed** — `bash tests/run_all.sh` runs 23 backend regression suites plus frontend typecheck, 67 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
 
 ## What runs where
 
@@ -59,27 +59,35 @@ with termux-api; web search and cloud models require outbound network.
 ## Interface Preview
 
 <p align="center">
-  <img src="assets/screenshots/tool-call.png" width="640" alt="Tool call (dark theme)" />
+  <img src="assets/screenshots/tool-call.png" width="720" alt="Tool call with approval card (dark theme)" />
   <br />
-  <sub>Desktop · tool-call pipeline (get_battery completed)</sub>
+  <sub>Approval is a security gate, not a toast: tool name in plain language, risk badge,
+  primary vs. secondary decisions separated, auto-deny countdown.</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/settings.png" width="640" alt="Settings panel" />
+  <img src="assets/screenshots/capabilities.png" width="720" alt="Environment check and capability matrix" />
   <br />
-  <sub>Settings · providers / Plan-Act mode / permissions & security</sub>
+  <sub>Environment check + capability matrix: what this device can actually do,
+  what it cannot, and what to do about each gap.</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/recipes.png" width="640" alt="Recipe panel" />
+  <img src="assets/screenshots/settings.png" width="720" alt="Settings panel" />
+  <br />
+  <sub>Settings · theme / agent mode / model / permissions / context &amp; memory / MCP</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/recipes.png" width="720" alt="Scheduled jobs" />
   <br />
   <sub>Jobs · one-click recipes (low battery / daily summary / daily weather)</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/mobile.png" width="300" alt="Mobile" />
+  <img src="assets/screenshots/mobile.png" width="300" alt="Mobile layout" />
   <br />
-  <sub>Portrait · PocketMind on a real Termux phone</sub>
+  <sub>390&times;844 · touch targets &ge; 36px, no horizontal overflow, safe-area aware</sub>
 </p>
 
 ---
@@ -125,7 +133,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React frontend (Vite + TS); built `dist/` is served directly by agentd |
 | `termux/` | Phone side: `install.sh` one-click deps / `start.sh` launch / `boot.sh` boot autostart |
 | `config/` | Preset recipes `recipes.json` (job templates); LLM provider presets in `agentd/config.py` → `PRESETS` |
-| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit; 14 suites, all run by `tests/run_all.sh`) |
+| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit / subagent / termux / capability / ssrf / a11y; 21 suites, all run by `tests/run_all.sh`) |
 
 ---
 
@@ -230,13 +238,13 @@ bash tests/run_all.sh --with-e2e   # add Playwright (install browsers first)
 
 Exit code is 0 only when everything passes; failures are listed in the summary at the end.
 
-- **Backend** — 16 Python suites plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
+- **Backend** — 23 Python suites plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
   unit tests / p3 robustness unit / security / p3 perf & leaks / MCP / Telegram / p7
   cross-audit / p6 first-run (unconfigured) need no server; m5 / p0_queue / p1_jobs /
   p2 recipes / p3 robustness API / p5 frontend contract run against a mock server on an
   auto-picked free port with faketermux stubs. A deploy-path self-check runs last
   (`--lan` refuses to boot without a token, `AGENT_TOKEN` bootstrap, `--clear-token`).
-- **Frontend** — `tsc -b --noEmit` + 64 Vitest unit tests + production build +
+- **Frontend** — `tsc -b --noEmit` + 67 Vitest unit tests + production build +
   a dist-freshness check (the committed `dist/` must match the current source,
   since phones build nothing).
 - **E2E** — Playwright (8-viewport mobile matrix), opt-in via `--with-e2e`; needs
@@ -244,7 +252,12 @@ Exit code is 0 only when everything passes; failures are listed in the summary a
   and the webServer is always launched fresh, so a leftover mock instance can never be
   reused with another run's `permission_mode` or session history.
 
-Per-suite details are in `smoke/README.md`. Single suites can still be run alone —
+Per-suite details are in `smoke/README.md`.
+
+A full multi-dimensional audit (security / reliability / performance / test
+effectiveness / competitive benchmarking) is in
+[docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md) — it lists every
+finding with `file:line` evidence, including what was **not** verified. Single suites can still be run alone —
 the API-driven ones read the server base URL from `AGENTD_BASE` (default
 `http://127.0.0.1:8799`).
 

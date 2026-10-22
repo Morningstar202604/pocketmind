@@ -21,7 +21,7 @@
 - **审批是安全模型，不是 UI 点缀**：三级授权（允许一次 / 本会话始终 / 全局）+ 全局拒绝名单，服务端强制执行；超时自动拒绝，外部 MCP 工具永远跳不过审批；
 - **桌面 / Telegram 远程遥控**：内置 stdio MCP Server 把 38 个工具暴露给 Claude Desktop / Cline / Codex；Telegram 网关可让 agent 从任何设备驱动与审批；
 - **手机端零 Node**：构建好的 `dist/` 直接入库，Termux 里只跑 `install.sh`；可装成 PWA，也可打 WebView 壳 APK（`termux/apk-shell/`）；
-- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完 16 个后端回归套件 + 前端类型检查、64 个单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。
+- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完 23 个后端回归套件 + 前端类型检查、67 个单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。
 
 ## 什么设备能做什么
 
@@ -57,19 +57,26 @@
 ## 界面预览
 
 <p align="center">
-  <img src="assets/screenshots/tool-call.png" width="640" alt="工具调用（深色主题）" />
+  <img src="assets/screenshots/tool-call.png" width="720" alt="工具审批卡（深色主题）" />
   <br />
-  <sub>桌面端 · 工具调用链路（get_battery 执行完成）</sub>
+  <sub>审批是安全闸门，不是提示条：工具名说人话、危险操作带红色标签、
+  主决策与次决策分组、超时自动拒绝倒计时。</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/settings.png" width="640" alt="设置面板" />
+  <img src="assets/screenshots/capabilities.png" width="720" alt="环境自检与设备能力矩阵" />
   <br />
-  <sub>设置面板 · 模型厂商 / Plan-Act 工作方式 / 权限与安全</sub>
+  <sub>环境自检 + 设备能力矩阵：这台设备能做什么、不能做什么、每一项该补什么。</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/recipes.png" width="640" alt="定时配方" />
+  <img src="assets/screenshots/settings.png" width="720" alt="设置面板" />
+  <br />
+  <sub>设置面板 · 主题 / 智能体模式 / 模型 / 权限与安全 / 上下文与记忆 / MCP</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/recipes.png" width="720" alt="定时配方" />
   <br />
   <sub>定时任务 · 配方一键创建（低电量提醒 / 每日总结 / 每日天气）</sub>
 </p>
@@ -77,7 +84,7 @@
 <p align="center">
   <img src="assets/screenshots/mobile.png" width="300" alt="手机端" />
   <br />
-  <sub>手机竖屏 · Termux 上的口袋智灵</sub>
+  <sub>390&times;844 · 触摸目标 &ge; 36px、无横向溢出、适配安全区</sub>
 </p>
 
 ---
@@ -123,7 +130,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React 前端（Vite+TS），构建产物 `dist/` 由 agentd 直接托管 |
 | `termux/` | 手机端：`install.sh` 一键装依赖 / `start.sh` 启动 / `boot.sh` 开机自启 |
 | `config/` | 预设配方 `recipes.json`（定时任务模板）；LLM 厂商预设见 `agentd/config.py` 的 `PRESETS` |
-| `smoke/` | 回归测试 14 个套件（agent 深度 / 排队 / 定时任务 / 安全 / 配方 / MCP / Telegram / 横向审计 / 审批单测；POSIX 专用检查在非 Linux 上记为「跳过」而非失败），全部由 `tests/run_all.sh` 统一调度 |
+| `smoke/` | 回归测试 21 个套件（agent 深度 / 排队 / 定时任务 / 安全 / 配方 / MCP / Telegram / 横向审计 / 审批单测；POSIX 专用检查在非 Linux 上记为「跳过」而非失败），全部由 `tests/run_all.sh` 统一调度 |
 
 ---
 
@@ -231,20 +238,24 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
 
 全部通过才返回 0；有失败项会在末尾汇总列出，并返回非 0。
 
-- **后端**——16 个 Python 套件，外加 compileall、ruff 与部署链路自检：p0 回归 / p4 agent 深度 / 审批单测 /
+- **后端**——23 个 Python 套件，外加 compileall、ruff 与部署链路自检：p0 回归 / p4 agent 深度 / 审批单测 /
   p3 健壮性单测 / 安全专项 / p3 性能与泄漏 / MCP / Telegram / p7 横向审计 /
   p6 首次使用（未配模型）均无需起服务；m5 / p0 排队 / p1 定时任务 / p2 配方 /
   p3 健壮性 API / p5 前端契约对活动 mock 服务执行（服务跑在自动挑选的空闲端口 +
   faketermux 桩）。最后跑部署链路自检（`--lan` 无令牌拒启 / `AGENT_TOKEN` 引导 /
   `--clear-token` 恢复）。
-- **前端**——`tsc -b --noEmit` + 64 个 Vitest 单测 + 生产构建 +
+- **前端**——`tsc -b --noEmit` + 67 个 Vitest 单测 + 生产构建 +
   dist 新鲜度检查（提交的 `dist/` 必须与当前源码一致，因为手机不做构建）。
 - **E2E**——Playwright（8 视口移动适配矩阵），用 `--with-e2e` 显式开启，
   首次需 `npx playwright install chromium`。每次运行都用独立的空数据目录，
   webServer 也强制自起，不会复用上一轮残留的 mock 实例（那会带进别人的
   `permission_mode` 与会话历史）。
 
-逐个套件的说明见 `smoke/README.md`。也可以单独跑某个套件——
+逐个套件的说明见 `smoke/README.md`。
+
+全维度审查（安全 / 可靠性 / 性能 / 测试有效性 / 竞品对标）见
+[docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md)——
+每条发现都带 `file:line` 证据，并明确列出**没有**验证的部分。也可以单独跑某个套件——
 需要服务的那些从环境变量 `AGENTD_BASE` 读取服务地址（默认 `http://127.0.0.1:8799`）。
 
 已在 Windows（Git Bash）与 Linux（Ubuntu 24.04，Python 3.12 / Node 22）双平台实测：

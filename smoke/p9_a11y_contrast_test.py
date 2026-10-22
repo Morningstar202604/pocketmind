@@ -18,9 +18,11 @@ CSS = Path(__file__).resolve().parent.parent / "agentd" / "web" / "src" / "style
 # 每套主题：文字变量 → 它可能落在哪些背景上
 PAIRS = {
     "light": [("text", ["bg", "panel", "panel-2"]), ("text-2", ["bg", "panel", "panel-2"]),
-              ("text-3", ["bg", "panel", "panel-2"])],
+              ("text-3", ["bg", "panel", "panel-2"]), ("warn", ["panel", "panel-2"]),
+              ("err", ["panel", "panel-2"]), ("ok", ["panel", "panel-2"])],
     "dark": [("text", ["bg", "panel", "panel-2"]), ("text-2", ["bg", "panel", "panel-2"]),
-             ("text-3", ["bg", "panel", "panel-2"])],
+             ("text-3", ["bg", "panel", "panel-2"]), ("warn", ["panel", "panel-2"]),
+             ("err", ["panel", "panel-2"]), ("ok", ["panel", "panel-2"])],
 }
 MIN_RATIO = 4.5
 passed, failed = [], []

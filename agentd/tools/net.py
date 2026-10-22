@@ -18,7 +18,9 @@ DuckDuckGo / 百度 HTML 均连不通，只挂一家等于功能在部分网络�
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
+import socket
 import urllib.parse
 import urllib.request
 
@@ -180,6 +182,92 @@ READ_URL_SCHEMA = {
 }
 
 
+# ---------------------------------------------------------------------------
+# SSRF 防护
+# ---------------------------------------------------------------------------
+
+# 明确禁止访问的网段：回环、私有、链路本地（含云元数据 169.254.169.254）、
+# 保留、组播、以及 IPv6 的对应范围。模型可以让 read_url 抓任意 URL，
+# 不加限制就能读本机服务（/api/export 会导出全部会话），或被注入后打云元数据。
+_BLOCKED_V4 = [
+    ipaddress.ip_network(n)
+    for n in (
+        "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+        "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
+        "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
+        "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+    )
+]
+_BLOCKED_V6 = [ipaddress.ip_network(n) for n in ("::1/128", "fc00::/7", "fe80::/10", "ff00::/8")]
+
+# 只允许这些端口的明文 HTTP；其余端口一律拒绝（避免扫内网服务）。
+_ALLOWED_PORTS = {80, 443, 8080, 8443}
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        else:
+            return any(ip in n for n in _BLOCKED_V6)
+    return any(ip in n for n in _BLOCKED_V4)
+
+
+def _check_url_allowed(url: str) -> str:
+    """返回空串表示允许，否则返回拒绝原因。
+
+    必须**解析域名后再判 IP**：只判主机名字符串的话，攻击者用
+    `http://127.0.0.1.nip.io` 或自己的域名指向 127.0.0.1 就能绕过。
+    这里做一次解析（urlopen 会再做一次，DNS rebinding 的窗口虽然存在，
+    但配合重定向逐跳校验后风险已大幅降低；完全防御需要 pin IP 后直连）。
+    """
+    try:
+        u = urllib.parse.urlparse(url)
+    except Exception:  # noqa: BLE001
+        return "URL 格式非法"
+    if u.scheme not in ("http", "https"):
+        return "只支持 http/https 链接"
+    host = (u.hostname or "").strip()
+    if not host:
+        return "URL 缺少主机名"
+    port = u.port or (443 if u.scheme == "https" else 80)
+    if port not in _ALLOWED_PORTS:
+        return f"端口 {port} 不允许访问（仅支持 80/443/8080/8443）"
+    # host 直接就是 IP 时不用解析
+    try:
+        ip = ipaddress.ip_address(host)
+        return "禁止访问内网/保留地址" if _is_blocked_ip(ip) else ""
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return f"无法解析域名 {host}"
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip):
+            return f"禁止访问内网/保留地址（{host} → {addr}）"
+    return ""
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """重定向逐跳校验：禁止 30x 跳到内网。
+
+    urllib 默认会跟随重定向且不检查目标，攻击者只要让公网 URL 返回
+    302 Location: http://127.0.0.1:8787/api/export 就能绕过入口检查。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        blocked = _check_url_allowed(newurl)
+        if blocked:
+            raise urllib.error.URLError(f"重定向目标被拒绝：{blocked}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 async def read_url(url: str, max_chars: int = 4000) -> dict:
     """抓取网页正文的纯文本视图（去脚本/样式/标签）。
 
@@ -190,11 +278,17 @@ async def read_url(url: str, max_chars: int = 4000) -> dict:
 
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return {"error": "只支持 http/https 链接"}
+    # SSRF 防护：解析目标 IP，拒绝内网/回环/云元数据/非白名单端口
+    blocked = _check_url_allowed(url)
+    if blocked:
+        return {"error": f"拒绝访问：{blocked}（web_search 的链接同样受此限制）"}
     max_chars = max(200, min(int(max_chars or 4000), 20000))
 
     def _fetch() -> tuple[str, str]:
         req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        # 手动处理重定向：每一跳都要重新校验，否则 302 到 127.0.0.1 就绕过了
+        opener = urllib.request.build_opener(_SafeRedirectHandler)
+        with opener.open(req, timeout=_TIMEOUT) as resp:
             ctype = resp.headers.get("Content-Type", "")
             raw = resp.read(2_000_000)  # 上限 2MB：手机内存与上下文都不允许无限抓
             enc = "utf-8"

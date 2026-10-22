@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatErrorBoundary } from "./components/ChatErrorBoundary";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
@@ -11,6 +11,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { TimerPanel } from "./components/TimerPanel";
 import { TodoPanel } from "./components/TodoPanel";
 import { useAgentStore } from "./store/useAgentStore";
+import type { Msg } from "./types";
 import { applyTheme } from "./theme";
 import { reloadPage } from "./native";
 
@@ -66,6 +67,26 @@ export default function App() {
   const approvePlan = useAgentStore((s) => s.approvePlan);
   const editPlan = useAgentStore((s) => s.editPlan);
   const ignorePlan = useAgentStore((s) => s.ignorePlan);
+
+  // 消息级回调必须用 useCallback 固定引用：MessageItem 包了 memo，
+  // 若每次渲染都传新的 inline 函数，memo 会全部失效（长对话流式输出时逐字重渲染）。
+  const handleDelete = useCallback(
+    (m: Msg) => {
+      if (!window.confirm("删除这条消息及其之后的对话？此操作不可撤销。")) return;
+      void deleteMessage(m);
+    },
+    [deleteMessage]
+  );
+  const handleRegenerate = useCallback((m: Msg) => void regenerate(m), [regenerate]);
+  const handleEditUser = useCallback(
+    (m: Msg, text: string) => {
+      void truncateFrom(m).then(() => setDraft(text));
+    },
+    [truncateFrom]
+  );
+  const handleApprovePlan = useCallback((aid: string) => void approvePlan(aid), [approvePlan]);
+  const handleIgnorePlan = useCallback((aid: string) => void ignorePlan(aid), [ignorePlan]);
+
   const agentMode = useAgentStore((s) => s.agentMode);
   const providerLabel = useAgentStore((s) => s.providerLabel);
   const setShowSessions = useAgentStore((s) => s.setShowSessions);
@@ -171,18 +192,13 @@ export default function App() {
                     onApproval={onApproval}
                     onUndo={onUndo}
                     undoingId={undoingId}
-                    onApprovePlan={(aid) => void approvePlan(aid)}
+                    onApprovePlan={handleApprovePlan}
                     onEditPlan={editPlan}
-                    onIgnorePlan={(aid) => void ignorePlan(aid)}
+                    onIgnorePlan={handleIgnorePlan}
                     approvalTimeout={approvalTimeout}
-                    onDelete={(m) => {
-                      if (!window.confirm("删除这条消息及其之后的对话？此操作不可撤销。")) return;
-                      void deleteMessage(m);
-                    }}
-                    onRegenerate={(m) => void regenerate(m)}
-                    onEditUser={(m, text) => {
-                      void truncateFrom(m).then(() => setDraft(text));
-                    }}
+                    onDelete={handleDelete}
+                    onRegenerate={handleRegenerate}
+                    onEditUser={handleEditUser}
                   />
                 ))}
               </div>

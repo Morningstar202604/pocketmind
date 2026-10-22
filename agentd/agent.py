@@ -182,6 +182,71 @@ class Agent:
         self._summarizer_obj = None  # 摘要器懒加载（直连端点，见 summarizer.py）
         self._pending_mem0_tasks: set = set()  # 保留引用，防 GC 回收进行中任务
 
+    # ---------- 配置读取：把散落的 try/except 收敛为一处 ----------
+
+    def _runtime_limits(self) -> dict:
+        """读取运行参数并做范围收敛。
+
+        原来 chat() 里连写三段几乎相同的 try/except + int()/float()，
+        每段都要单独处理 TypeError / ValueError / 越界，属于同一规则写三遍。
+        收敛后新增配置项只改这里。
+        """
+        agent_cfg = self._cfg("agent_cfg", "agent")
+        mem_cfg = self._cfg("memory_cfg", "memory")
+        ctx_cfg = self._cfg("context_cfg", "context")
+
+        def _int(cfg: dict, key: str, default: int, lo: int, hi: int) -> int:
+            try:
+                return max(lo, min(hi, int(cfg.get(key) or default)))
+            except (TypeError, ValueError):
+                return default
+
+        def _float(cfg: dict, key: str, default: float, lo: float, hi: float) -> float:
+            try:
+                return max(lo, min(hi, float(cfg.get(key) or default)))
+            except (TypeError, ValueError):
+                return default
+
+        return {
+            "mem_cfg": mem_cfg,
+            "max_iters": _int(agent_cfg, "max_tool_chain_depth", MAX_ITERATIONS, 1, 100),
+            "retries": _int(agent_cfg, "max_tool_retries", 0, 0, 10),
+            "search_limit": _int(mem_cfg, "search_limit", 5, 1, 20),
+            "budget_tokens": _int(ctx_cfg, "budget_tokens", 0, 0, 200_000),
+            "auto_compress": bool(ctx_cfg.get("auto_compress", True)),
+            "compress_threshold": _float(ctx_cfg, "compress_threshold", 0.8, 0.5, 0.95),
+        }
+
+    def _build_system_prefix(self, tools: list[dict]) -> list[dict]:
+        """组装 system 前缀：固定角色 → 用户偏好 → 档案 → 技能 → 模型提示。
+
+        顺序固定、内容稳定，目的是让提示缓存命中前缀。每一项失败只降级该项。
+        """
+        out: list[dict] = [{"role": "system", "content": SYSTEM_FIXED}]
+        prefs = str(self.settings.get().get("user_prefs", "")).strip()
+        if prefs:
+            out.append({"role": "system", "content": f"用户长期偏好：{prefs}"})
+        for label, provider in (("档案记忆", self.profile), ("技能索引", self.skills)):
+            if provider is None:
+                continue
+            try:
+                block = provider.system_block()
+            # aqg: top-level boundary —— 失败仅降级本能力
+            except Exception as e:  # noqa: BLE001
+                logger.warning("%s读取失败: %s", label, e)
+                block = ""
+            if block:
+                out.append({"role": "system", "content": block})
+        if tools and self._is_reasoning_model():
+            out.append({
+                "role": "system",
+                "content": (
+                    "注意：你当前是思考模型。如果本环境无法通过 function calling 调用工具，"
+                    "请直接说明「当前模型不支持工具调用，建议换用支持工具的非思考模型」，不要假装执行。"
+                ),
+            })
+        return out
+
     # ---------- 配置读取（统一兜底：Settings 对象 / 裸 dict 都支持） ----------
 
     def _cfg(self, accessor: str, key: str) -> dict:
@@ -346,65 +411,17 @@ class Agent:
     ) -> None:
         mode = self.settings.permission_mode()
         tools = [] if mode == "chat" else schemas()
-        # 配置读取（每个旋钮都有真实消费方，见 _cfg 注释）
-        agent_cfg = self._cfg("agent_cfg", "agent")
-        mem_cfg = self._cfg("memory_cfg", "memory")
-        ctx_cfg = self._cfg("context_cfg", "context")
-        try:
-            max_iters = max(1, int(agent_cfg.get("max_tool_chain_depth") or MAX_ITERATIONS))
-        except (TypeError, ValueError):
-            max_iters = MAX_ITERATIONS
-        try:
-            retries = max(0, int(agent_cfg.get("max_tool_retries") or 0))
-        except (TypeError, ValueError):
-            retries = 0
-        try:
-            search_limit = max(1, min(20, int(mem_cfg.get("search_limit") or 5)))
-        except (TypeError, ValueError):
-            search_limit = 5
-        budget_tokens = int(ctx_cfg.get("budget_tokens") or 0)
-        auto_compress = bool(ctx_cfg.get("auto_compress", True))
-        try:
-            compress_threshold = float(ctx_cfg.get("compress_threshold") or 0.8)
-        except (TypeError, ValueError):
-            compress_threshold = 0.8
+        limits = self._runtime_limits()
+        mem_cfg = limits["mem_cfg"]
+        max_iters = limits["max_iters"]
+        retries = limits["retries"]
+        search_limit = limits["search_limit"]
+        budget_tokens = limits["budget_tokens"]
+        auto_compress = limits["auto_compress"]
+        compress_threshold = limits["compress_threshold"]
 
-        # 组装上下文（顺序固定，前缀稳定以利提示缓存）：
-        #   固定角色 → 用户长期偏好 → 档案记忆 → 技能索引 → 相关历史记忆 → 记忆摘要 → 历史 → 本条消息
-        messages: list[dict] = [{"role": "system", "content": SYSTEM_FIXED}]
-        prefs = str(self.settings.get().get("user_prefs", "")).strip()
-        if prefs:
-            messages.append({"role": "system", "content": f"用户长期偏好：{prefs}"})
-        # 结构化长期记忆（USER.md / FACT.md）：文件不变则文本不变，缓存前缀稳定
-        if self.profile is not None:
-            try:
-                pblock = self.profile.system_block()
-            # aqg: top-level boundary —— 失败仅降级本能力
-            except Exception as e:  # noqa: BLE001 —— 记忆读取失败不阻塞对话
-                logger.warning("档案记忆读取失败: %s", e)
-                pblock = ""
-            if pblock:
-                messages.append({"role": "system", "content": pblock})
-        # 技能索引：只放 name/description（渐进披露，正文由 read_skill 按需读取）
-        if self.skills is not None:
-            try:
-                sblock = self.skills.system_block()
-            # aqg: top-level boundary —— 失败仅降级本能力
-            except Exception as e:  # noqa: BLE001
-                logger.warning("技能索引读取失败: %s", e)
-                sblock = ""
-            if sblock:
-                messages.append({"role": "system", "content": sblock})
-        if tools and self._is_reasoning_model():
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "注意：你当前是思考模型。如果本环境无法通过 function calling 调用工具，"
-                        "请直接说明「当前模型不支持工具调用，建议换用支持工具的非思考模型」，不要假装执行。"
-                    ),
-                }
-            )
+        # 组装上下文（顺序固定，前缀稳定以利提示缓存）
+        messages: list[dict] = self._build_system_prefix(tools)
         # P1：跨会话相关记忆 — RRF 混合检索（向量语义 + FTS5 关键词 互补融合）
         # Mem0 语义召回 + FTS5 trigram 关键词 → 互斥不再 fallback，RRF 加权合并
         mem0_results: list[dict] = []

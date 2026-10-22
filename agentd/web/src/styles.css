@@ -76,9 +76,9 @@ html[data-theme="light"] {
   --brand: #0d9d6e;
   --brand-2: #0a94ab;
   --brand-soft: rgba(13, 157, 110, 0.1);
-  --ok: #0d9d6e;
-  --warn: #c98a10;
-  --err: #dc4446;
+  --ok: #0a7c57;
+  --warn: #96630a;
+  --err: #c62828;
   --danger: #dc4446;
   --shadow: 0 8px 24px rgba(20, 30, 50, 0.12);
   --ring: 0 0 0 3px rgba(13, 157, 110, 0.16);
@@ -310,9 +310,18 @@ body {
     border-color: var(--brand);
   }
 }
+/* 用户消息：气泡在上，时间与操作栏在下一行右对齐。
+ * 原来是纯横排 flex，时间戳会紧贴「复制/编辑/删除」挤成一条长线
+ * （截图巡检发现的）。改为纵向堆叠后，两者各占一行。 */
 .row.user {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.row.user .msg-actions .msg-time {
+  margin-right: 2px;
+  align-self: center;
 }
 .row.agent {
   display: flex;
@@ -572,8 +581,12 @@ body {
 }
 .tool-status.waiting {
   color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  animation: blink 1s ease-in-out infinite;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  /* 用边框强调"等你操作"，**不要**用透明度闪烁：
+   * 原来复用 blink（opacity 0.3~1），截图恰好抓到 0.3 那帧，"需要确认"
+   * 几乎看不见，用户会以为工具卡住了。等待态必须始终可读。 */
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  font-weight: 600;
 }
 .tool-status.completed {
   color: var(--ok);
@@ -630,16 +643,44 @@ body {
   margin: 0 0 10px;
   font-size: 13px;
   color: var(--text);
+  /* 工具名 + 风险标签 + 说明三段信息，允许换行但保持行距，不能挤成一坨 */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  line-height: 1.6;
+}
+.approval-what {
+  color: var(--text-2, var(--text));
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.risk-tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--danger, #c62828);
+  border-radius: var(--radius-xs, 4px);
+  padding: 1px 6px;
+  flex: none;
 }
 .approval-btns {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
+/* 主决策（允许一次 / 始终允许 / 拒绝）与次要决策（全局）之间要有视觉分隔，
+ * 否则五个按钮平铺，用户分不清哪三个是"这一次"的。 */
+.approval-btns.secondary {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--warn) 30%, transparent);
+}
 .approval-note {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   font-size: 12px;
   color: var(--text-3);
+  line-height: 1.6;
 }
 .approval-countdown {
   color: var(--warn);
@@ -1195,6 +1236,7 @@ body {
 /* ===== 设置表单 ===== */
 .field {
   margin-bottom: 16px;
+  min-width: 0;
 }
 .field label {
   display: block;
@@ -1814,10 +1856,25 @@ body {
   .topbar { padding: 8px 10px; gap: 6px; }
   .brand { gap: 6px; min-width: 0; }
   .brand-sub { display: none; }
-  .brand h1 { font-size: 15px; }
+  .brand h1 { font-size: 15px; white-space: nowrap; }
+  .brand-text { min-width: 0; overflow: hidden; }
   .conn-pill { padding: 4px 8px; font-size: 11px; }
   .topbar-right { gap: 4px; }
   .topbar-right .icon-btn { width: 36px; height: 36px; }
+}
+
+/* 超窄屏（320px）：标题会被挤成两行（"口袋智/灵"），必须进一步压缩。
+ * 保留完整品牌名的前提下，收 logo 与字体，而不是让文字折行。 */
+@media (max-width: 360px) {
+  .topbar { padding: 6px 8px; gap: 4px; }
+  .brand h1 { font-size: 14px; }
+  .brand svg, .brand > span:first-child { flex: none; }
+  .conn-pill { padding: 3px 6px; font-size: 10px; }
+  .topbar-right .icon-btn { width: 34px; height: 34px; }
+  .composer { padding-left: 8px; padding-right: 8px; }
+  /* 引导卡是 repeat(2, minmax(140px,1fr))，320px 下两列放不下，
+   * 文字会折成两行（"查看电池电/量"）。窄屏改单列。 */
+  .tasks { grid-template-columns: 1fr; max-width: 280px; margin-left: auto; margin-right: auto; }
 }
 
 /* 下拉刷新/橡皮筋会打断长对话且可能误触重载：应用内禁用纵向过滚动链 */
@@ -2227,7 +2284,9 @@ body {
   flex: none;
 }
 .caps-summary {
-  flex: 1;
+  /* flex:1 + min-width:0 不够：内容宽度会顶到 292px 并溢出容器（实测 320px 下
+   * 292 > 186）。必须显式给 flex-basis 0 让它从 0 开始分配剩余空间。 */
+  flex: 1 1 0;
   min-width: 0;
   font-size: 12px;
   color: var(--text-3);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { Msg, Part, ToolPart } from "../types";
@@ -76,12 +76,61 @@ function formatTime(ts?: number): string {
 }
 
 // 少数工具的内部名对用户毫无意义，给中文标签；其余保持原名（技术用户认这个）
+// 工具内部名 → 中文标签。覆盖全部 39 个工具：审批卡与工具卡都会显示它，
+// 留英文名会让非技术用户看不懂自己正在批准什么（截图巡检发现 run_shell 裸露）。
 const TOOL_LABEL: Record<string, string> = {
+  // agent / 编排
   subagent: "子代理",
-  web_search: "联网搜索",
-  read_url: "读取网页",
   todo_write: "任务清单",
   todo_clear: "清空任务清单",
+  // 文件
+  list_dir: "列出目录",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  delete_file: "删除文件",
+  // 知识库 / 记忆
+  kb_add: "存入知识库",
+  kb_search: "检索知识库",
+  kb_list: "知识库列表",
+  remember_fact: "记住一件事",
+  read_skill: "读取技能",
+  // 联网
+  web_search: "联网搜索",
+  read_url: "读取网页",
+  // 系统
+  run_shell: "执行命令",
+  // 手机：通信
+  send_sms: "发送短信",
+  read_sms: "读取短信",
+  make_call: "拨打电话",
+  // 手机：媒体
+  take_photo: "拍照",
+  share_text: "分享文本",
+  download_file: "下载文件",
+  open_target: "打开链接",
+  // 手机：网络
+  get_wifi_info: "WiFi 信息",
+  scan_wifi: "扫描 WiFi",
+  set_wifi: "开关 WiFi",
+  // 手机：位置 / 传感器
+  get_location: "获取定位",
+  list_sensors: "列出传感器",
+  read_sensor: "读取传感器",
+  // 手机：系统
+  get_clipboard: "读取剪贴板",
+  set_clipboard: "写入剪贴板",
+  get_battery: "查看电量",
+  send_notification: "发送通知",
+  show_toast: "显示提示",
+  vibrate: "震动",
+  set_torch: "手电筒",
+  get_volume: "查看音量",
+  set_volume: "调节音量",
+  set_brightness: "调节亮度",
+  // 语音
+  tts_speak: "语音朗读",
+  tts_offline: "离线朗读",
+  speech_to_text: "语音转文字",
 };
 
 const STATUS_LABEL: Record<ToolPart["status"], string> = {
@@ -170,8 +219,9 @@ function ToolCard({
           {waiting && (
             <div className="approval">
               <p className="approval-summary">
-                <b>{tool.name}</b>：{tool.summary || "需要你确认"}
-                {tool.risk === "danger" ? "（危险操作）" : ""}
+                <b>{TOOL_LABEL[tool.name] || tool.name}</b>
+                {tool.risk === "danger" ? <span className="risk-tag">危险操作</span> : null}
+                <span className="approval-what">{tool.summary || "需要你确认"}</span>
               </p>
               <div className="approval-btns">
                 <button className="btn ok" onClick={() => onApproval(tool.id, "allow_once")}>允许一次</button>
@@ -228,7 +278,7 @@ function ToolCard({
 
 /* ---------- 消息条目 ---------- */
 
-export function MessageItem({
+function MessageItemImpl({
   msg,
   parts,
   onApproval,
@@ -289,8 +339,10 @@ export function MessageItem({
     return (
       <div className="row user">
         <div className="bubble user">{text}</div>
-        {formatTime(msg.createdAt) && <span className="msg-time">{formatTime(msg.createdAt)}</span>}
         <div className="msg-actions">
+          {formatTime(msg.createdAt) && (
+            <span className="msg-time">{formatTime(msg.createdAt)}</span>
+          )}
           <button className="msg-action" onClick={handleCopy} title="复制" aria-label="复制用户消息">
             {copied ? "已复制" : "复制"}
           </button>
@@ -390,3 +442,10 @@ export function MessageItem({
     </div>
   );
 }
+
+/**
+ * 用 memo 包住：流式输出时每一帧都会触发 App 重渲染，若不 memo，
+ * 200 条历史消息会跟着逐字重渲染（实测长对话明显掉帧）。
+ * 只有当该条消息的 msg/parts 或交互回调变化时才重渲染。
+ */
+export const MessageItem = memo(MessageItemImpl);
