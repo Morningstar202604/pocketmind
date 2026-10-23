@@ -9,7 +9,7 @@
 agentd/                 # Python 后端（唯一服务端，单进程）
   ├─ main.py            # FastAPI：静态页 + /api/* + SSE 流式
   ├─ agent.py           # Agent 循环（流式 → 工具 → 审批 → 回填 → 记忆摘要）
-  ├─ tools/             # shell / files / phone(termux-api) 等 38 个工具
+  ├─ tools/             # shell / files / phone(termux-api) 等 41 个工具
   └─ web/               # 前端（Vite+React+TS），dist 由 agentd 直接托管
 termux/                 # 手机端：install.sh（2-5 分钟装好）/ start.sh
 QUICKSTART.md           # 本文件

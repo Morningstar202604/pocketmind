@@ -656,7 +656,7 @@ body {
   min-width: 0;
 }
 .risk-tag {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: #fff;
   background: var(--danger, #c62828);
@@ -1858,7 +1858,7 @@ body {
   .brand-sub { display: none; }
   .brand h1 { font-size: 15px; white-space: nowrap; }
   .brand-text { min-width: 0; overflow: hidden; }
-  .conn-pill { padding: 4px 8px; font-size: 11px; }
+  .conn-pill { padding: 4px 8px; font-size: 12px; }
   .topbar-right { gap: 4px; }
   .topbar-right .icon-btn { width: 36px; height: 36px; }
 }
@@ -1869,8 +1869,10 @@ body {
   .topbar { padding: 6px 8px; gap: 4px; }
   .brand h1 { font-size: 14px; }
   .brand svg, .brand > span:first-child { flex: none; }
-  .conn-pill { padding: 3px 6px; font-size: 10px; }
-  .topbar-right .icon-btn { width: 34px; height: 34px; }
+  .conn-pill { padding: 3px 6px; font-size: 12px; }
+  /* 36px 是硬下限（mobile.spec.ts 断言触摸目标 ≥36px）。想省空间只能收内边距，
+   * 不能把按钮压到 34px —— 那会让点击命中率明显下降。 */
+  .topbar-right .icon-btn { width: 36px; height: 36px; }
   .composer { padding-left: 8px; padding-right: 8px; }
   /* 引导卡是 repeat(2, minmax(140px,1fr))，320px 下两列放不下，
    * 文字会折成两行（"查看电池电/量"）。窄屏改单列。 */
@@ -2296,7 +2298,8 @@ body {
 }
 .caps-chev {
   flex: none;
-  font-size: 11px;
+  /* 12px 是移动端最小字号硬约束（mobile.spec.ts 断言），不能为了好看降到 11 */
+  font-size: 12px;
   color: var(--text-3);
   transition: transform 0.15s;
 }

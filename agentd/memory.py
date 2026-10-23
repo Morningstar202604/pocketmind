@@ -233,10 +233,12 @@ class Store:
             await self._conn.commit()
         return sid
 
-    async def list_sessions(self, limit: int = 50) -> list[dict]:
+    async def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
         assert self._conn is not None
         # 单条 LEFT JOIN + GROUP BY 一次性带出每个会话的消息数，避免 N+1
         # （旧实现：1 条会话列表 + N 条 COUNT(*)，50 个会话要跑 51 条 SQL）。
+        # 排序必须带 id 兜底：updated_at 是 REAL，批量创建时可能相同，
+        # 没有稳定次序的分页会重复/漏掉记录（导出完整性依赖这一点）。
         rows = (await self._conn.execute(text(
             """
             SELECT s.id, s.title, s.created_at, s.updated_at,
@@ -246,16 +248,17 @@ class Store:
             LEFT JOIN messages m
               ON m.session_id = s.id AND m.role IN ('user','assistant')
             GROUP BY s.id, s.title, s.created_at, s.updated_at, s.archived_upto
-            ORDER BY s.updated_at DESC
-            LIMIT :l
+            ORDER BY s.updated_at DESC, s.id DESC
+            LIMIT :l OFFSET :o
             """
-        ), {"l": limit})).fetchall()
+        ), {"l": limit, "o": max(0, offset)})).fetchall()
         return [dict(r._mapping) for r in rows]
 
     async def get_session(self, sid: str) -> dict | None:
         assert self._conn is not None
         r = (await self._conn.execute(text(
-            "SELECT id, title, created_at, updated_at FROM sessions WHERE id=:s"
+            "SELECT id, title, created_at, updated_at, COALESCE(archived_upto, 0) AS archived_upto "
+            "FROM sessions WHERE id=:s"
         ), {"s": sid})).fetchone()
         return dict(r._mapping) if r else None
 
@@ -325,24 +328,48 @@ class Store:
                 raise
             return cur.rowcount or 0
 
-    async def export_bundle(self, max_sessions: int = 500, max_messages: int = 1000) -> dict:
-        """一次性取回导出所需的全部数据（会话 / 消息 / 归档 / 清单）。
+    async def export_bundle(
+        self, max_sessions: int = 500, max_messages: int = 1000, page_size: int | None = None
+    ) -> dict:
+        """取回导出所需的全部数据（会话 / 消息 / 归档 / 清单）。
 
         为什么单独一个方法：原来的 /api/export 对每个会话要查 3 次
         （messages / archives / todos）。500 个会话 = 1500 次往返，
         实测 100 会话就要 0.5 秒，且随会话数线性增长。
 
-        现在改成 4 条聚合查询（IN 子句按会话批量取），把 N+1 压成常数次。
-        返回 {sid: {"messages": [...], "archives": [...], "todos": [...]}}。
+        现在每个会话页用 5 条聚合查询（IN 子句按会话批量取），把 N+1 压成
+        「页数 × 5」次。返回 {"sessions": [...], "by_session": {sid: {...}}}。
 
-        注意：这里不做分页。导出是"全量备份"语义，分页会静默丢数据；
-        限制由 max_sessions / max_messages 控制并在调用方标注。
+        分页必须真的翻到取尽为止：早先的实现直接 `list_sessions(limit=max_sessions)`
+        就返回，第 max_sessions+1 个会话**静默消失**——导出文件看着完整，
+        换机恢复时才发现少了历史。max_sessions 现在是总量上限而不是单页大小，
+        page_size 只影响每批的 SQL 大小（绑定参数上限保护）。
         """
         assert self._conn is not None
-        sessions = await self.list_sessions(limit=max_sessions)
-        if not sessions:
-            return {"sessions": [], "by_session": {}}
+        cap = max(1, int(max_sessions or 500))
+        batch_size = max(1, min(int(page_size or cap), cap))
 
+        sessions: list[dict] = []
+        by_session: dict[str, dict] = {}
+        offset = 0
+        while len(sessions) < cap:
+            want = min(batch_size, cap - len(sessions))
+            batch = await self.list_sessions(limit=want, offset=offset)
+            if not batch:
+                break
+            sessions.extend(batch)
+            by_session.update(await self._export_page(batch, max_messages))
+            if len(batch) < want:
+                break  # 已到末页
+            offset += len(batch)
+
+        return {"sessions": sessions, "by_session": by_session}
+
+    async def _export_page(self, sessions: list[dict], max_messages: int) -> dict[str, dict]:
+        """单页会话的关联数据：5 条聚合查询，查询数与会话数无关。"""
+        assert self._conn is not None
+        if not sessions:
+            return {}
         sids = [s["id"] for s in sessions]
         # SQLAlchemy 的绑定参数不能直接展开列表，用命名参数拼占位符
         placeholders = ",".join(f":s{i}" for i in range(len(sids)))
@@ -360,8 +387,8 @@ class Store:
             f"WHERE session_id IN ({placeholders}) ORDER BY id"
         ), params)).fetchall()
         # 每个会话最多 max_messages 条：在 Python 侧截断最近 N 条（保持时间正序）
-        by_msgs: dict[str, list] = {sid: [] for sid in sids}
         raw = _rows_to_map(msg_rows, "session_id")
+        by_msgs: dict[str, list] = {}
         for sid, items in raw.items():
             tail = items[-max_messages:] if len(items) > max_messages else items
             for d in tail:
@@ -395,7 +422,7 @@ class Store:
         ), params)).fetchall()
         by_summary = {d["session_id"]: d["content"] for d in (dict(r._mapping) for r in sum_rows)}
 
-        by_session = {
+        return {
             sid: {
                 "messages": by_msgs.get(sid, []),
                 "archives": by_arch.get(sid, []),
@@ -404,7 +431,6 @@ class Store:
             }
             for sid in sids
         }
-        return {"sessions": sessions, "by_session": by_session}
 
     async def cleanup_expired(self, retention_days: int = 0) -> int:
         """清理超过 retention_days 的旧 memory 与 messages。retention_days<=0 则跳过。"""

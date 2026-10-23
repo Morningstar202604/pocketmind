@@ -2,7 +2,7 @@
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b> Local-first · Privacy-first · Native on Termux</p>
-  <img src="https://img.shields.io/badge/tests-16%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-local%20gate%20green" alt="Tests" />
   <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="Local gate" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
@@ -17,11 +17,11 @@
 ## Highlights
 
 - **Lives on your phone, data stays on-device** — sessions, memory, jobs and file backups are all in local SQLite (600/700 perms); only inference goes to the LLM endpoint you configure.
-- **38 phone tools** — battery / SMS / dial / location / sensors / shell / files via termux-api, plus task lists, an FTS5 knowledge base, profile memory and skills.
+- **41 built-in tools** — battery / SMS / dial / location / sensors / shell / files via termux-api, plus task lists, an FTS5 knowledge base, profile memory and skills.
 - **Approval is a security model, not a UI nicety** — three-level grants (once / always-this-session / global) plus a global deny list, all enforced server-side; timeouts auto-deny, and external MCP tools can never skip approval.
-- **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 38 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
+- **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 41 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
 - **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
-- **Verified, not just claimed** — `bash tests/run_all.sh` runs 37 backend regression suites plus frontend typecheck, 67 unit tests, production build and a dist-freshness check. One command, exit code 0 only when everything is green.
+- **Verified, not just claimed** — `bash tests/run_all.sh` runs every backend regression suite plus compileall, ruff, a deploy self-check, and the whole frontend pipeline (typecheck, unit tests, production build, dist freshness). One command, exit code 0 only when everything is green — the suite list lives in `tests/run_all.sh` and is never restated here.
 
 ## What runs where
 
@@ -99,7 +99,7 @@ with termux-api; web search and cloud models require outbound network.
 ```bash
 # 1. One-time setup in Termux
 pkg install git python termux-api
-git clone <this-repo-url> && cd pocketmind
+git clone https://gitcode.com/badhope/pocketmind.git && cd pocketmind
 bash termux/install.sh          # Python/compile toolchain + deps + data dir (pydantic-core needs a one-off Rust build, ~3-8 min)
 
 # 2. Start the service
@@ -133,7 +133,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React frontend (Vite + TS); built `dist/` is served directly by agentd |
 | `termux/` | Phone side: `install.sh` one-click deps / `start.sh` launch / `boot.sh` boot autostart |
 | `config/` | Preset recipes `recipes.json` (job templates); LLM provider presets in `agentd/config.py` → `PRESETS` |
-| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit / subagent / termux / capability / ssrf / a11y / router / files / kb / net / agent-loop / permissions / todo / metrics / run-agent / perf-regression; 33 suites, all run by `tests/run_all.sh`) |
+| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit / subagent / termux / capability / ssrf / a11y / router / files / kb / net / agent-loop / permissions / todo / metrics / run-agent / perf-regression / export-integrity); all run by `tests/run_all.sh` |
 
 ---
 
@@ -197,7 +197,7 @@ Drive the agent on your phone from a computer or any other device — send messa
 
 ## MCP Server — Remote-Control Your Phone
 
-Expose all on-phone tools (battery / SMS / location / files / shell… 38 tools) as standard MCP tools, so desktop **Claude Desktop / Cline / Codex** can call them over stdio — desktop LLMs operate this phone remotely.
+Expose all on-phone tools (battery / SMS / location / files / shell… 41 tools) as standard MCP tools, so desktop **Claude Desktop / Cline / Codex** can call them over stdio — desktop LLMs operate this phone remotely.
 
 **Start (standalone, no FastAPI)**:
 ```bash
@@ -228,7 +228,7 @@ Same for Cline / Codex: add a stdio server entry — `command=python3`,
 
 ## Verification
 
-One command runs the whole gate — the same checks this repo used to run in GitHub Actions:
+One command runs the whole gate. `tests/run_all.sh` is the source of truth; CI (GitHub mirror) just installs deps and calls it:
 
 ```bash
 bash tests/run_all.sh              # backend + frontend
@@ -238,7 +238,7 @@ bash tests/run_all.sh --with-e2e   # add Playwright (install browsers first)
 
 Exit code is 0 only when everything passes; failures are listed in the summary at the end.
 
-- **Backend** — 37 Python suites plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
+- **Backend** — every Python suite plus compileall / ruff / deploy self-check: p0 regression / p4 agent depth / approval
   unit tests / p3 robustness unit / security / p3 perf & leaks / MCP / Telegram / p7
   cross-audit / p6 first-run (unconfigured) need no server; m5 / p0_queue / p1_jobs /
   p2 recipes / p3 robustness API / p5 frontend contract run against a mock server on an
@@ -254,10 +254,12 @@ Exit code is 0 only when everything passes; failures are listed in the summary a
 
 Per-suite details are in `smoke/README.md`.
 
-A full multi-dimensional audit (security / reliability / performance / test
-effectiveness / competitive benchmarking) is in
-[docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md) — it lists every
-finding with `file:line` evidence, including what was **not** verified. Single suites can still be run alone —
+Audit reports, with `file:line` evidence and an explicit list of what was **not**
+verified: [docs/audit-2026-10-23.md](docs/audit-2026-10-23.md) (latest — final
+hardening round) and [docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md)
+(security / performance / coverage / competitive benchmarking).
+
+API reference: [docs/API.md](docs/API.md). Single suites can still be run alone —
 the API-driven ones read the server base URL from `AGENTD_BASE` (default
 `http://127.0.0.1:8799`).
 

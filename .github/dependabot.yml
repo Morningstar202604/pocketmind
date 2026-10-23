@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["patch", "minor", "major"]
+
+  - package-ecosystem: npm
+    directory: /agentd/web
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor:
+        patterns: ["*"]
+        update-types: ["patch", "minor"]
+    ignore:
+      # 大版本升级需要人工验证构建产物与依赖树（vite 5→7 曾连带 vitest 大版本）
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: pip
+    directory: /agentd
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor:
+        patterns: ["*"]
+        update-types: ["patch", "minor"]

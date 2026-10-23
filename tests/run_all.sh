@@ -155,6 +155,8 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p23 运行指标（计数器/Prometheus 格式/不泄露 id）" run_py smoke/p23_metrics_test.py
   step "p24 聊天编排（run_agent / 队列续跑 / 取消 / 未配置 / 异常）" run_py smoke/p24_run_agent_test.py
   step "p25 性能回归（N+1 查询数 / 工具结果硬顶）" run_py smoke/p25_perf_regression_test.py
+  step "p26 工具层缺口（写操作退出码 / 指标基数 / 外发分级）" run_py smoke/p26_tool_gaps_test.py
+  step "p27 导出完整性（超过一页的会话不丢失）" run_py smoke/p27_export_pagination_test.py
   if [ "$WITH_DEP_AUDIT" = 1 ]; then
     step "p22 依赖漏洞扫描（OSV.dev，需外网）" run_py smoke/p22_dep_audit_test.py
   fi
@@ -240,6 +242,7 @@ PY
       step "p1 定时任务" run_py smoke/p1_jobs_test.py
       step "p2 Plan/Act + Recipe" run_py smoke/p2_plan_recipe_test.py
       step "p3 健壮性 API（非法输入 400）" run_py smoke/p3_robustness_api.py
+      step "p8 消息级操作（按 id 截断 / 编辑重发 / 重新生成）" run_py smoke/p8_message_actions_test.py
       step "p5 前端契约（导出 / 设置回环 / 工具分组）" run_py smoke/p5_frontend_contract_test.py
     else
       fail "mock 服务就绪（:${PORT}）"

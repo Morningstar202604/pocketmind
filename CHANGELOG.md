@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+（暂无）
+
+## [1.1.0] - 2026-10-23
+
+### 修复（2026-10-23 收尾审计）
+
+- **`set_volume` / `set_brightness` 静默失败**：两者用裸 `_run()` 且不看退出码，
+  termux-api 权限被拒或参数非法时命令其实失败了，前端仍显示「已完成」。改为校验退出码
+  （`set_volume` 走统一的 `_run_checked`），与 `send_sms` / `set_wifi` 同一套纪律。
+  回归：`smoke/p26_tool_gaps_test.py`。
+- **`/api/export` 在会话数超过 500 时静默丢数据**：`export_bundle` 只取一页就返回，
+  第 501 个会话起无声消失，而导出文件的语义是「完整备份」。改为按页翻取到取尽，
+  `max_sessions` 成为总量上限；同时避开 SQLite 绑定变量上限（Termux 上可能是 999），
+  并在导出结果里给出 `exported_session_count` / `export_truncated`。
+  回归：`smoke/p27_export_pagination_test.py`（8 条断言）。
+- **指标标签泄露消息主键**：`normalize_path` 只归一化会话 id，
+  `/api/sessions/{sid}/messages/123` 里的消息 id 原样进了 Prometheus 标签，
+  基数随消息数线性增长。现归一化为 `{id}`。回归：p26。
+- **LLM 指标恒为 0**：`metrics.record_llm` 只有定义没有调用方，
+  `/api/metrics` 的 `pocketmind_llm_calls_total` 永远是 0（假指标）。
+  在 `Agent._stream_round` 接线，主循环与子代理一并覆盖。
+- **`read_url` 风险等级与 `web_search` 不一致**：两者都是外发行为（URL / 查询词离开设备），
+  前者却标 `safe` 免审批。统一为 `write`，被注入的网页无法再驱动模型静默外发本机 URL。
+- **定时任务的 run 记录缺字段**：`run_agent_for_job` 手写字面量漏掉 `cancelled`，
+  取消失效依赖 `.get()` 默认值兜着。改用 `_new_run()` 工厂。
+- **`/api/diagnostics` 阻塞事件循环**：探测里的同步 socket / subprocess 直接在
+  协程里跑（本机实测 0.58s，网络差时更久），期间所有 SSE 与其他请求被堵住。
+  改为 `asyncio.to_thread`。
+- **`get_session` 返回归档水位**：补上 `archived_upto`，与 `list_sessions` 保持一致，
+  避免调用方为了一个字段再查一次。
+
+### 工程化
+
+- 门禁补入**从未执行过**的 `p8 消息级操作` 套件（此前只在失败兜底列表里出现）；
+  新增 `p26` / `p27` 两个套件。门禁覆盖全部后端套件 + compileall / ruff / 部署自检 +
+  前端 typecheck / 单测 / 构建 / dist 新鲜度。
+- 版本号统一到 **1.1.0**（`agentd/main.py` 与 `agentd/web/package.json` 此前一个 0.2.0、
+  一个 0.1.0，且都落后于既有 tag）。
+- 根目录四份历史报告移入 `docs/history/`（内容原样保留），根目录只留当前有效文档；
+  开发截图同样归档到 `docs/history/`；删除误生成的 `nul` 与重复的 `ui-shot-1-main.png`。
+- 新增 `docs/audit-2026-10-23.md`（本轮审计台账与证据）、`docs/API.md`（43 个端点参考）、
+  `agentd/requirements-dev.txt`（门禁所需的开发依赖）。
+- GitHub 镜像恢复 CI 工作流与 Dependabot 配置（主仓库仍在 GitCode，本地门禁为权威路径）。
+
+
+
 ### 修复
 
 - **全新安装装不上依赖**（在干净的 Ubuntu 24.04 上首次验证发现）：

@@ -1,0 +1,11 @@
+# 开发 / 门禁依赖（运行时不装这些）
+# 用法：pip install -r agentd/requirements.txt -r agentd/requirements-dev.txt
+#
+# 运行时清单刻意保持精简（Termux 上每个编译型依赖都是分钟级成本），
+# 这里只放跑 tests/run_all.sh 与本地审计需要的工具。
+
+ruff>=0.6,<1          # lint + format check（门禁第 2 步）
+packaging>=23         # tests/check_requirements.py 解析版本约束
+mypy>=1.10,<2         # 渐进式类型检查（见 pyproject.toml 的说明）
+pytest>=8,<9          # 可选：单独跑 tests/ 下的 pytest 风格用例
+pytest-asyncio>=0.23  # pytest 异步用例支持

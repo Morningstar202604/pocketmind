@@ -6,3 +6,4 @@ dist/*.map
 test-results/
 playwright-report/
 playwright/.cache/
+readme-shots/

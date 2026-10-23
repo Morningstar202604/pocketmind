@@ -90,11 +90,15 @@ async def set_volume(stream: str, level: int) -> dict:
     b = _bin("termux-volume")
     if not b:
         return _unavailable("termux-volume")
+    # 必须校验退出码：裸 _run() 只返回 (code, out, err)，不看 code 就会把
+    # 「权限被拒 / 参数非法」报成「已完成」。与 send_sms / set_wifi 同一套纪律。
     try:
-        await _run([b, str(stream), str(max(0, min(100, level)))])
-        return _ok(stream=stream, level=level)
+        failed = await _run_checked([b, str(stream), str(max(0, min(100, level)))], "设置音量")
     except TimeoutError:
         return _fail("设置音量超时")
+    if failed:
+        return failed
+    return _ok(stream=stream, level=level)
 
 
 async def set_brightness(level: int) -> dict:
@@ -102,10 +106,12 @@ async def set_brightness(level: int) -> dict:
     if not b:
         return _unavailable("termux-brightness")
     try:
-        await _run([b, str(max(0, min(255, level)))])
-        return _ok(brightness=level)
+        code, out, err = await _run([b, str(max(0, min(255, level)))])
     except TimeoutError:
         return _fail("设置亮度超时")
+    if code != 0:
+        return _fail(f"设置亮度失败：{err or f'exit {code}'}")
+    return _ok(brightness=level)
 
 
 # ---------- 注册表 ----------

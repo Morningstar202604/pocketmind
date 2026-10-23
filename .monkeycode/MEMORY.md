@@ -11,7 +11,7 @@
 数据（会话/记忆/定时任务/checkpoint）全存本机 SQLite。
 
 - 后端：`agentd/main.py`（HTTP/SSE/审批/静态托管）+ `agent.py`（Agent 循环）+
-  `tools/`（phone 25 / files 4 / shell 1 / voice 1）+ `memory.py` + `scheduler.py` +
+  `tools/`（phone 25 / files 4 / shell 1 / voice 1 / 知识库 3 / 任务清单 2 / 联网 2 / 子代理 1 / 档案记忆 1 / 技能 1，共 41）+ `memory.py` + `scheduler.py` +
   `checkpoints.py` + `config.py`（pydantic 校验 + JSON 落盘）+ `mcp.py` / `telegram_gateway.py`
 - 前端：`agentd/web/`（Vite + React 18 + TS + Zustand），**`dist/` 入库**，手机端不需要 Node
 - 官网：`website/index.html` 自包含单页（非应用，无发布流水线）

@@ -1,0 +1,88 @@
+name: CI
+
+# 门禁的权威实现是 tests/run_all.sh，CI 只负责「装环境 + 调它」。
+# 这样本地和 CI 跑的是同一份检查清单，不会出现两边套件数量、参数漂移
+# （上一版 CI 就是因为列了一份静态套件名单、删掉工作流后无人维护而失效的）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (tests/run_all.sh --backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            agentd/requirements.txt
+            agentd/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r agentd/requirements.txt -r agentd/requirements-dev.txt
+
+      - name: Run backend gate
+        run: bash tests/run_all.sh --backend
+
+  frontend:
+    name: Frontend (typecheck + test + build + dist freshness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: agentd/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: agentd/web
+        run: npm ci
+
+      - name: Run frontend gate
+        run: bash tests/run_all.sh --frontend
+
+  e2e:
+    name: E2E (Playwright, manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agentd/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: agentd/web/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          pip install -r agentd/requirements.txt
+          cd agentd/web && npm ci && npx playwright install --with-deps chromium
+
+      - name: Run E2E
+        run: bash tests/run_all.sh --with-e2e

@@ -2,7 +2,7 @@
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>口袋里能真正操作你手机的 always-on Agent</b> —— 本地优先 · 隐私保护 · Termux 原生</p>
-  <img src="https://img.shields.io/badge/tests-16%20backend%20suites%20%2B%2064%20frontend-green" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-local%20gate%20green" alt="Tests" />
   <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="本地门禁" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
@@ -17,11 +17,11 @@
 ## 亮点
 
 - **住在手机里，数据不出本机**：会话、记忆、定时任务、文件备份全部落在本地 SQLite（600/700 权限），只有推理请求发到你配置的 LLM 端点；
-- **38 个手机工具**：电量 / 短信 / 拨号 / 定位 / 传感器 / shell / 文件（termux-api），外加任务清单、FTS5 知识库、档案记忆与技能；
+- **41 个内建工具**：电量 / 短信 / 拨号 / 定位 / 传感器 / shell / 文件（termux-api），外加任务清单、FTS5 知识库、档案记忆与技能；
 - **审批是安全模型，不是 UI 点缀**：三级授权（允许一次 / 本会话始终 / 全局）+ 全局拒绝名单，服务端强制执行；超时自动拒绝，外部 MCP 工具永远跳不过审批；
-- **桌面 / Telegram 远程遥控**：内置 stdio MCP Server 把 38 个工具暴露给 Claude Desktop / Cline / Codex；Telegram 网关可让 agent 从任何设备驱动与审批；
+- **桌面 / Telegram 远程遥控**：内置 stdio MCP Server 把 41 个工具暴露给 Claude Desktop / Cline / Codex；Telegram 网关可让 agent 从任何设备驱动与审批；
 - **手机端零 Node**：构建好的 `dist/` 直接入库，Termux 里只跑 `install.sh`；可装成 PWA，也可打 WebView 壳 APK（`termux/apk-shell/`）；
-- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完 37 个后端回归套件 + 前端类型检查、67 个单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。
+- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完全部后端回归套件 + compileall/ruff/部署自检 + 前端类型检查、单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。具体清单以 `tests/run_all.sh` 为准，文档不重复计数。
 
 ## 什么设备能做什么
 
@@ -196,7 +196,7 @@ Plan 模式下 SSE 会发 `{"type": "plan", "plan": "...", "tool_calls": [...]}`
 
 ## MCP Server（远程控制手机）
 
-把手机上的工具（电量 / 短信 / 定位 / 文件 / shell / 任务清单 / 知识库 / 技能等 38 个）暴露成标准 MCP tools，
+把手机上的工具（电量 / 短信 / 定位 / 文件 / shell / 任务清单 / 知识库 / 技能等 41 个）暴露成标准 MCP tools，
 让桌面端的 **Claude Desktop / Cline / Codex** 通过 stdio 直接调用，等于用桌面大模型远程操控这台手机。
 
 **启动（独立模式，不启 FastAPI）**：
@@ -228,7 +228,7 @@ args=`["-m", "agentd.mcp_server"]`、cwd 指向本仓库根目录。
 
 ## 验证（本地门禁）
 
-一条命令跑完整个门禁——与仓库此前在 GitHub Actions 上执行的是同一套检查：
+一条命令跑完整个门禁。`tests/run_all.sh` 是唯一权威清单，CI（GitHub 镜像）只负责装依赖后调用它：
 
 ```bash
 bash tests/run_all.sh              # 后端 + 前端
@@ -238,7 +238,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
 
 全部通过才返回 0；有失败项会在末尾汇总列出，并返回非 0。
 
-- **后端**——37 个 Python 套件，外加 compileall、ruff 与部署链路自检：p0 回归 / p4 agent 深度 / 审批单测 /
+- **后端**——全部 Python 套件，外加 compileall、ruff 与部署链路自检：p0 回归 / p4 agent 深度 / 审批单测 /
   p3 健壮性单测 / 安全专项 / p3 性能与泄漏 / MCP / Telegram / p7 横向审计 /
   p6 首次使用（未配模型）均无需起服务；m5 / p0 排队 / p1 定时任务 / p2 配方 /
   p3 健壮性 API / p5 前端契约对活动 mock 服务执行（服务跑在自动挑选的空闲端口 +
@@ -253,9 +253,11 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
 
 逐个套件的说明见 `smoke/README.md`。
 
-全维度审查（安全 / 可靠性 / 性能 / 测试有效性 / 竞品对标）见
-[docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md)——
-每条发现都带 `file:line` 证据，并明确列出**没有**验证的部分。也可以单独跑某个套件——
+审查报告（每条都带 `file:line` 证据，并明确列出**没有**验证的部分）：
+[docs/audit-2026-10-23.md](docs/audit-2026-10-23.md)（最新，收尾加固轮）与
+[docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md)（安全 / 性能 / 覆盖率 / 竞品对标）。
+
+API 参考：[docs/API.md](docs/API.md)。也可以单独跑某个套件——
 需要服务的那些从环境变量 `AGENTD_BASE` 读取服务地址（默认 `http://127.0.0.1:8799`）。
 
 已在 Windows（Git Bash）与 Linux（Ubuntu 24.04，Python 3.12 / Node 22）双平台实测：

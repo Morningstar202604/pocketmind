@@ -331,7 +331,10 @@ register(Tool(
         "或用户直接给了一个网址要你总结。纯前端渲染的页面可能读不到内容。"
     ),
     parameters=READ_URL_SCHEMA,
-    risk="safe",
+    # 与 web_search 同级：URL 本身（可能含用户问题、内网主机名、带签名的分享链接）
+    # 会发给第三方站点，属于外发行为，必须经用户确认。此前标 safe 意味着
+    # 一条被注入的网页就能让模型静默把本机 URL 逐个打出去。
+    risk="write",
     handler=read_url,
     summary="读取网页正文",
     group="net",

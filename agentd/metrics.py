@@ -50,6 +50,12 @@ def normalize_path(path: str) -> str:
             if seg not in ("search", "pending", "profile", "reset", "compact", "todos"):
                 out.append("{id}")
                 continue
+        # sessions/{sid}/messages/{mid}：消息主键同样不能进标签。
+        # 漏掉这一段时基数会随消息数线性增长（一个活跃会话几千条），
+        # 而且标签里带着可枚举的用户数据 id。
+        if i > 0 and parts[i - 1] == "messages" and seg.isdigit():
+            out.append("{id}")
+            continue
         out.append(seg)
     return "/" + "/".join(out)
 

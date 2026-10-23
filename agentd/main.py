@@ -50,7 +50,7 @@ def _sse_event(ev: dict) -> ServerSentEvent:
     return ServerSentEvent(data=json.dumps(ev, ensure_ascii=False), sep="\n")
 
 
-VERSION = "0.2.0"
+VERSION = "1.1.0"
 APP_NAME = "口袋智灵"
 
 DIST = Path(__file__).parent / "web" / "dist"
@@ -261,7 +261,10 @@ async def run_agent_for_job(session_id: str, message: str) -> None:
     """
     if not session_id or await store.get_session(session_id) is None:
         session_id = await store.create_session()
-    runs.setdefault(session_id, {"task": None, "queue": asyncio.Queue(), "pending": []})
+    # 必须用 _new_run()：这里此前是手写字面量且少了 "cancelled" 字段，靠
+    # run_agent 里的 .get("cancelled") 默认值兜着——一旦默认值改掉，定时任务
+    # 的「停止」就会失效（任务还在跑、取消标志读不到）。
+    runs.setdefault(session_id, _new_run(asyncio.Queue()))
     await run_agent(session_id, message)
 
 
@@ -1069,12 +1072,16 @@ def create_app() -> FastAPI:
         """
         from .diagnostics import run_diagnostics
 
-        return run_diagnostics(
+        # 探测里有同步 socket / subprocess（DNS、端口、getprop），直接 await 会把
+        # 整个事件循环卡住：本机实测 0.58s，网络更差时更久，期间所有 SSE 与
+        # 其它请求都被堵住。丢线程池执行，保持"只读探测不阻塞服务"的承诺。
+        return await asyncio.to_thread(
+            run_diagnostics,
             settings_mgr,
             MOCK,
-            host=settings_mgr.data.get("server", {}).get("host", "127.0.0.1"),
-            port=int(settings_mgr.data.get("server", {}).get("port", 8787) or 8787),
-            data_dir=settings_mgr.path.parent,
+            settings_mgr.get().get("server", {}).get("host", "127.0.0.1"),
+            int(settings_mgr.get().get("server", {}).get("port", 8787) or 8787),
+            settings_mgr.path.parent,
         )
 
     @app.get("/api/metrics", dependencies=[Depends(check_token)])
@@ -1269,10 +1276,16 @@ def create_app() -> FastAPI:
                  "created_at": k["created_at"]}
                 for k in await store.kb_list()
             ]
-            # 批量取回：原来是「每个会话查 5 次」（messages / archives / todos /
-            # summary / archived_upto），500 个会话就是 2500 次往返。
-            # export_bundle 用 5 条聚合查询一次拿完，实测复杂度从 O(会话数) 降到常数。
-            bundle = await store.export_bundle(max_sessions=500, max_messages=1000)
+            # 批量取回并**翻页取尽**：原来是「每个会话查 5 次」（500 会话 = 2500 次
+            # 往返），后来改成 5 条聚合查询但仍然只取一页 —— 第 501 个会话静默丢失。
+            # 现在 max_sessions 是总量上限、page_size 控制每批 SQL 的绑定参数个数：
+            # Termux 自带 SQLite 的变量上限可能是 999，500 个会话拼进 IN 子句
+            # 会直接报 "too many SQL variables"（这也是分页而非一次全量的硬理由）。
+            bundle = await store.export_bundle(
+                max_sessions=500, max_messages=1000, page_size=100
+            )
+            out["exported_session_count"] = len(bundle["sessions"])
+            out["export_truncated"] = len(bundle["sessions"]) >= 500
             for s in bundle["sessions"]:
                 payload_s = bundle["by_session"].get(s["id"], {})
                 msgs = [

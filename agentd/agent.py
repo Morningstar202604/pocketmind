@@ -646,22 +646,29 @@ class Agent:
         """
         content_acc = ""
         tool_calls: dict[int, dict] = {}
-        async for content, reasoning, tc_delta in self._stream(messages, tools):
-            if reasoning:
-                await emit({"type": "thinking", "text": reasoning})
-            if content:
-                content_acc += content
-                await emit({"type": "text", "text": content})
-            if tc_delta:
-                for tc in tc_delta:
-                    acc = tool_calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-                    if tc.id:
-                        acc["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            acc["name"] = tc.function.name
-                        if tc.function.arguments:
-                            acc["args"] += tc.function.arguments
+        # LLM 调用次数/耗时此前只有 metrics.record_llm 的定义，全仓没有调用方 ——
+        # /api/metrics 里的 pocketmind_llm_calls_total 永远是 0，等于假指标。
+        # 在这里计时：主循环和子代理都走 _stream_round，一处接线全覆盖。
+        _t0 = time.perf_counter()
+        try:
+            async for content, reasoning, tc_delta in self._stream(messages, tools):
+                if reasoning:
+                    await emit({"type": "thinking", "text": reasoning})
+                if content:
+                    content_acc += content
+                    await emit({"type": "text", "text": content})
+                if tc_delta:
+                    for tc in tc_delta:
+                        acc = tool_calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                        if tc.id:
+                            acc["id"] = tc.id
+                        if tc.function:
+                            if tc.function.name:
+                                acc["name"] = tc.function.name
+                            if tc.function.arguments:
+                                acc["args"] += tc.function.arguments
+        finally:
+            _m.record_llm(time.perf_counter() - _t0)
         return content_acc, tool_calls
 
     async def _finish_plan(
