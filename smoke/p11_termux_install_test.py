@@ -36,8 +36,39 @@ def write_exe(path: Path, body: str = "#!/bin/sh\nexit 0\n") -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
+# install.sh / boot.sh 会用到的基础命令：只把这些命令暴露给被测脚本。
+# 为什么必须白名单：CI 的 ubuntu runner 预装了 rustc 与 python，若沿用宿主机 PATH，
+# 「真缺 rust」与「没有 python」两个场景会被宿主命令"补上"，测试静默失效
+# （2026-10-24 GitHub Actions 实测：p11 在 CI 上 8 通过 / 2 失败，本机却全绿）。
+_SHIM_COMMANDS = (
+    "sh", "bash", "grep", "tail", "head", "cat", "dirname", "basename",
+    "mkdir", "rm", "chmod", "sleep", "nohup", "env", "date", "tr", "sed", "awk", "wc",
+)
+
+
+def _make_shim(root: Path) -> Path:
+    """建一个只含基础命令的 shim 目录（不含 python / rustc）。
+
+    用包装脚本而不是符号链接：Windows 上创建符号链接需要开发者模式，
+    包装脚本在 Git Bash 与 Linux 上都能正常 exec。
+    """
+    shim = root / "shim"
+    shim.mkdir(exist_ok=True)
+    for name in _SHIM_COMMANDS:
+        real = shutil.which(name)
+        if not real:
+            continue
+        target = Path(real).as_posix()
+        write_exe(shim / name, f'#!/bin/sh\nexec "{target}" "$@"\n')
+    return shim
+
+
 def build_env(root: Path) -> tuple[dict[str, str], Path]:
-    """构造假 Termux 环境：PREFIX/bin 下放 pkg 桩 + 预装命令。"""
+    """构造假 Termux 环境：PREFIX/bin 下放 pkg 桩 + 预装命令。
+
+    PATH 只包含 PREFIX/bin 与 shim 目录 —— 宿主机装了什么（rustc / python）
+    都不会影响判定结果，测试在任何 CI 镜像上行为一致。
+    """
     prefix = root / "usr"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
@@ -45,6 +76,7 @@ def build_env(root: Path) -> tuple[dict[str, str], Path]:
     home.mkdir(exist_ok=True)
     log = root / "pkg.log"
     log.write_text("", encoding="utf-8")
+    shim = _make_shim(root)
 
     # pkg 桩：只记录调用，不真装
     write_exe(bindir / "pkg", '#!/bin/sh\necho "$*" >> "$PKG_LOG"\nexit 0\n')
@@ -53,7 +85,7 @@ def build_env(root: Path) -> tuple[dict[str, str], Path]:
         "HOME": str(home),
         "PREFIX": str(prefix),
         "PKG_LOG": str(log),
-        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PATH": f"{bindir}{os.pathsep}{shim}",
     }
     return env, log
 
@@ -153,14 +185,14 @@ def main() -> int:
     # --- 场景 6：boot.sh 找不到 python 时必须非零退出并说明原因 ---
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        bindir = root / "bin"
-        bindir.mkdir()
+        # 仍用白名单 shim：宿主机若有 python，会掩盖「找不到 python」这条分支
+        bindir = _make_shim(root)
         # curl 桩：健康检查恒失败，确保走到失败分支
         write_exe(bindir / "curl", "#!/bin/sh\nexit 1\n")
         env = {
             **os.environ,
             "HOME": str(root),
-            "PATH": f"{bindir}:/usr/bin:/bin",
+            "PATH": f"{bindir}",
         }
         boot = ROOT / "termux" / "boot.sh"
         r = subprocess.run([BASH, str(boot)], cwd=str(ROOT), env=env,
