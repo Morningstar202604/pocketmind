@@ -15,6 +15,13 @@ from pathlib import Path
 
 CSS = Path(__file__).resolve().parent.parent / "agentd" / "web" / "src" / "styles.css"
 
+# 白字压深色填充（气泡/主按钮/发送键）：这两组是渐变的两个端点，
+# 白字在两端都要过 AA，否则渐变中间段必然有一段不可读。
+FILL_PAIRS = {
+    "light": ["brand-fill", "brand-fill-2"],
+    "dark": ["brand-fill", "brand-fill-2"],
+}
+
 # 每套主题：文字变量 → 它可能落在哪些背景上
 PAIRS = {
     # brand-text 是「作为正文颜色」的品牌色（置顶徽章、链接、状态文字都用它）。
@@ -85,6 +92,19 @@ def main() -> int:
                     worst[1] >= MIN_RATIO,
                     f"{worst[1]:.2f}:1（{fg} on {vars_.get(worst[0])}）",
                 )
+
+    # 白字压填充色：--on-brand 是 #fff；气泡 / 主按钮 / 发送键都是「白字 + 品牌渐变」，
+    # 渐变两端都必须过 AA，否则中间必然有一段读不清（旧值 #10b981 只有 2.54:1）。
+    for theme in ("light", "dark"):
+        vars_ = parse_theme(css, theme)
+        for name in FILL_PAIRS[theme]:
+            hexv = vars_.get(name)
+            if not hexv:
+                check(f"{theme} / 缺少 {name} 变量", False)
+                continue
+            r = ratio("#ffffff", hexv)
+            check(f"{theme} / 白字 on {name} ≥ {MIN_RATIO}", r >= MIN_RATIO, f"{r:.2f}:1（{hexv}）")
+
     print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
     if failed:
         print("失败项：" + "；".join(failed))

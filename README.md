@@ -23,7 +23,7 @@
 
 <sub>Recorded from the running app (mock LLM, no API key needed): empty state → tool call →
 server-side approval → result → sessions → settings → live statistics → scheduled jobs →
-dark theme → mobile viewport. Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (39 s).</sub>
+dark theme → mobile viewport. Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s).</sub>
 
 ## Why this exists
 

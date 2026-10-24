@@ -23,7 +23,7 @@
 
 <sub>真实录屏（离线 mock，无需 API Key）：空态 → 工具调用 → 服务端审批 → 结果回填 →
 会话管理 → 设置 → 实时统计 → 定时任务 → 深色主题 → 手机视口。
-完整视频：[docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4)（39 秒）。</sub>
+完整视频：[docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4)（40 秒）。</sub>
 
 ## 为什么需要它
 

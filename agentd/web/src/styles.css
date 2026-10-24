@@ -24,6 +24,11 @@ html[data-theme="dark"] {
   /* 正文用的品牌色：与 --brand 分开，因为 --brand 同时做背景/描边，
      而浅色主题下 #0d9d6e 在 panel-2 上只有 3.06:1，做文字不合格。 */
   --brand-text: #10b981;
+  /* 白字填充色：白字压在品牌渐变上时必须用它们——
+     #10b981/#06b6d4 与白字只有 2.54/2.43:1，远低于 AA 的 4.5。
+     下面这组是压暗后的同色相（4.93 / 5.67:1），视觉仍是绿→青。 */
+  --brand-fill: #0b805d;
+  --brand-fill-2: #0a7183;
   --brand-2: #06b6d4;
   --brand-soft: rgba(16, 185, 129, 0.12);
   --ok: #34d399;
@@ -80,6 +85,9 @@ html[data-theme="light"] {
   /* 深绿：panel-2 上 4.71:1、panel 上 5.33:1、bg 上 4.92:1，全部过 AA。
      浅色下不能用 #0d9d6e 写正文（3.06:1）——p9 现在会断言这一项。 */
   --brand-text: #0b7a58;
+  /* 白字填充色（浅色主题）：5.33 / 6.26:1 */
+  --brand-fill: #0b7a58;
+  --brand-fill-2: #0a6a7a;
   --brand-2: #0a94ab;
   --brand-soft: rgba(13, 157, 110, 0.1);
   --ok: #0a7c57;
@@ -371,7 +379,7 @@ body {
   max-width: 88%;
 }
 .bubble.user {
-  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  background: linear-gradient(135deg, var(--brand-fill), var(--brand-fill-2));
   color: var(--on-brand);
   border-bottom-right-radius: var(--radius-xs);
   white-space: pre-wrap;
@@ -754,7 +762,7 @@ body {
   transform: scale(0.98);
 }
 .btn.primary {
-  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  background: linear-gradient(135deg, var(--brand-fill), var(--brand-fill-2));
   border: none;
   color: var(--on-brand);
   font-weight: 600;
@@ -891,7 +899,7 @@ body {
   flex: none;
   border-radius: var(--radius-lg);
   border: none;
-  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  background: linear-gradient(135deg, var(--brand-fill), var(--brand-fill-2));
   color: var(--on-brand);
   cursor: pointer;
   display: inline-flex;
@@ -1030,13 +1038,13 @@ body {
   color: var(--on-brand);
 }
 .task-icon.green {
-  background: linear-gradient(135deg, #10b981, #059669);
+  background: linear-gradient(135deg, #0b7a58, #0a6b4e);
 }
 .task-icon.blue {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
 }
 .task-icon.amber {
-  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  background: linear-gradient(135deg, #b45309, #92400e);
 }
 .task-icon.cyan {
   background: linear-gradient(135deg, #06b6d4, #0891b2);
