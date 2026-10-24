@@ -17,12 +17,16 @@ CSS = Path(__file__).resolve().parent.parent / "agentd" / "web" / "src" / "style
 
 # 每套主题：文字变量 → 它可能落在哪些背景上
 PAIRS = {
+    # brand-text 是「作为正文颜色」的品牌色（置顶徽章、链接、状态文字都用它）。
+    # 不能拿 --brand 直接写正文：#0d9d6e 在浅色 panel-2 上只有 3.06:1。
     "light": [("text", ["bg", "panel", "panel-2"]), ("text-2", ["bg", "panel", "panel-2"]),
               ("text-3", ["bg", "panel", "panel-2"]), ("warn", ["panel", "panel-2"]),
-              ("err", ["panel", "panel-2"]), ("ok", ["panel", "panel-2"])],
+              ("err", ["panel", "panel-2"]), ("ok", ["panel", "panel-2"]),
+              ("brand-text", ["bg", "panel", "panel-2"])],
     "dark": [("text", ["bg", "panel", "panel-2"]), ("text-2", ["bg", "panel", "panel-2"]),
              ("text-3", ["bg", "panel", "panel-2"]), ("warn", ["panel", "panel-2"]),
-             ("err", ["panel", "panel-2"]), ("ok", ["panel", "panel-2"])],
+             ("err", ["panel", "panel-2"]), ("ok", ["panel", "panel-2"]),
+             ("brand-text", ["bg", "panel", "panel-2"])],
 }
 MIN_RATIO = 4.5
 passed, failed = [], []

@@ -21,6 +21,9 @@ html[data-theme="dark"] {
   --text-2: #9aa3b2;
   --text-3: #8a94a4;
   --brand: #10b981;
+  /* 正文用的品牌色：与 --brand 分开，因为 --brand 同时做背景/描边，
+     而浅色主题下 #0d9d6e 在 panel-2 上只有 3.06:1，做文字不合格。 */
+  --brand-text: #10b981;
   --brand-2: #06b6d4;
   --brand-soft: rgba(16, 185, 129, 0.12);
   --ok: #34d399;
@@ -74,6 +77,9 @@ html[data-theme="light"] {
   --text-2: #5a6472;
   --text-3: #666d79;
   --brand: #0d9d6e;
+  /* 深绿：panel-2 上 4.71:1、panel 上 5.33:1、bg 上 4.92:1，全部过 AA。
+     浅色下不能用 #0d9d6e 写正文（3.06:1）——p9 现在会断言这一项。 */
+  --brand-text: #0b7a58;
   --brand-2: #0a94ab;
   --brand-soft: rgba(13, 157, 110, 0.1);
   --ok: #0a7c57;
@@ -722,7 +728,7 @@ body {
 }
 .llm-test-ok {
   font-size: 12px;
-  color: var(--brand);
+  color: var(--brand-text);
 }
 .llm-test-err {
   font-size: 12px;
@@ -842,7 +848,7 @@ body {
 }
 .composer-provider {
   font-size: 12px;
-  color: var(--brand);
+  color: var(--brand-text);
   background: var(--brand-soft);
   padding: 1px 8px;
   border-radius: 999px;
@@ -1230,11 +1236,11 @@ body {
   color: var(--text-3);
 }
 .s-rename:hover {
-  color: var(--brand);
+  color: var(--brand-text);
   background: color-mix(in srgb, var(--brand) 10%, transparent);
 }
 .s-title:hover {
-  color: var(--brand);
+  color: var(--brand-text);
 }
 /* 置顶标记：小号文字标签而不是 emoji —— emoji 在不同机型字体差异大，
  * 且会破坏列表的等宽对齐（与项目「不堆 emoji」的视觉约定一致）。
@@ -1242,7 +1248,7 @@ body {
  * 11px 只在「没有会话被置顶」时逃过检查（本轮审计发现）。 */
 .s-pin {
   font-size: 12px;
-  color: var(--brand);
+  color: var(--brand-text);
   border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
   border-radius: 4px;
   padding: 0 4px;
@@ -1548,7 +1554,7 @@ body {
 .plan-title {
   font-size: 13px;
   font-weight: 700;
-  color: var(--brand);
+  color: var(--brand-text);
 }
 .plan-tag {
   font-size: 12px;
@@ -1963,7 +1969,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: var(--brand);
+  color: var(--brand-text);
   text-align: right;
 }
 .group-action {
@@ -2194,7 +2200,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.diag-summary.ok { color: var(--brand); }
+.diag-summary.ok { color: var(--brand-text); }
 .diag-summary.warn { color: #d97706; }
 .diag-summary.bad { color: var(--danger, #d4380d); }
 .diag-list {
@@ -2335,7 +2341,7 @@ body {
   font-weight: 600;
   margin-bottom: 4px;
 }
-.caps-sec-title.ok { color: var(--brand); }
+.caps-sec-title.ok { color: var(--brand-text); }
 .caps-sec-title.warn { color: #b45309; }
 .caps-sec-title.bad { color: var(--danger, #d4380d); }
 .caps-tags { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -2346,7 +2352,7 @@ body {
   border: 1px solid var(--border);
 }
 .cap-tag.ok {
-  color: var(--brand);
+  color: var(--brand-text);
   border-color: color-mix(in srgb, var(--brand) 35%, transparent);
   background: color-mix(in srgb, var(--brand) 8%, transparent);
 }

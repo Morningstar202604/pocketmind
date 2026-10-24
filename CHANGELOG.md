@@ -40,6 +40,12 @@
 - 回归套件 p28/p29/p30/p31 进入门禁（默认路径）。
 - 发布素材：`assets/screenshots/01-09`（本轮实拍，light/dark/mobile）与
   `docs/demo/pocketmind-demo.mp4` / `.gif`（真实操作录制）。
+- **浅色主题下品牌色正文对比度不合格（3.06:1）**：`.s-pin`、`.s-title:hover`、
+  `.composer-provider`、`.plan-title`、`.cap-tag.ok` 等 10 处用 `--brand` 当文字色；
+  浅色主题的 `#0d9d6e` 在 `panel-2` 上只有 3.06:1（WCAG AA 要 4.5）。新增
+  `--brand-text` token（浅色 `#0b7a58` = 4.71:1，深色 `#10b981` = 6.43:1），
+  正文用 `--brand-text`、背景/描边继续用 `--brand`。`p9` 增加该断言
+  （已反向验证：改回 `#0d9d6e` 时 p9 必红）。
 - **UI 假绿：置顶徽章 11px 逃过字号断言**：`.s-pin` 用了 11px，而
   `mobile.spec.ts` 会对全部可见文本断言 ≥12px——只因测试数据里没有置顶会话，
   这条断言从没量到它。已改为 12px，并在手机矩阵里显式置顶一个会话、
