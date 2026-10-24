@@ -3,7 +3,7 @@
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>口袋里能真正操作你手机的 always-on Agent</b><br/>
   本地优先 · 隐私保护 · Termux 原生 · 41 个工具 · 服务端强制审批</p>
-  <img src="https://img.shields.io/badge/tests-local%20gate%20green" alt="Tests" />
+  <img src="https://github.com/X33834/pocketmind/actions/workflows/ci.yml/badge.svg" alt="CI" />
   <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="本地门禁" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />

@@ -3,7 +3,7 @@
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b><br/>
   Local-first · Privacy-first · Native on Termux · 41 tools · Server-enforced approval</p>
-  <img src="https://img.shields.io/badge/tests-local%20gate%20green" alt="Tests" />
+  <img src="https://github.com/X33834/pocketmind/actions/workflows/ci.yml/badge.svg" alt="CI" />
   <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="Local gate" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
