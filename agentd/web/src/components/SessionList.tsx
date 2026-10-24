@@ -12,6 +12,7 @@ export function SessionList({
   onNew,
   onDelete,
   onRename,
+  onPin,
 }: {
   sessions: Session[];
   currentId: string;
@@ -20,6 +21,7 @@ export function SessionList({
   onNew: () => void;
   onDelete: (sid: string) => void;
   onRename: (sid: string, title: string) => void;
+  onPin: (sid: string, pinned: boolean) => void;
 }) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MessageHit[]>([]);
@@ -104,6 +106,7 @@ export function SessionList({
             >
               <div className="session-main">
                 <span className="s-title" title="双击重命名" onDoubleClick={() => rename(s)}>
+                  {s.pinned ? <span className="s-pin" aria-label="已置顶" title="已置顶">置顶 </span> : null}
                   {s.title}
                 </span>
                 <span className="s-count">
@@ -114,6 +117,17 @@ export function SessionList({
                 </span>
               </div>
               <div className="s-ops">
+                <button
+                  className="s-del s-rename"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPin(s.id, !s.pinned);
+                  }}
+                  title={s.pinned ? "取消置顶" : "置顶会话"}
+                  aria-label={s.pinned ? "取消置顶" : "置顶会话"}
+                >
+                  {s.pinned ? "⇱" : "⇲"}
+                </button>
                 <button
                   className="s-del s-rename"
                   onClick={(e) => {

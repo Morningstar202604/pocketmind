@@ -42,6 +42,8 @@ export interface Msg {
   queued?: boolean;
   // 消息创建时间（秒级时间戳，来自后端 created_at 或本地创建时刻）
   createdAt?: number;
+  /** 本轮 token 用量（done 事件带入；刷新后由后端 meta 恢复） */
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; estimated?: boolean };
 }
 
 export function uid(prefix: string): string {

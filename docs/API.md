@@ -15,7 +15,7 @@
 | GET | `/api/health` | 深度探活：DB 连通性、LLM 配置、Mem0、调度器。无鉴权 |
 | GET | `/api/diagnostics` | 环境自检 + 设备能力矩阵（`docs/capability-matrix.md`） |
 | GET | `/api/metrics` | Prometheus 文本格式指标 |
-| GET | `/api/stats` | 运行统计（LiteLLM / Mem0 状态，不含密钥） |
+| GET | `/api/stats` | 运行统计：`metrics` 快照（请求/工具/LLM tokens）+ LiteLLM / Mem0 状态，不含密钥 |
 
 `/api/health` 返回 `{"ok": bool, "ready": bool, "components": {...}}`；
 `ready` 表示模型已配置（`mock` 模式恒为 true）。
@@ -42,7 +42,7 @@
 | `todo` | `todos` | 任务清单变更 |
 | `queued` | `message` | 上一轮未结束，本条已排队 |
 | `error` | `message` | 错误 |
-| `done` | `stop_reason` | 结束（end_turn / plan / queued / unconfigured） |
+| `done` | `stop_reason`,`usage`? | 结束（end_turn / plan / queued / unconfigured）。`usage` 为本轮累计 `{prompt_tokens, completion_tokens, total_tokens, estimated?}` |
 
 ## 审批
 
@@ -59,9 +59,9 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/sessions` | 会话列表（含消息数） |
+| GET | `/api/sessions` | 会话列表（含消息数；置顶优先，其次最近活跃） |
 | POST | `/api/sessions` | 新建会话 |
-| PUT | `/api/sessions/{sid}` | 重命名，body `{title}` |
+| PUT | `/api/sessions/{sid}` | 重命名 / 置顶，body `{title}` 或 `{pinned: bool}`（可同时给） |
 | DELETE | `/api/sessions/{sid}` | 删除会话（消息/记忆/清单/归档/定时任务级联） |
 | GET | `/api/sessions/{sid}/messages` | 该会话最近 200 条消息 |
 | DELETE | `/api/sessions/{sid}/messages/{mid}` | 从该消息起截断（编辑重发 / 重新生成） |
@@ -76,6 +76,7 @@
 |---|---|---|
 | GET/POST | `/api/jobs` | 列表 / 新建（`name`,`trigger_type`∈cron/interval/date,`expr`,`message`,`condition`?） |
 | PUT/DELETE | `/api/jobs/{jid}` | 更新（enabled / 表达式热更新）/ 删除 |
+| POST | `/api/jobs/{jid}/run` | 立即执行一次（后台起跑，HTTP 立即返回；条件表达式仍生效） |
 | GET | `/api/recipes` | 预设配方列表（含是否已实例化） |
 | POST | `/api/recipes/{id}/apply` | 一键实例化（幂等） |
 
@@ -104,9 +105,13 @@
 | POST | `/api/llm/test` | 用当前配置发一次最小请求验证连通性 |
 | GET | `/api/providers` | 内置厂商预设 |
 | GET | `/api/export` | 全量导出（会话/消息/归档/清单/档案/知识库/定时任务） |
+| POST | `/api/import` | 从导出文件恢复：合并语义（同 id 会话跳过、知识库去重、任务默认停用），坏文件 400 且不写半截 |
 
 `PUT /api/settings` 的语义：`api_key` / `server.token` / `server.tg_token` 回传打码值
 或空串时**不覆盖**已存值，只有新值才写入；数值字段由 pydantic 模型收敛到合法区间。
 
 `GET /api/export` 的 `max_sessions` 上限为 500（`exported_session_count` 给出实际条数，
 `export_truncated` 标记是否触顶）。单会话最多导出最近 1000 条消息。
+
+`POST /api/import` 返回 `{"ok": true, "imported": {sessions, sessions_skipped, messages, knowledge, todos, jobs}}`；
+单次最多 500 个会话，超过请拆分。

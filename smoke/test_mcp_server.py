@@ -2,7 +2,7 @@
 """MCP server 验证：把手机工具注册表暴露成 MCP tools。
 
 不依赖真实 MCP 客户端 / stdio，直接在内存里 build_server 后：
-  1. 工具列表非空且 ≥ 20 个（当前内置 31 个）；
+  1. 工具列表非空且 ≥ 20 个（当前内置 41 个）；
   2. 每个工具都带合法 inputSchema（type=object，有 properties）；
   3. 每个工具的 description 带 [safe]/[write]/[danger] 风险前缀；
   4. 调用工具时确实转发到 agentd.tools.call_tool（mock 后断言入参正确）。
@@ -35,12 +35,16 @@ async def run():
 
     # 1. 工具数量
     check("工具列表非空", len(tools) > 0, f"count={len(tools)}")
-    check("至少 20 个工具（内置 31 个）", len(tools) >= 20, f"count={len(tools)}")
+    check("至少 20 个工具", len(tools) >= 20, f"count={len(tools)}")
 
-    # 2. 每个工具有合法 inputSchema
-    bad_schema = [t.name for t in tools if (t.input_schema or {}).get("type") != "object"]
+    # 2. 每个工具有合法 inputSchema。
+    # 字段名以 SDK 实际暴露的为准（1.30 起是驼峰 inputSchema，没有 input_schema 属性）；
+    # 直接读错字段会让本套件在升级 SDK 后崩掉——而它本该验证的正是 schema 内容。
+    from agentd.mcp import tool_schema
+
+    bad_schema = [t.name for t in tools if (tool_schema(t) or {}).get("type") != "object"]
     check("每个工具 inputSchema 均为 object", not bad_schema, str(bad_schema))
-    no_props = [t.name for t in tools if "properties" not in (t.input_schema or {})]
+    no_props = [t.name for t in tools if "properties" not in (tool_schema(t) or {})]
     check("每个工具 inputSchema 都有 properties 字段", not no_props, str(no_props))
 
     # 3. 风险前缀
@@ -71,9 +75,10 @@ async def run():
 
     # 5. schema 正确性抽查：send_sms 必填字段在 required 里
     sms = next(t for t in tools if t.name == "send_sms")
+    sms_schema = tool_schema(sms)
     check("send_sms 把 numbers/text 标为必填",
-          set(sms.input_schema.get("required", [])) >= {"numbers", "text"},
-          str(sms.input_schema.get("required")))
+          set(sms_schema.get("required", [])) >= {"numbers", "text"},
+          str(sms_schema.get("required")))
 
     print(f"\n工具总数：{len(tools)}")
     print(f"通过 {len(passed)} / {len(passed) + len(failed)}")

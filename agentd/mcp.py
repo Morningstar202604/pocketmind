@@ -15,6 +15,38 @@ import asyncio
 from contextlib import AsyncExitStack
 
 
+def tool_schema(tool) -> dict:
+    """读取 MCP Tool 的 inputSchema，兼容 SDK 1.x 的两种字段形态。
+
+    为什么需要它：mcp SDK 的 ``Tool`` 是 pydantic 模型，1.30 起字段名是
+    ``inputSchema``（驼峰 alias），没有 ``input_schema`` 属性；更早的 1.x 版本
+    恰好相反。直接写 ``t.input_schema`` 在 1.30 上抛 AttributeError ——
+    主服务接入任意 MCP Server 时启动即崩，而单元测试因为手工构造 dict 从未覆盖到。
+    这里按「属性 → alias → dict → model_dump」的顺序取值，缺省返回空 object schema。
+    """
+    if tool is None:
+        return {"type": "object", "properties": {}}
+    if isinstance(tool, dict):
+        raw = tool.get("inputSchema") or tool.get("input_schema")
+    else:
+        raw = getattr(tool, "inputSchema", None)
+        if raw is None:
+            raw = getattr(tool, "input_schema", None)
+        if raw is None:
+            dump = getattr(tool, "model_dump", None)
+            if callable(dump):
+                try:
+                    data = dump(by_alias=True)
+                # aqg: top-level boundary —— 序列化失败按空 schema 处理，不让整个工具列表崩
+                except Exception:  # noqa: BLE001
+                    data = None
+                if isinstance(data, dict):
+                    raw = data.get("inputSchema") or data.get("input_schema")
+    if not isinstance(raw, dict) or not raw:
+        return {"type": "object", "properties": {}}
+    return raw
+
+
 def mcp_tool_risk(annotations) -> str:
     """由 MCP 工具注解推导风险等级（对标 goose 的 apply_tool_annotations 思路）。
 
@@ -99,7 +131,7 @@ class MCPClient:
         return {
             "name": t.name,
             "description": t.description or "",
-            "inputSchema": t.input_schema or {"type": "object", "properties": {}},
+            "inputSchema": tool_schema(t),
             "annotations": annotations,
         }
 

@@ -13,7 +13,7 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 
 - `python -m agentd.main --mock --port 8799`（AGENT_HOME 用持久路径，如 `~/.agent-test/pa-test`）。
   端口可用环境变量改成别的地址：`AGENTD_BASE=http://127.0.0.1:9000 python smoke/m5_regression.py`
-- `/tmp/faketermux/` 25 个 termux 命令桩（**会被系统周期性清空**，出现"termux-api 未安装"时重建；
+- `/tmp/faketermux/` termux 命令桩（**会被系统周期性清空**，出现"termux-api 未安装"时重建；
   桩需返回真实格式，如 battery 输出 JSON 数组 `[{"status":...}]`）；重建用 `bash tests/setup_faketermux.sh`（当前产出 23 个命令桩）
 
 ## 测试清单
@@ -21,6 +21,9 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 | 脚本 | 覆盖 | 项数 |
 |---|---|---|
 | `m5_regression.py` | 安全加固回归：短 key 打码、DB/目录权限 600/700、电池链路（auto）、danger 审批+拒绝+收尾、未知工具审批、会话命名、工具清单 ≥38 项 | 11 |
+| `p28_mcp_roundtrip_test.py` | MCP 双端真实 stdio 握手：list_tools → schema 转换（驼峰/下划线兼容）、工具调用返回、无 termux-api 时结构化失败 | 7 |
+| `p29_stats_usage_test.py` | /api/stats 真数据（metrics 快照）、token 计数（prompt/completion/total）、done 事件 usage、Prometheus token 指标 | 15 |
+| `p30_features_test.py` | 会话置顶排序、只改 pinned 不清标题、定时任务立即执行、导出→导入恢复、重复导入幂等、坏备份 400 | 22 |
 | `p4_agent_depth_test.py` | P4 agent 深度：配置接线（链长/重试/检索条数/压缩阈值/FTS 批量）、中断恢复（孤立 tool_calls 回填）、三级审批（deny_always/allow_global/旧格式兼容）、MCP 注解分级、档案记忆注入、知识库显式检索、摘要链路（最旧 N 条不摘最近）、Skills 渐进披露、todo 工具 | 53 |
 | `p5_frontend_contract_test.py` | P5 前端契约：导出覆盖档案/清单/知识库、agent/context/memory 三块设置回环与越界收敛、新工具分组齐备、手动压缩端点 | 18 |
 | `p6_unconfigured_test.py` | P6 首次使用（未配置模型）：自起真实模式服务，断言 health 给出缺失项、发消息 5 秒内返回指引、连续两条都处理（不被永久锁成「排队」）、历史留完整一问一答 | 8 |

@@ -6,6 +6,47 @@
 
 （暂无）
 
+## [1.2.0] - 2026-10-24
+
+### 修复（第二轮全量审计，每项都有可复现证据）
+
+- **MCP 客户端接入任意外部 Server 时启动即崩**：`agentd/mcp.py` 直接读
+  `Tool.input_schema`，而 mcp SDK 1.30 的字段是驼峰 `inputSchema`，没有该属性——
+  `AttributeError: 'Tool' object has no attribute 'input_schema'`。主服务只要配置了
+  `server.mcp`，启动阶段就会崩在工具注册上；旧单测手工构造 dict，从未走过真实 SDK 对象。
+  新增 `mcp.tool_schema()` 统一兼容三种形态（属性 / alias / dict），
+  回归：`smoke/p28_mcp_roundtrip_test.py`（真起 stdio 子进程握手，7 条断言）。
+- **`/api/stats` 是空壳**：`metrics.snapshot()` 写好了却没有任何调用方，
+  「运行统计」只回显配置。现在并入快照（请求数、工具失败率、LLM 调用与 token）。
+  回归：`smoke/p29_stats_usage_test.py`。
+- **Token 消耗完全不可见**：流式调用从不请求 `stream_options.include_usage`，
+  也不解析 `chunk.usage`。现在请求 usage（端点不支持时自动降级重试一次），
+  `done` 事件携带本轮累计用量，消息落库进 `meta.usage`，刷新后仍可回看。
+  mock 模式给出 `estimated: true` 的估算值，格式与真链路一致。
+- **`mcp_client.py` 的 schema 读取同样错字段**：1.30 上恒为 `None`，外部工具参数全空。
+  统一走 `tool_schema()`。
+
+### 新增
+
+- **会话置顶**：`sessions.pinned` 列 + `PUT /api/sessions/{id} {"pinned": true}`；
+  列表按 `pinned DESC, updated_at DESC` 排序。会话抽屉里一键置顶/取消。
+- **定时任务「立即执行」**：`POST /api/jobs/{id}/run`，后台起跑、HTTP 立即返回，
+  条件表达式仍生效。此前只能等触发点，无法验证任务是否真的能跑通。
+- **备份恢复（导入）**：`POST /api/import`，与 `/api/export` 配对。
+  合并语义：同 id 会话跳过、知识库按内容去重、定时任务默认停用导入（避免恢复瞬间全部触发）、
+  坏文件 400 且不写半截数据。
+- **运行统计面板**：设置 → 运行统计，展示运行时长 / 请求数 / LLM 调用与 token / 工具失败数。
+- **消息级 token 用量**：每条助手回复下方显示本轮消耗（端点未回报时标注「估」）。
+- 回归套件 p28/p29/p30 进入门禁（默认路径）。
+- 发布素材：`assets/screenshots/01-09`（本轮实拍，light/dark/mobile）与
+  `docs/demo/pocketmind-demo.mp4` / `.gif`（真实操作录制）。
+
+### 文档
+
+- 新增 `docs/COMPETITORS.md`（对标 Mobilerun / Mobile-Agent / Cline / Open Interpreter / Letta，
+  含能力矩阵与「该借什么」的具体结论，所有外部事实附来源链接）。
+- README 双语重写展示区：演示视频、9 张实拍截图、能力矩阵、与竞品的边界说明。
+
 ## [1.1.0] - 2026-10-23
 
 ### 修复（2026-10-23 收尾审计）
@@ -44,8 +85,10 @@
   一个 0.1.0，且都落后于既有 tag）。
 - 根目录四份历史报告移入 `docs/history/`（内容原样保留），根目录只留当前有效文档；
   开发截图同样归档到 `docs/history/`；删除误生成的 `nul` 与重复的 `ui-shot-1-main.png`。
-- 新增 `docs/audit-2026-10-23.md`（本轮审计台账与证据）、`docs/API.md`（43 个端点参考）、
+- 新增 `docs/audit-2026-10-23.md`（本轮审计台账与证据）、`docs/API.md`（端点参考）、
   `agentd/requirements-dev.txt`（门禁所需的开发依赖）。
+- E2E 数据目录改为每轮 `mkdtemp` 并在 `global-teardown.ts` 删除：此前每跑一次 E2E
+  就永久留下一个 `/tmp/agentd-e2e-*`（本机实测累积了十几个）。
 - GitHub 镜像恢复 CI 工作流与 Dependabot 配置（主仓库仍在 GitCode，本地门禁为权威路径）。
 
 

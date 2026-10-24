@@ -305,6 +305,24 @@ class SchedulerService:
         except Exception:  # noqa: BLE001
             return False
 
+    def run_now(self, jid: str) -> bool:
+        """立即执行一次（不等下一个触发点）：在事件循环里直接调度 _fire_job。
+
+        为什么不是 ``modify_job(next_run_time=now)``：那会把一次性 date 任务
+        变成「跑两次」；为什么不是 ``job.func()`` 同步调用：_fire_job 是协程，
+        在路由里直接 await 会把整个 HTTP 响应卡到 agent 跑完（可能几分钟）。
+        这里用 create_task 后台执行，HTTP 立即返回，进度照常走 SSE/通知。
+        条件表达式仍然生效（_fire_job 内部会先求值）。
+        """
+        job = self._sched.get_job(jid)
+        if job is None:
+            return False
+        import asyncio
+
+        kwargs = dict(job.kwargs or {})
+        asyncio.get_running_loop().create_task(_fire_job(jid, **kwargs))
+        return True
+
     def delete_by_session(self, session_id: str) -> int:
         """删除某会话下全部任务（会话删除时级联清理）。"""
         removed = 0

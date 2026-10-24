@@ -8,6 +8,8 @@ import {
   getApprovalRules,
   getProfile,
   getSkills,
+  getStats,
+  importAll,
   isUnauthorized,
   listKb,
   putProfile,
@@ -17,6 +19,7 @@ import {
   type KbItem,
   type Provider,
   type SkillInfo,
+  type StatsPayload,
   type ToolInfo,
 } from "../api";
 import { useAgentStore } from "../store/useAgentStore";
@@ -151,6 +154,10 @@ export function SettingsPanel({
   const [kbMsg, setKbMsg] = useState("");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsDir, setSkillsDir] = useState("");
+  // 运行统计（真实计数器，不是配置回显）与备份导入状态
+  const [stats, setStats] = useState<StatsPayload | null>(null);
+  const [importMsg, setImportMsg] = useState("");
+  const [importing, setImporting] = useState(false);
 
   // Plan/Act 模式直接走 store：切换即持久化（局部 PUT，不随「保存」按钮走）
   const agentMode = useAgentStore((s) => s.agentMode);
@@ -206,6 +213,53 @@ export function SettingsPanel({
     } catch {
       setSkills([]);
     }
+    // 运行统计：拿不到就保持 null（面板显示「暂无数据」而不是编造 0）
+    try {
+      setStats(await getStats());
+    } catch {
+      setStats(null);
+    }
+  };
+
+  /** 选择备份文件并导入（合并语义，不覆盖本机数据）。 */
+  const pickImport = () => {
+    setImportMsg("");
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setImporting(true);
+      try {
+        const text = await file.text();
+        let data: Record<string, unknown>;
+        try {
+          data = JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          setImportMsg("不是合法的 JSON 文件");
+          return;
+        }
+        const r = await importAll(data);
+        const im = r.imported || {};
+        setImportMsg(
+          `已恢复：会话 ${im.sessions ?? 0} 个（跳过 ${im.sessions_skipped ?? 0}）、` +
+            `消息 ${im.messages ?? 0} 条、知识库 ${im.knowledge ?? 0} 条、定时任务 ${im.jobs ?? 0} 个`
+        );
+        // 数据变了，重新拉会话列表与统计
+        await useAgentStore.getState().refreshSessions();
+        try {
+          setStats(await getStats());
+        } catch {
+          /* 统计刷新失败不影响导入结果 */
+        }
+      } catch (e) {
+        setImportMsg((e as Error).message || "导入失败");
+      } finally {
+        setImporting(false);
+      }
+    };
+    input.click();
   };
 
   /** 立即压缩当前会话：把较早历史归档成摘要，保留最近若干条原文。 */
@@ -952,8 +1006,59 @@ export function SettingsPanel({
           <div className="field">
             <p className="hint">
               一键把全部会话与设置导出为 JSON 文件（不含 API 密钥），用于本地备份留存；文件保存在你下载的位置。
+              导入是合并语义：同 id 会话会跳过，不会覆盖本机现有数据。
             </p>
-            <button className="btn" onClick={onExport}>导出全部数据</button>
+            <div className="job-actions">
+              <button className="btn" onClick={onExport}>导出全部数据</button>
+              <button className="btn" onClick={pickImport} disabled={importing}>
+                {importing ? "导入中…" : "从备份恢复"}
+              </button>
+            </div>
+            {importMsg && <p className="hint">{importMsg}</p>}
+          </div>
+        </CollapsibleGroup>
+
+        {/* 运行统计：真实计数器（请求/工具/LLM tokens），不是配置回显 */}
+        <CollapsibleGroup title="运行统计" summary={stats ? `运行 ${Math.round(stats.metrics.uptime_seconds / 60)} 分钟` : "暂无数据"}>
+          <div className="field">
+            {!stats ? (
+              <p className="hint">拿不到统计数据（后端可能未就绪）。</p>
+            ) : (
+              <ul className="kb-list">
+                <li>
+                  <span className="kb-title">运行时长</span>
+                  <span className="kb-size">{Math.round(stats.metrics.uptime_seconds / 60)} 分钟</span>
+                </li>
+                <li>
+                  <span className="kb-title">HTTP 请求</span>
+                  <span className="kb-size">{stats.metrics.requests.total} 次</span>
+                </li>
+                <li>
+                  <span className="kb-title">LLM 调用</span>
+                  <span className="kb-size">
+                    {stats.metrics.llm.calls} 次 · 平均 {stats.metrics.llm.avg_ms} ms
+                  </span>
+                </li>
+                <li>
+                  <span className="kb-title">Token 用量</span>
+                  <span className="kb-size">
+                    输入 {stats.metrics.llm.prompt_tokens.toLocaleString()} · 输出{" "}
+                    {stats.metrics.llm.completion_tokens.toLocaleString()} · 合计{" "}
+                    {stats.metrics.llm.total_tokens.toLocaleString()}
+                  </span>
+                </li>
+                <li>
+                  <span className="kb-title">工具调用</span>
+                  <span className="kb-size">
+                    {Object.values(stats.metrics.tools).reduce((n, t) => n + t.calls, 0)} 次 · 失败{" "}
+                    {Object.values(stats.metrics.tools).reduce((n, t) => n + t.failures, 0)} 次
+                  </span>
+                </li>
+              </ul>
+            )}
+            <p className="hint">
+              Token 只统计模型端点在流式响应里真实回报的用量；端点不回报时显示 0，不做估算。
+            </p>
           </div>
         </CollapsibleGroup>
 

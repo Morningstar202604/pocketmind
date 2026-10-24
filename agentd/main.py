@@ -50,7 +50,7 @@ def _sse_event(ev: dict) -> ServerSentEvent:
     return ServerSentEvent(data=json.dumps(ev, ensure_ascii=False), sep="\n")
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 APP_NAME = "口袋智灵"
 
 DIST = Path(__file__).parent / "web" / "dist"
@@ -777,13 +777,22 @@ def create_app() -> FastAPI:
 
     @app.put("/api/sessions/{sid}", dependencies=[Depends(check_token)])
     async def rename_session(sid: str, payload: dict):
-        title = str(payload.get("title", "")).strip()[:60]
-        if not title:
-            raise HTTPException(400, "标题不能为空")
+        """重命名 / 置顶：两个字段都可单独提交（前端各用一个按钮，不必互相覆盖）。"""
+        has_title = "title" in payload
+        has_pinned = "pinned" in payload
+        if not has_title and not has_pinned:
+            raise HTTPException(400, "需要 title 或 pinned 字段")
         if store is None or await store.get_session(sid) is None:
             raise HTTPException(404, "会话不存在")
-        await store.touch_session(sid, title)
-        return {"ok": True, "title": title}
+        title = None
+        if has_title:
+            title = str(payload.get("title", "")).strip()[:60]
+            if not title:
+                raise HTTPException(400, "标题不能为空")
+            await store.touch_session(sid, title)
+        if has_pinned:
+            await store.set_pinned(sid, bool(payload.get("pinned")))
+        return {"ok": True, "title": title, "pinned": bool(payload.get("pinned", False))}
 
     @app.get("/api/sessions/search", dependencies=[Depends(check_token)])
     async def search_messages(q: str = "", limit: int = 20):
@@ -965,6 +974,19 @@ def create_app() -> FastAPI:
     async def jobs_delete(jid: str):
         return {"ok": scheduler_svc.delete(jid)}
 
+    @app.post("/api/jobs/{jid}/run", dependencies=[Depends(check_token)])
+    async def jobs_run_now(jid: str):
+        """立即执行一次（调试定时/条件任务时不必等到下一个触发点）。
+
+        放在独立端点而不是复用 PUT：PUT 的语义是「改配置」，
+        把「现在跑一次」混进去会让幂等语义失真（每次重试都多跑一轮）。
+        """
+        if scheduler_svc.get(jid) is None:
+            raise HTTPException(404, "任务不存在")
+        if not scheduler_svc.run_now(jid):
+            raise HTTPException(409, "任务无法立即执行（调度器未就绪）")
+        return {"ok": True, "job_id": jid}
+
     # ---------- Recipe：预设配方一键实例化为定时任务 ----------
     def _recipe_matched_job(rec_message: str) -> dict | None:
         """按配方 message 精确匹配已创建的 job（单层 recipe→job，不做多级依赖）。"""
@@ -1099,9 +1121,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/stats", dependencies=[Depends(check_token)])
     async def stats():
-        """运行统计：LiteLLM 调用次数 + 成本 + token 消耗。"""
-        # 从当前活跃 Agent 实例收集 LiteLLM 统计（如果有）
-        # stats 收集是可选的——非 LiteLLM 模式下返回空统计
+        """运行统计：请求 / 工具 / LLM 调用的真实计数器 + 可选能力状态。
+
+        此前这里只回显配置项（use_litellm / mem0_status），
+        `metrics.snapshot()` 写好了却没有任何调用方——「运行统计」等于空壳。
+        现在把快照直接并入响应；前端设置面板的「运行统计」分组据此展示
+        请求量、工具失败率、LLM 调用次数与真实 token 消耗。
+        """
+        from . import metrics as _m
+
         return {
             "use_litellm": settings_mgr.use_litellm(),
             "litellm_cfg": {
@@ -1110,6 +1138,7 @@ def create_app() -> FastAPI:
             },
             "use_mem0": settings_mgr.use_mem0(),
             "mem0_status": mem0.status() if mem0 is not None else None,
+            "metrics": _m.snapshot(),
         }
 
     # ---------- Mem0 记忆管理 ----------
@@ -1296,6 +1325,8 @@ def create_app() -> FastAPI:
                     {
                         "id": s["id"],
                         "title": s["title"],
+                        "created_at": s.get("created_at"),
+                        "pinned": s.get("pinned", 0),
                         "message_count": len(msgs),
                         "todos": payload_s.get("todos", []),
                         "messages": msgs,
@@ -1310,6 +1341,72 @@ def create_app() -> FastAPI:
             except Exception as e:  # noqa: BLE001
                 logging.getLogger(__name__).warning("导出定时任务失败: %s", e)
         return out
+
+    @app.post("/api/import", dependencies=[Depends(check_token)])
+    async def import_all(payload: dict):
+        """从 /api/export 的备份文件恢复数据（换机 / 重装 / 误删）。
+
+        语义是**合并**：同 id 会话跳过、知识库按内容去重，绝不覆盖本机现有数据。
+        导入前先校验形状：一个随便的 JSON 打进来不能把库写坏；校验失败 400，
+        并且什么都不写（不是「导入一半」）。
+        """
+        if store is None:
+            raise HTTPException(503, "服务未就绪")
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "备份文件必须是 JSON 对象")
+        sessions = payload.get("sessions")
+        if not isinstance(sessions, list):
+            raise HTTPException(400, "备份文件缺少 sessions 数组（不是 PocketMind 的导出文件？）")
+        if len(sessions) > 500:
+            raise HTTPException(400, "单次最多导入 500 个会话，请拆分备份文件")
+        try:
+            stats = await store.import_bundle(payload)
+        except Exception as e:  # noqa: BLE001 —— 解析/写入失败统一 400，不把半截状态留给用户
+            raise HTTPException(400, f"导入失败：{type(e).__name__}: {e}") from None
+
+        # 档案记忆（USER.md / FACT.md）：备份里的内容按行合并到本机，不覆盖已有画像
+        prof = payload.get("memory_profile")
+        if isinstance(prof, dict) and profile is not None:
+            try:
+                user_md = str(prof.get("user") or "").strip()
+                if user_md:
+                    existing = profile.load().get("user") or ""
+                    # 用户画像用覆盖写：备份里的画像更完整（同一个人换机恢复），
+                    # 但本机已有内容且不同则保留本机——避免导入旧备份冲掉新写的画像
+                    if not existing.strip():
+                        profile.update_user(user_md)
+                for line in str(prof.get("facts") or "").splitlines():
+                    fact = line.strip().lstrip("-").strip()
+                    if fact:
+                        profile.append_fact(fact)
+            except Exception as e:  # noqa: BLE001 —— 档案合并失败不影响会话导入结果
+                logging.getLogger(__name__).warning("导入档案记忆失败: %s", e)
+
+        # 定时任务：备份里带 jobs 时按原样重建（已存在同名任务则跳过）
+        jobs = payload.get("jobs")
+        restored_jobs = 0
+        if isinstance(jobs, list):
+            existing_names = {j.get("name") for j in scheduler_svc.list()}
+            for j in jobs:
+                if not isinstance(j, dict) or j.get("name") in existing_names:
+                    continue
+                try:
+                    from .routes import validate_job_payload
+
+                    norm = validate_job_payload({
+                        "name": j.get("name", ""),
+                        "trigger_type": j.get("trigger_type", "interval"),
+                        "expr": str(j.get("expr", "")),
+                        "message": j.get("message", ""),
+                        "condition": j.get("condition") or "",
+                        "enabled": False,  # 导入的任务默认停用：避免恢复瞬间把历史任务全部触发
+                    })
+                    scheduler_svc.create(norm)
+                    restored_jobs += 1
+                except Exception as e:  # noqa: BLE001 —— 单条任务坏了不阻断其余数据恢复
+                    logging.getLogger(__name__).warning("导入定时任务失败 [%s]: %s", j.get("name"), e)
+        stats["jobs"] = restored_jobs
+        return {"ok": True, "imported": stats}
 
     @app.get("/api/settings", dependencies=[Depends(check_token)])
     async def get_settings():

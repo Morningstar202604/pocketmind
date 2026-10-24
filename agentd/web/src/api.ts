@@ -27,6 +27,8 @@ export interface Session {
   /** 后端已返回；用于会话列表显示"最后活跃时间" */
   created_at?: number;
   updated_at?: number;
+  /** 1 = 已置顶（列表排序优先，与最近活跃时间无关） */
+  pinned?: number;
 }
 
 export interface StoredMessage {
@@ -143,6 +145,11 @@ export const getJobs = () => api.get<{ jobs: Job[] }>("/api/jobs").then((d) => d
 export const createJob = (body: Partial<Job>) => api.post<Job>("/api/jobs", body);
 export const updateJob = (id: string, enabled: boolean) => api.put<Job>(`/api/jobs/${id}`, { enabled });
 export const deleteJob = (id: string) => api.del<{ ok: boolean }>(`/api/jobs/${id}`);
+/** 立即执行一次（不等触发点）：后端后台起跑，HTTP 立即返回。 */
+export const runJobNow = (id: string) => api.post<{ ok: boolean; job_id: string }>(`/api/jobs/${id}/run`);
+/** 置顶 / 取消置顶会话（与重命名共用 PUT，但只提交 pinned，避免覆盖标题）。 */
+export const pinSession = (id: string, pinned: boolean) =>
+  api.put<{ ok: boolean; pinned: boolean }>(`/api/sessions/${id}`, { pinned });
 
 export interface ToolInfo {
   name: string;
@@ -157,6 +164,14 @@ export interface ToolInfo {
 export interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";
+}
+
+/** 一轮对话的 token 用量（done 事件携带；estimated=true 表示 mock/端点未回报，按字数估算）。 */
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated?: boolean;
 }
 
 export type ChatEvent =
@@ -178,7 +193,7 @@ export type ChatEvent =
   | { type: "todo"; todos: TodoItem[] }
   // Plan 模式：模型给出执行计划，等待用户批准（随后 done 的 stop_reason="plan" 表示本轮就此停住）
   | { type: "plan"; plan: string; tool_calls: Array<{ name: string; arguments: unknown }> }
-  | { type: "done"; stop_reason: string }
+  | { type: "done"; stop_reason: string; usage?: TokenUsage }
   | { type: "error"; message: string };
 
 /** 审批决策：一次 / 本会话始终 / 全局始终 / 一次拒绝 / 全局始终拒绝。 */
@@ -270,6 +285,24 @@ export const renameSession = (sessionId: string, title: string) =>
 
 /** 导出全部数据（会话/消息/配置）为 JSON 下载。 */
 export const exportAll = () => api.get<Record<string, unknown>>("/api/export");
+
+/** 从备份文件恢复（合并语义：同 id 会话跳过、知识库按内容去重）。 */
+export const importAll = (payload: Record<string, unknown>) =>
+  api.post<{ ok: boolean; imported: Record<string, number> }>("/api/import", payload);
+
+/** 运行统计（真实计数器：请求 / 工具 / LLM tokens）。 */
+export interface StatsPayload {
+  use_litellm: boolean;
+  use_mem0: boolean;
+  metrics: {
+    uptime_seconds: number;
+    requests: { total: number; by_status: Record<string, number> };
+    tools: Record<string, { calls: number; avg_ms: number; failures: number }>;
+    llm: { calls: number; avg_ms: number; prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    errors: Record<string, number>;
+  };
+}
+export const getStats = () => api.get<StatsPayload>("/api/stats");
 
 /** 带 HTTP 状态码的错误：调用方要能区分「401 需要令牌」与一般失败。 */
 export class ApiError extends Error {

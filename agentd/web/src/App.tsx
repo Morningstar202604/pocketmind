@@ -64,6 +64,7 @@ export default function App() {
   const onUndo = useAgentStore((s) => s.onUndo);
   const onExport = useAgentStore((s) => s.onExport);
   const onRenameSession = useAgentStore((s) => s.onRenameSession);
+  const onPinSession = useAgentStore((s) => s.onPinSession);
   const approvePlan = useAgentStore((s) => s.approvePlan);
   const editPlan = useAgentStore((s) => s.editPlan);
   const ignorePlan = useAgentStore((s) => s.ignorePlan);
@@ -255,6 +256,7 @@ export default function App() {
           onNew={() => void onNewSession()}
           onDelete={(sid) => void onDeleteSession(sid)}
           onRename={onRenameSession}
+          onPin={(sid, pinned) => void onPinSession(sid, pinned)}
         />
       )}
       {showSettings && (

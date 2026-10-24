@@ -114,6 +114,9 @@ class Store:
         # 已进过摘要，于是每轮都把同一批最旧消息重新摘要一遍（白烧 token，
         # 而且多份近似重复的归档会顶掉真正有用的记忆）。
         await self._ensure_column(c, "sessions", "archived_upto", "INTEGER NOT NULL DEFAULT 0")
+        # 置顶：会话多起来之后「最近的」不等于「重要的」。置顶标记单独一列，
+        # 不参与 updated_at，排序时优先（见 list_sessions），删会话时随行一起消失。
+        await self._ensure_column(c, "sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
         # messages 按 session_id 高频点查/排序/删除；缺索引时每次 list/get/delete 全表扫描
         await c.execute(text("CREATE INDEX IF NOT EXISTS idx_msg_sid ON messages(session_id, id)"))
         # 任务清单（todo_write 按会话整表覆盖；position 保序）
@@ -243,22 +246,33 @@ class Store:
             """
             SELECT s.id, s.title, s.created_at, s.updated_at,
                    COALESCE(s.archived_upto, 0) AS archived_upto,
+                   COALESCE(s.pinned, 0) AS pinned,
                    COUNT(m.id) AS message_count
             FROM sessions s
             LEFT JOIN messages m
               ON m.session_id = s.id AND m.role IN ('user','assistant')
-            GROUP BY s.id, s.title, s.created_at, s.updated_at, s.archived_upto
-            ORDER BY s.updated_at DESC, s.id DESC
+            GROUP BY s.id, s.title, s.created_at, s.updated_at, s.archived_upto, s.pinned
+            ORDER BY COALESCE(s.pinned, 0) DESC, s.updated_at DESC, s.id DESC
             LIMIT :l OFFSET :o
             """
         ), {"l": limit, "o": max(0, offset)})).fetchall()
         return [dict(r._mapping) for r in rows]
 
+    async def set_pinned(self, sid: str, pinned: bool) -> bool:
+        """置顶/取消置顶。返回会话是否存在（不存在时调用方应回 404）。"""
+        assert self._conn is not None
+        async with self._write_lock:
+            cur = await self._conn.execute(text(
+                "UPDATE sessions SET pinned=:p WHERE id=:s"
+            ), {"p": 1 if pinned else 0, "s": sid})
+            await self._conn.commit()
+        return (cur.rowcount or 0) > 0
+
     async def get_session(self, sid: str) -> dict | None:
         assert self._conn is not None
         r = (await self._conn.execute(text(
-            "SELECT id, title, created_at, updated_at, COALESCE(archived_upto, 0) AS archived_upto "
-            "FROM sessions WHERE id=:s"
+            "SELECT id, title, created_at, updated_at, COALESCE(archived_upto, 0) AS archived_upto, "
+            "COALESCE(pinned, 0) AS pinned FROM sessions WHERE id=:s"
         ), {"s": sid})).fetchone()
         return dict(r._mapping) if r else None
 
@@ -431,6 +445,92 @@ class Store:
             }
             for sid in sids
         }
+
+    async def import_bundle(self, data: dict) -> dict:
+        """把导出文件写回本机（换机 / 重装恢复）。
+
+        语义：**合并导入**，不是覆盖本机。会话按 id 去重（已存在的整段跳过），
+        知识库按 (title, content) 去重，档案记忆按行合并，定时任务交给调用方
+        （scheduler 的恢复是另一套对象，不在这里做 DB 直写）。
+
+        为什么不做「清库再导入」：用户可能已经有新会话，覆盖等于无提示删数据。
+        返回值给出每一类实际写入/跳过的数量，前端据此告诉用户到底发生了什么。
+        """
+        assert self._conn is not None
+        stats = {"sessions": 0, "sessions_skipped": 0, "messages": 0, "knowledge": 0, "todos": 0}
+        sessions = data.get("sessions")
+        if not isinstance(sessions, list):
+            sessions = []
+        for s in sessions:
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get("id") or "").strip()
+            title = str(s.get("title") or "导入的会话")[:120]
+            if not sid:
+                continue
+            if await self.get_session(sid) is not None:
+                stats["sessions_skipped"] += 1
+                continue
+            now = _now()
+            created = float(s.get("created_at") or now)
+            async with self._write_lock:
+                await self._conn.execute(text(
+                    "INSERT OR IGNORE INTO sessions(id, title, created_at, updated_at, archived_upto, pinned) "
+                    "VALUES (:id,:t,:c,:u,:a,:p)"
+                ), {"id": sid, "t": title, "c": created, "u": created,
+                    "a": int(s.get("archived_upto") or 0), "p": int(s.get("pinned") or 0)})
+                for m in (s.get("messages") or []):
+                    if not isinstance(m, dict):
+                        continue
+                    role = str(m.get("role") or "assistant")
+                    if role not in ("user", "assistant", "tool", "system"):
+                        continue
+                    await self._conn.execute(text(
+                        "INSERT INTO messages(session_id, role, content, meta, created_at) "
+                        "VALUES (:s,:r,:c,:m,:t)"
+                    ), {"s": sid, "r": role, "c": str(m.get("content") or ""),
+                        "m": json.dumps(m.get("meta") or {}, ensure_ascii=False),
+                        "t": float(m.get("created_at") or created)})
+                    stats["messages"] += 1
+                if s.get("summary"):
+                    await self._conn.execute(text(
+                        "INSERT INTO memory(session_id, kind, content, created_at) VALUES (:s,'summary',:c,:t)"
+                    ), {"s": sid, "c": str(s["summary"]), "t": now})
+                for a in (s.get("archives") or []):
+                    text_a = a.get("content") if isinstance(a, dict) else a
+                    if text_a:
+                        await self._conn.execute(text(
+                            "INSERT INTO memory(session_id, kind, content, created_at) VALUES (:s,'archive',:c,:t)"
+                        ), {"s": sid, "c": str(text_a), "t": now})
+                if s.get("todos"):
+                    # 不能在这里调 self.set_todos：它会再取一次 _write_lock，
+                    # asyncio.Lock 不可重入 —— 直接在同一把锁内写。
+                    todos_in = s["todos"]
+                    await self._conn.execute(text("DELETE FROM todos WHERE session_id=:s"), {"s": sid})
+                    for i, t in enumerate(todos_in):
+                        if not isinstance(t, dict):
+                            continue
+                        await self._conn.execute(text(
+                            "INSERT INTO todos(session_id, position, content, status, updated_at) "
+                            "VALUES (:s,:p,:c,:st,:u)"
+                        ), {"s": sid, "p": i, "c": str(t.get("content", ""))[:200],
+                            "st": str(t.get("status", "pending")), "u": now})
+                    stats["todos"] += len(todos_in)
+                await self._conn.commit()
+            stats["sessions"] += 1
+
+        existing_kb = {(k["title"], k["content"]) for k in await self.kb_list()}
+        for k in (data.get("knowledge") or []):
+            if not isinstance(k, dict):
+                continue
+            title = str(k.get("title") or "")[:120]
+            content = str(k.get("content") or "")
+            if not content or (title, content) in existing_kb:
+                continue
+            await self.kb_add(title, content)
+            existing_kb.add((title, content))
+            stats["knowledge"] += 1
+        return stats
 
     async def cleanup_expired(self, retention_days: int = 0) -> int:
         """清理超过 retention_days 的旧 memory 与 messages。retention_days<=0 则跳过。"""

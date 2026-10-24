@@ -91,8 +91,16 @@ PocketMind 是一个运行在 Android Termux（或 Docker/VPS）上的**本地 A
           ├─ safe → 直接执行（瞬时失败按 max_tool_retries 重试）
           └─ write/danger → ApprovalCenter.ask() → SSE emit approval → 等用户
         → 工具结果回写 SSE + add_message → 循环下一轮（max_tool_chain_depth 封顶）
-        → done → 滚动更新每会话记忆摘要（LLM 摘要器；预算超阈值先归档）
+        → done（携带本轮累计 usage）→ 滚动更新每会话记忆摘要（LLM 摘要器；预算超阈值先归档）
 ```
+
+SSE 事件里与「运行质量」相关的两条：
+
+- `done.usage`：本轮所有 LLM 调用的 token 累计（端点如实回报；mock 标注 estimated）；
+- `/api/metrics`（Prometheus）+ `/api/stats`（JSON）：请求、工具、LLM 的真实计数器。
+
+MCP 两个方向的 schema 转换统一走 `agentd/mcp.py:tool_schema()`：mcp SDK 的 `Tool` 在 1.x
+不同小版本里字段名不同（`inputSchema` vs `input_schema`），直接取属性会在升级后崩溃。
 
 ## 5. 文件地图
 
@@ -109,7 +117,8 @@ agentd/
 ├── scheduler.py     APScheduler 封装 + 热更新
 ├── checkpoints.py   文件 undo 日志
 ├── notify.py        系统通知
-├── mcp.py           第三方 MCP Server 客户端（注解 → 风险分级）
+├── metrics.py       进程内计数器 + Prometheus 文本（零依赖）
+├── mcp.py           第三方 MCP Server 客户端（注解 → 风险分级 + schema 兼容）
 ├── mcp_server.py    反向暴露手机工具为 MCP（含运行期工具补注册）
 ├── mock_llm.py      离线 Mock LLM（流式 + 正则匹配）
 └── tools/

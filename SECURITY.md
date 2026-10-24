@@ -19,12 +19,12 @@
 
 | 边界 | 机制 | 代码位置 |
 |---|---|---|
-| 网络 | 默认只绑 `127.0.0.1`；`--lan` / `--host 0.0.0.0` 强制要求 `server.token`，否则拒绝启动 | `agentd/main.py:1478-1492` |
-| 鉴权 | 除 `/api/health` 与静态资源外全部端点校验 `Authorization: Bearer`，常量时间比较 | `agentd/main.py:560-580` |
+| 网络 | 默认只绑 `127.0.0.1`；`--lan` / `--host 0.0.0.0` 强制要求 `server.token`，否则拒绝启动 | `agentd/main.py:1572-1592` |
+| 鉴权 | 除 `/api/health` 与静态资源外全部端点校验 `Authorization: Bearer`，常量时间比较 | `agentd/main.py:560-582` |
 | 跨站 | 带 `Origin` 的请求必须同主机，覆盖所有方法（防无 body 的 simple request 静默写操作） | `agentd/main.py:516-557` |
 | 工具审批 | 服务端强制：`safe` 放行、`write`/`danger` 需用户确认，超时自动拒绝；外部 MCP 工具最低 `write` | `agentd/permissions.py`、`agentd/approval.py` |
-| 文件白名单 | 仅 `$HOME` / `~/storage` / `/sdcard`；`.agent`、`.ssh`、`.gnupg` 及数据目录一律拒绝（含子路径与符号链接解析） | `agentd/tools/files.py:59-71` |
-| SSRF | `read_url` 解析 DNS 后按 IP 段判定 + 端口白名单 + 重定向逐跳校验 | `agentd/tools/net.py:207-270` |
+| 文件白名单 | 仅 `$HOME` / `~/storage` / `/sdcard`；`.agent`、`.ssh`、`.gnupg` 及数据目录一律拒绝（含子路径与符号链接解析） | `agentd/tools/files.py:24-60` |
+| SSRF | `read_url` 解析 DNS 后按 IP 段判定 + 端口白名单 + 重定向逐跳校验 | `agentd/tools/net.py:189-290` |
 | 密钥 | API Key / 令牌只存本机 `config.json`（600），任何 API 回传均打码；导出不含密钥 | `agentd/config.py`、`agentd/routes/__init__.py` |
 | 数据 | SQLite 目录 700 / 文件 600，WAL 同权限 | `agentd/memory.py:62-74` |
 

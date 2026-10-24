@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P14 路由层测试：用 FastAPI TestClient 在**进程内**覆盖全部 43 个端点。
+"""P14 路由层测试：用 FastAPI TestClient 在**进程内**覆盖全部 API 端点（当前 45 个）。
 
 为什么用 TestClient 而不是起真服务：
 - 之前 main.py 的行覆盖率只有 19%，因为路由全在 create_app() 闭包里，

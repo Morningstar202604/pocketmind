@@ -1,18 +1,46 @@
 <div align="center">
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
-  <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b> Local-first · Privacy-first · Native on Termux</p>
+  <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b><br/>
+  Local-first · Privacy-first · Native on Termux · 41 tools · Server-enforced approval</p>
   <img src="https://img.shields.io/badge/tests-local%20gate%20green" alt="Tests" />
   <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="Local gate" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
+  <img src="https://img.shields.io/badge/License-Apache--2.0-blue" alt="License" />
   <br />
-  <sub>Web UI · PWA · APK · MCP Server · Telegram Gateway · Recipes · Plan/Act Modes</sub>
+  <sub>Web UI · PWA · APK · MCP Server + Client · Telegram Gateway · Recipes · Plan/Act Modes · Backup &amp; Restore</sub>
 </div>
 
 **[English](README.md)** | [简体中文](README.zh-CN.md)
 
 ---
+
+## Demo
+
+![PocketMind demo](docs/demo/pocketmind-demo.gif)
+
+<sub>Recorded from the running app (mock LLM, no API key needed): empty state → tool call →
+server-side approval → result → sessions → settings → live statistics → scheduled jobs →
+dark theme → mobile viewport. Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (39 s).</sub>
+
+## Why this exists
+
+Every other agent runs on your laptop and treats the phone as a peripheral.
+PocketMind runs **on the phone itself** and treats the phone's own capabilities as its tools:
+SMS, calls, GPS, sensors, notification, clipboard, Wi-Fi, torch, camera, shell, files.
+It keeps working when the laptop is closed, when the screen is off, and when the network is gone.
+
+| | PocketMind | GUI-automation agents (Mobilerun / Mobile-Agent) | Desktop coding agents (Cline / Open Interpreter) |
+|---|---|---|---|
+| Runs on | **The phone** (Termux + PWA/APK) | Desktop / cloud, phone is the target | Desktop |
+| Phone capabilities | **Structured termux-api calls** (25 tools) | Screen taps via accessibility/vision | None |
+| Works offline | Yes (local model or mock) | Only with local model + local runtime | Yes |
+| Approval model | **Server-enforced, model cannot bypass** | Human confirmation in UI | IDE confirmation |
+| Undo for file writes | **Checkpoint + one-tap undo** | No | git only |
+| Scheduled jobs | **APScheduler + battery conditions** | Cloud schedules | Desktop routines |
+
+The full comparison, with sources and honest gaps, is in [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
 ## Highlights
 
@@ -20,8 +48,10 @@
 - **41 built-in tools** — battery / SMS / dial / location / sensors / shell / files via termux-api, plus task lists, an FTS5 knowledge base, profile memory and skills.
 - **Approval is a security model, not a UI nicety** — three-level grants (once / always-this-session / global) plus a global deny list, all enforced server-side; timeouts auto-deny, and external MCP tools can never skip approval.
 - **Remote control from desktop or Telegram** — the built-in stdio MCP server exposes all 41 tools to Claude Desktop / Cline / Codex; a Telegram gateway lets you drive and approve from any device.
+- **Backup that can actually restore** — `/api/export` writes every session (paged, never silently truncated) and `/api/import` merges it back with de-duplication.
+- **Know what it costs** — every reply shows the token usage reported by the endpoint; `/api/stats` aggregates requests, tool failures and LLM tokens (Prometheus format at `/api/metrics`).
 - **Zero Node on the phone** — the built `dist/` ships in the repo; Termux only runs `install.sh`. Works as a PWA, or wraps into an APK (WebView shell in `termux/apk-shell/`).
-- **Verified, not just claimed** — `bash tests/run_all.sh` runs every backend regression suite plus compileall, ruff, a deploy self-check, and the whole frontend pipeline (typecheck, unit tests, production build, dist freshness). One command, exit code 0 only when everything is green — the suite list lives in `tests/run_all.sh` and is never restated here.
+- **Verified, not just claimed** — `bash tests/run_all.sh` runs every backend regression suite plus compileall, ruff, a deploy self-check, and the whole frontend pipeline (typecheck, unit tests, production build, dist freshness). One command, exit code 0 only when everything is green.
 
 ## What runs where
 
@@ -59,10 +89,50 @@ with termux-api; web search and cloud models require outbound network.
 ## Interface Preview
 
 <p align="center">
-  <img src="assets/screenshots/tool-call.png" width="720" alt="Tool call with approval card (dark theme)" />
+  <img src="assets/screenshots/02-approval.png" width="860" alt="Tool call with approval card" />
   <br />
-  <sub>Approval is a security gate, not a toast: tool name in plain language, risk badge,
-  primary vs. secondary decisions separated, auto-deny countdown.</sub>
+  <sub><b>Approval is a security gate, not a toast.</b> Tool name in plain language, risk badge,
+  primary vs. secondary decisions separated, auto-deny countdown. The model cannot bypass it.</sub>
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/03-tool-result.png" alt="Tool result with exit code, stdout and duration" />
+      <br /><sub>Every tool result is structured: exit code, stdout, stderr, timeout flag, duration.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/04-sessions.png" alt="Session drawer with pinning and full-text search" />
+      <br /><sub>Sessions: pin, rename, delete, and search across message bodies — not just titles.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="assets/screenshots/05-settings.png" alt="Settings panel" />
+      <br /><sub>Settings · theme / agent mode / model / permissions / context &amp; memory / MCP.</sub>
+    </td>
+    <td align="center">
+      <img src="assets/screenshots/06-stats.png" alt="Live runtime statistics" />
+      <br /><sub>Live statistics: requests, LLM calls, tokens and tool failures — real counters, not config echo.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="assets/screenshots/07-timers.png" alt="Scheduled jobs and recipes" />
+      <br /><sub>Jobs &amp; recipes: one-click templates, run-now button, battery conditions.</sub>
+    </td>
+    <td align="center">
+      <img src="assets/screenshots/08-dark.png" alt="Dark theme" />
+      <br /><sub>Dark theme, WCAG AA contrast verified by <code>smoke/p9_a11y_contrast_test.py</code>.</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="assets/screenshots/09-mobile.png" width="300" alt="Mobile layout" />
+  <br />
+  <sub>390&times;844 · touch targets &ge; 36px, no horizontal overflow, safe-area aware.
+  The mobile matrix is enforced by 8 Playwright viewports, not by eyeballing.</sub>
 </p>
 
 <p align="center">
@@ -70,24 +140,6 @@ with termux-api; web search and cloud models require outbound network.
   <br />
   <sub>Environment check + capability matrix: what this device can actually do,
   what it cannot, and what to do about each gap.</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/settings.png" width="720" alt="Settings panel" />
-  <br />
-  <sub>Settings · theme / agent mode / model / permissions / context &amp; memory / MCP</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/recipes.png" width="720" alt="Scheduled jobs" />
-  <br />
-  <sub>Jobs · one-click recipes (low battery / daily summary / daily weather)</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/mobile.png" width="300" alt="Mobile layout" />
-  <br />
-  <sub>390&times;844 · touch targets &ge; 36px, no horizontal overflow, safe-area aware</sub>
 </p>
 
 ---
@@ -133,7 +185,7 @@ AGENT_HOME=/tmp/pa python3 -m agentd.main --port 8787
 | `agentd/web/` | React frontend (Vite + TS); built `dist/` is served directly by agentd |
 | `termux/` | Phone side: `install.sh` one-click deps / `start.sh` launch / `boot.sh` boot autostart |
 | `config/` | Preset recipes `recipes.json` (job templates); LLM provider presets in `agentd/config.py` → `PRESETS` |
-| `smoke/` | Regression suites (agent depth / queueing / jobs / security / recipes / MCP / Telegram / cross-audit / subagent / termux / capability / ssrf / a11y / router / files / kb / net / agent-loop / permissions / todo / metrics / run-agent / perf-regression / export-integrity); all run by `tests/run_all.sh` |
+| `smoke/` | Regression suites (queueing / jobs / recipes / security / subagent / termux / capability / SSRF / a11y / router / files / knowledge / net / agent-loop / permissions / todo / metrics / run-agent / perf / export-integrity / MCP roundtrip / stats &amp; usage / pin-run-import); all run by `tests/run_all.sh` |
 
 ---
 
@@ -255,9 +307,10 @@ Exit code is 0 only when everything passes; failures are listed in the summary a
 Per-suite details are in `smoke/README.md`.
 
 Audit reports, with `file:line` evidence and an explicit list of what was **not**
-verified: [docs/audit-2026-10-23.md](docs/audit-2026-10-23.md) (latest — final
-hardening round) and [docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md)
+verified: [docs/audit-2026-10-23.md](docs/audit-2026-10-23.md) (hardening round) and
+[docs/audit-report-2026-10-22.md](docs/audit-report-2026-10-22.md)
 (security / performance / coverage / competitive benchmarking).
+Product comparison with sources: [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
 API reference: [docs/API.md](docs/API.md). Single suites can still be run alone —
 the API-driven ones read the server base URL from `AGENTD_BASE` (default

@@ -188,6 +188,10 @@ class Agent:
         self._litellm = None  # LiteLLM 懒加载缓存（use_litellm=true 时生效）
         self._summarizer_obj = None  # 摘要器懒加载（直连端点，见 summarizer.py）
         self._pending_mem0_tasks: set = set()  # 保留引用，防 GC 回收进行中任务
+        # 最近一次流式调用的 token 用量（由 _stream 填写；端点不回报时保持 0）
+        self._last_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        # 本轮（一次 chat 调用）的累计用量：多轮 tool loop 逐轮累加，结束时随 done 下发
+        self._turn_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     async def _memory_context_block(self, message: str, session_id: str, search_limit: int) -> list[dict]:
         """检索并组装「相关历史记忆 + 分页摘要」两个 system 块。
@@ -445,18 +449,42 @@ class Agent:
         """统一流式接口：产出 (content, reasoning, tool_calls_delta)。
 
         优先级：mock > litellm（settings 开关）> OpenAI SDK 直连。
+
+        附带 side-channel：每次调用结束后 ``self._last_usage`` 被填成
+        {"prompt_tokens", "completion_tokens", "total_tokens"}（仅当端点在流里回报了
+        usage；拿不到时保持 0）。主循环据此把 token 用量透给前端与 /api/metrics。
         """
+        self._last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         # ── Mock 模式（离线自测） ──
         if self.mock:
+            # mock 不消耗真实 token，但格式必须与真链路一致：前端与测试都靠它判断
+            # 「usage 字段是否存在」，用 0 而不是缺失能避免消费方到处写 None 判断。
+            prompt_est = _estimate_tokens(messages)
+            completion_est = 0
             async for chunk in self._llm().chat(messages, tools):
                 d = chunk.choices[0].delta
+                if d.content:
+                    completion_est += max(1, len(d.content) // CHARS_PER_TOKEN)
                 yield d.content, d.reasoning_content, d.tool_calls
+            self._last_usage = {
+                "prompt_tokens": prompt_est,
+                "completion_tokens": completion_est,
+                "total_tokens": prompt_est + completion_est,
+                "estimated": True,
+            }
             return
 
         # ── LiteLLM 统一网关（可选） ──
         litellm_client = self._get_litellm()
         if litellm_client is not None:
             async for chunk in litellm_client.chat(messages, tools):
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    self._last_usage = {
+                        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                    }
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -482,8 +510,24 @@ class Agent:
         mt = llm.get("max_tokens")
         if isinstance(mt, int) and mt > 0:
             kwargs["max_tokens"] = min(mt, 65536)
-        stream = await client.chat.completions.create(**kwargs)
+        # 请求端点回报 usage：OpenAI / DeepSeek / 智谱 / Kimi 的 OpenAI 兼容端点都支持
+        # （本机对 api.qs.al 的 glm-5.3-flash 实测支持）。不支持的端点会 400，
+        # 因此失败时自动去掉该参数重试一次——不能为了统计把主链路搞挂。
+        try:
+            stream = await client.chat.completions.create(
+                **kwargs, stream_options={"include_usage": True}
+            )
+        except Exception as e:  # noqa: BLE001 —— 端点不支持 stream_options 时降级
+            logger.debug("端点不支持 stream_options，降级为不统计 usage: %s", e)
+            stream = await client.chat.completions.create(**kwargs)
         async for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage:
+                self._last_usage = {
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                }
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -520,6 +564,8 @@ class Agent:
     ) -> None:
         mode = self.settings.permission_mode()
         tools = [] if mode == "chat" else schemas()
+        # 每次 chat 重置本轮累计用量（同一个 Agent 实例可能被队列续跑复用）
+        self._turn_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         limits = self._runtime_limits()
         mem_cfg = limits["mem_cfg"]
         max_iters = limits["max_iters"]
@@ -668,7 +714,16 @@ class Agent:
                             if tc.function.arguments:
                                 acc["args"] += tc.function.arguments
         finally:
-            _m.record_llm(time.perf_counter() - _t0)
+            usage = self._last_usage or {}
+            _m.record_llm(
+                time.perf_counter() - _t0,
+                prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+                completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+            )
+            # 累计到本轮（一次用户消息可能有多轮 tool loop，token 要累加）
+            self._turn_usage["prompt_tokens"] += int(usage.get("prompt_tokens", 0) or 0)
+            self._turn_usage["completion_tokens"] += int(usage.get("completion_tokens", 0) or 0)
+            self._turn_usage["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
         return content_acc, tool_calls
 
     async def _finish_plan(
@@ -696,13 +751,19 @@ class Agent:
         # 计划本身作为一条 assistant 消息落库（不含 tool_calls，因为并未执行）
         await self.store.add_message(session_id, "assistant", plan_text or "（无具体计划内容）")
         await emit({"type": "plan", "plan": plan_text, "tool_calls": planned})
-        await emit({"type": "done", "stop_reason": "plan"})
+        await emit({"type": "done", "stop_reason": "plan", "usage": self.usage_payload()})
 
     async def _finish_turn(self, *, session_id: str, content: str, messages: list[dict],
                            emit: Emit, mem_cfg: dict) -> None:
         """一轮结束（模型没有再要工具）：落库、更新摘要、异步抽 Mem0、发 done。"""
         text = content.strip()
-        await self.store.add_message(session_id, "assistant", text)
+        # usage 一并落进 meta：刷新页面后历史消息仍能显示这次花了多少 token，
+        # 否则 replay 只有正文，用量信息只活在这一屏。
+        usage = self.usage_payload()
+        await self.store.add_message(
+            session_id, "assistant", text,
+            {"usage": usage} if usage.get("total_tokens") else None,
+        )
         # 滚动更新记忆摘要（后续对话开头注入）。失败只降级，不影响主流程。
         try:
             if mem_cfg:
@@ -720,7 +781,17 @@ class Agent:
             self._fire_and_forget_mem0_add(
                 session_id, messages + [{"role": "assistant", "content": text}]
             )
-        await emit({"type": "done", "stop_reason": "end_turn"})
+        await emit({"type": "done", "stop_reason": "end_turn", "usage": self.usage_payload()})
+
+    def usage_payload(self) -> dict:
+        """本轮 token 用量（done 事件与前端展示共用；无数据时全 0，不返回 None）。"""
+        usage = dict(self._turn_usage or {})
+        usage.setdefault("prompt_tokens", 0)
+        usage.setdefault("completion_tokens", 0)
+        usage.setdefault("total_tokens", 0)
+        if self.mock:
+            usage["estimated"] = True
+        return usage
 
     # ---------- 工具执行（从 _loop 抽出，降低主循环复杂度） ----------
 

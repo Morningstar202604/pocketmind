@@ -430,6 +430,14 @@ function MessageItemImpl({
           >
             删除
           </button>
+          {msg.usage && msg.usage.total_tokens > 0 && (
+            <span
+              className="msg-usage"
+              title={`输入 ${msg.usage.prompt_tokens} · 输出 ${msg.usage.completion_tokens}${msg.usage.estimated ? "（估算）" : ""}`}
+            >
+              {msg.usage.total_tokens.toLocaleString()} tokens{msg.usage.estimated ? " · 估" : ""}
+            </span>
+          )}
         </div>
       )}
       {!hasContent && !msg.done && (

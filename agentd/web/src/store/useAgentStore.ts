@@ -14,6 +14,7 @@ import {
   exportAll,
   getPendingApprovals,
   getTodos,
+  pinSession,
   renameSession,
   undoToolCall,
   type ApiError,
@@ -151,6 +152,8 @@ export interface AgentStore {
   onNewSession: () => Promise<void>;
   onDeleteSession: (sid: string) => Promise<void>;
   onRenameSession: (sid: string, title: string) => Promise<void>;
+  /** 置顶 / 取消置顶（服务端持久化，列表排序由后端保证）。 */
+  onPinSession: (sid: string, pinned: boolean) => Promise<void>;
 
   // 审批 / 撤销 / 导出
   onApproval: (toolCallId: string, decision: ApprovalDecision) => Promise<void>;
@@ -517,6 +520,19 @@ const _storeCreator: StateCreator<AgentStore, [], []> = (set, get) => {
     async onRenameSession(sid: string, title: string) {
       if (!title.trim()) return;
       await renameSession(sid, title.trim()).catch(() => {});
+      void get().refreshSessions();
+    },
+
+    async onPinSession(sid: string, pinned: boolean) {
+      // 先本地乐观更新（点一下立刻有反馈），失败后 refreshSessions 拉回真值
+      set((s) => ({
+        sessions: s.sessions.map((x) => (x.id === sid ? { ...x, pinned: pinned ? 1 : 0 } : x)),
+      }));
+      try {
+        await pinSession(sid, pinned);
+      } catch {
+        /* 失败静默：refreshSessions 会把状态纠正回来 */
+      }
       void get().refreshSessions();
     },
 

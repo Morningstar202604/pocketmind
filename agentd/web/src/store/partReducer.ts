@@ -78,7 +78,7 @@ export function applyEvent(msg: Msg, ev: ChatEvent): Msg {
         parts: [...msg.parts, { type: "plan" as const, plan: ev.plan, tool_calls: ev.tool_calls ?? [] }],
       };
     case "done":
-      return { ...msg, done: true };
+      return { ...msg, done: true, usage: ev.usage ?? msg.usage };
     case "error":
       return { ...msg, done: true, error: ev.message };
     default:
@@ -103,6 +103,9 @@ export function restore(msgs: StoredMessage[]): Msg[] {
       out.push({ id: uid("u"), serverId: m.id, role: "user", parts: [{ type: "text", text: m.content }], done: true, createdAt: m.created_at });
     } else if (m.role === "assistant") {
       const msg: Msg = { id: uid("a"), serverId: m.id, role: "assistant", parts: [], done: true, createdAt: m.created_at };
+      // usage 落库在 meta 里：刷新后历史消息仍显示 token 用量
+      const u = m.meta?.usage as Msg["usage"] | undefined;
+      if (u && typeof u === "object") msg.usage = u;
       if (m.content.trim()) msg.parts.push({ type: "text", text: m.content });
       const tcs = (m.meta?.tool_calls as Array<{ id: string; name: string; args: string }> | undefined) ?? [];
       for (const tc of tcs) {

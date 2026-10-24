@@ -35,13 +35,19 @@
    typecheck/单测/构建/dist 新鲜度）；需要 E2E 时加 `--with-e2e`
 4. **合并**：以 PR 方式合入 `main`，门禁全绿后合并
 5. **打标签**：`git tag -a vX.Y.Z -m "vX.Y.Z"` 并推送（`git push origin vX.Y.Z`）
-6. **同步镜像**：主仓库在 GitCode（`gitcode.com/badhope/pocketmind`），镜像在 Gitee
-   （`gitee.com/badhope/pocketmind`）与 GitHub（`github.com/X33834/pocketmind`）。
-   克隆默认只有 `origin`，先各加一个远程再推，保持三处内容一致：
-   `git remote add gitee https://gitee.com/badhope/pocketmind`、
-   `git remote add github https://github.com/X33834/pocketmind`，
-   然后 `git push gitee main --tags`、`git push github main --tags`
-7. **发布**：基于该 tag 在镜像仓库创建 Release，Release Notes 写清本次变更要点
-   （官网 `website/index.html` 为自包含单页，随仓库静态托管，无独立的 Pages 流水线）
+6. **同步镜像**：主仓库在 GitCode（`gitcode.com/badhope/pocketmind`），同步到 Gitee
+   （`gitee.com/badhope/pocketmind`）与三个 GitHub 仓库
+   （`X33834/pocketmind`、`Morningstar202604/pocketmind`、`badhope/pocketmind`）。
+   克隆默认只有 `origin`，先各加远程再推，保持五处内容一致：
+   ```bash
+   git remote add gitee https://gitee.com/badhope/pocketmind
+   git remote add github https://github.com/X33834/pocketmind
+   git remote add gh-morning https://github.com/Morningstar202604/pocketmind
+   git remote add gh-badhope https://github.com/badhope/pocketmind
+   bash scripts/sync-remotes.sh          # 一次推 main + tags，逐个核对 tree hash
+   ```
+7. **发布**：基于该 tag 在各 GitHub 仓库创建 Release，Release Notes 写清变更要点；
+   官网 `website/index.html` 为自包含单页，由 `badhope/pocketmind` 的 Pages（main 根目录）托管。
+   发布脚本：`bash scripts/release.sh vX.Y.Z`（打 tag、推送、建 Release、校验 tree 一致）
 
 变更记录以 [CHANGELOG.md](CHANGELOG.md)、Releases 与 git log 为准。

@@ -145,7 +145,7 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p11 Termux 安装脚本幂等性" run_py smoke/p11_termux_install_test.py
   step "p12 能力矩阵（能做什么/不能做什么/怎么办）" run_py smoke/p12_capability_test.py
   step "p13 SSRF 防护（内网/元数据/任意端口）" run_py smoke/p13_ssrf_test.py
-  step "p14 路由层（43 端点进程内：错误分支 + 契约）" run_py smoke/p14_router_test.py
+  step "p14 路由层（45 端点进程内：错误分支 + 契约）" run_py smoke/p14_router_test.py
   step "p15 文件工具（读写删 + 越界 + 备份）" run_py smoke/p15_file_tools_test.py
   step "p16 知识库（增删查 + 注入转义 + 边界）" run_py smoke/p16_knowledge_test.py
   step "p17 联网工具（解析器 + 引擎回退，全离线）" run_py smoke/p17_net_tools_test.py
@@ -157,6 +157,10 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p25 性能回归（N+1 查询数 / 工具结果硬顶）" run_py smoke/p25_perf_regression_test.py
   step "p26 工具层缺口（写操作退出码 / 指标基数 / 外发分级）" run_py smoke/p26_tool_gaps_test.py
   step "p27 导出完整性（超过一页的会话不丢失）" run_py smoke/p27_export_pagination_test.py
+  step "p28 MCP 双端回环（真实 stdio 握手 + schema 转换）" run_py smoke/p28_mcp_roundtrip_test.py
+  step "p29 运行统计与 Token 用量（/api/stats 真数据）" run_py smoke/p29_stats_usage_test.py
+  step "p30 置顶 / 立即执行 / 导入恢复" run_py smoke/p30_features_test.py
+  step "p31 真实 OpenAI 兼容链路（流式 / 工具分片 / usage / 降级）" run_py smoke/p31_openai_compat_test.py
   if [ "$WITH_DEP_AUDIT" = 1 ]; then
     step "p22 依赖漏洞扫描（OSV.dev，需外网）" run_py smoke/p22_dep_audit_test.py
   fi
@@ -306,10 +310,10 @@ if [ "$WITH_E2E" = 1 ]; then
     if [ ! -d node_modules ]; then
       npm ci --silent || return 1
     fi
-    # 桩与 E2E 独立数据目录：playwright.config.ts 用 8793 与 /tmp/agentd-e2e
+    # 桩与 E2E 数据目录：playwright.config.ts 自己用 mkdtemp 建唯一目录，
+    # 并在 global-teardown 里删除（显式传 E2E_AGENT_HOME 时保留，便于排障）。
     bash "$ROOT/tests/setup_faketermux.sh" >/dev/null 2>&1 || return 1
     PATH="${FAKETERMUX_DIR:-/tmp/faketermux}:$PATH" \
-      AGENT_HOME="${E2E_HOME:-/tmp/agentd-e2e}" \
       npm run test:e2e
   )
   step "E2E（Playwright）" e2e

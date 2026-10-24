@@ -282,6 +282,16 @@ body {
   color: var(--text);
   border-color: var(--brand);
 }
+/* token 用量：弱化展示，但保持 12px / 36px 触摸目标（项目自身硬约束） */
+.msg-usage {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 2px 4px;
+  white-space: nowrap;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
 .msg-action.danger:hover {
   color: #fff;
   background: var(--danger, #d4380d);
@@ -1225,6 +1235,17 @@ body {
 }
 .s-title:hover {
   color: var(--brand);
+}
+/* 置顶标记：小号文字标签而不是 emoji —— emoji 在不同机型字体差异大，
+ * 且会破坏列表的等宽对齐（与项目「不堆 emoji」的视觉约定一致）。 */
+.s-pin {
+  font-size: 11px;
+  color: var(--brand);
+  border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-right: 4px;
+  vertical-align: 1px;
 }
 .s-empty {
   text-align: center;

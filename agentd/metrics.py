@@ -32,6 +32,9 @@ _status: dict[int, int] = defaultdict(int)
 _tools: dict[str, list[float]] = defaultdict(lambda: [0, 0.0, 0.0, 0])  # count, total, max, failures
 _llm_calls = 0
 _llm_seconds = 0.0
+# token 用量只统计端点真的回报的数值（settings 里的 max_tokens 是上限，不能当用量）
+_llm_prompt_tokens = 0
+_llm_completion_tokens = 0
 _errors: dict[str, int] = defaultdict(int)
 _started_at = time.time()
 
@@ -80,10 +83,20 @@ def record_tool(name: str, seconds: float, ok: bool) -> None:
         slot[3] += 1
 
 
-def record_llm(seconds: float) -> None:
-    global _llm_calls, _llm_seconds
+def record_llm(seconds: float, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
+    """记录一次 LLM 调用。
+
+    token 参数可选：不是所有 OpenAI 兼容端点都在流式响应里回 usage（部分网关
+    只有非流式才给），但主循环统一走流式；调用方拿不到就传 0，调用次数与耗时
+    仍然准确，token 统计则只反映「端点真的报了的那些调用」——不估算、不编数。
+    """
+    global _llm_calls, _llm_seconds, _llm_prompt_tokens, _llm_completion_tokens
     _llm_calls += 1
     _llm_seconds += seconds
+    if prompt_tokens and prompt_tokens > 0:
+        _llm_prompt_tokens += int(prompt_tokens)
+    if completion_tokens and completion_tokens > 0:
+        _llm_completion_tokens += int(completion_tokens)
 
 
 def record_error(kind: str) -> None:
@@ -113,7 +126,13 @@ def snapshot() -> dict:
             }
             for name, v in _tools.items()
         },
-        "llm": {"calls": _llm_calls, "avg_ms": round(_llm_seconds / _llm_calls * 1000, 1) if _llm_calls else 0},
+        "llm": {
+            "calls": _llm_calls,
+            "avg_ms": round(_llm_seconds / _llm_calls * 1000, 1) if _llm_calls else 0,
+            "prompt_tokens": _llm_prompt_tokens,
+            "completion_tokens": _llm_completion_tokens,
+            "total_tokens": _llm_prompt_tokens + _llm_completion_tokens,
+        },
         "errors": dict(_errors),
     }
 
@@ -162,6 +181,12 @@ def render_prometheus() -> str:
     lines.append("# TYPE pocketmind_llm_calls_total counter")
     lines.append(f"pocketmind_llm_calls_total {_llm_calls}")
     lines.append("pocketmind_llm_duration_seconds_total " + f"{_llm_seconds:.6f}")
+    lines.append("# HELP pocketmind_llm_prompt_tokens_total Prompt tokens reported by the endpoint")
+    lines.append("# TYPE pocketmind_llm_prompt_tokens_total counter")
+    lines.append(f"pocketmind_llm_prompt_tokens_total {_llm_prompt_tokens}")
+    lines.append("# HELP pocketmind_llm_completion_tokens_total Completion tokens reported by the endpoint")
+    lines.append("# TYPE pocketmind_llm_completion_tokens_total counter")
+    lines.append(f"pocketmind_llm_completion_tokens_total {_llm_completion_tokens}")
 
     lines.append("# HELP pocketmind_errors_total Internal errors by kind")
     lines.append("# TYPE pocketmind_errors_total counter")
@@ -177,7 +202,9 @@ def reset() -> None:
     _status.clear()
     _tools.clear()
     _errors.clear()
-    global _llm_calls, _llm_seconds, _started_at
+    global _llm_calls, _llm_seconds, _llm_prompt_tokens, _llm_completion_tokens, _started_at
     _llm_calls = 0
     _llm_seconds = 0.0
+    _llm_prompt_tokens = 0
+    _llm_completion_tokens = 0
     _started_at = time.time()

@@ -1,18 +1,45 @@
 <div align="center">
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
-  <p><b>口袋里能真正操作你手机的 always-on Agent</b> —— 本地优先 · 隐私保护 · Termux 原生</p>
+  <p><b>口袋里能真正操作你手机的 always-on Agent</b><br/>
+  本地优先 · 隐私保护 · Termux 原生 · 41 个工具 · 服务端强制审批</p>
   <img src="https://img.shields.io/badge/tests-local%20gate%20green" alt="Tests" />
   <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="本地门禁" />
   <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
   <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
+  <img src="https://img.shields.io/badge/License-Apache--2.0-blue" alt="License" />
   <br />
-  <sub>Web UI · PWA · APK · MCP Server · Telegram 网关 · 定时配方 · Plan/Act 双模式</sub>
+  <sub>Web UI · PWA · APK · MCP Server + Client · Telegram 网关 · 定时配方 · Plan/Act 双模式 · 备份恢复</sub>
 </div>
 
 [English](README.md) | **简体中文**
 
 ---
+
+## 演示
+
+![口袋智灵演示](docs/demo/pocketmind-demo.gif)
+
+<sub>真实录屏（离线 mock，无需 API Key）：空态 → 工具调用 → 服务端审批 → 结果回填 →
+会话管理 → 设置 → 实时统计 → 定时任务 → 深色主题 → 手机视口。
+完整视频：[docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4)（39 秒）。</sub>
+
+## 为什么需要它
+
+其他 Agent 都跑在你的电脑上，把手机当外设；口袋智灵**跑在手机里**，
+把手机自身的能力当成工具：短信、电话、定位、传感器、通知、剪贴板、WiFi、手电筒、相机、shell、文件。
+合上电脑、锁屏、断网，它照样工作。
+
+| | 口袋智灵 | GUI 自动化类（Mobilerun / Mobile-Agent） | 桌面编码类（Cline / Open Interpreter） |
+|---|---|---|---|
+| 运行位置 | **手机内**（Termux + PWA/APK） | 桌面 / 云，手机是被控端 | 桌面 |
+| 手机能力 | **termux-api 结构化调用**（25 个工具） | 无障碍/视觉点屏幕 | 无 |
+| 断网可用 | 是（本地模型或 mock） | 需本地模型 + 本地运行时 | 是 |
+| 审批模型 | **服务端强制，模型无法绕过** | 界面人工确认 | IDE 确认 |
+| 文件写操作撤销 | **checkpoint + 一键撤销** | 无 | 仅 git |
+| 定时任务 | **APScheduler + 电量条件** | 云端定时 | 桌面 routines |
+
+完整对比（含来源链接与已知短板）见 [docs/COMPETITORS.md](docs/COMPETITORS.md)。
 
 ## 亮点
 
@@ -20,8 +47,10 @@
 - **41 个内建工具**：电量 / 短信 / 拨号 / 定位 / 传感器 / shell / 文件（termux-api），外加任务清单、FTS5 知识库、档案记忆与技能；
 - **审批是安全模型，不是 UI 点缀**：三级授权（允许一次 / 本会话始终 / 全局）+ 全局拒绝名单，服务端强制执行；超时自动拒绝，外部 MCP 工具永远跳不过审批；
 - **桌面 / Telegram 远程遥控**：内置 stdio MCP Server 把 41 个工具暴露给 Claude Desktop / Cline / Codex；Telegram 网关可让 agent 从任何设备驱动与审批；
+- **备份真的能恢复**：`/api/export` 分页导出全部会话（不再静默截断），`/api/import` 合并恢复并去重；
+- **花多少看得见**：每条回复显示端点真实回报的 token 用量，`/api/stats` 聚合请求、工具失败与 LLM token（`/api/metrics` 为 Prometheus 格式）；
 - **手机端零 Node**：构建好的 `dist/` 直接入库，Termux 里只跑 `install.sh`；可装成 PWA，也可打 WebView 壳 APK（`termux/apk-shell/`）；
-- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完全部后端回归套件 + compileall/ruff/部署自检 + 前端类型检查、单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。具体清单以 `tests/run_all.sh` 为准，文档不重复计数。
+- **验证而非口号**：`bash tests/run_all.sh` 一条命令跑完全部后端回归套件 + compileall/ruff/部署自检 + 前端类型检查、单测、生产构建与 dist 新鲜度检查；全部通过才返回 0。
 
 ## 什么设备能做什么
 
@@ -57,34 +86,56 @@
 ## 界面预览
 
 <p align="center">
-  <img src="assets/screenshots/tool-call.png" width="720" alt="工具审批卡（深色主题）" />
+  <img src="assets/screenshots/02-approval.png" width="860" alt="工具审批卡" />
   <br />
-  <sub>审批是安全闸门，不是提示条：工具名说人话、危险操作带红色标签、
-  主决策与次决策分组、超时自动拒绝倒计时。</sub>
+  <sub><b>审批是安全闸门，不是提示条。</b>工具名说人话、危险操作带红色标签、
+  主决策与次决策分组、超时自动拒绝倒计时——模型绕不过去。</sub>
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/03-tool-result.png" alt="工具结果：退出码 / stdout / 耗时" />
+      <br /><sub>每次工具调用都给出结构化结果：退出码、stdout、stderr、是否超时、耗时。</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/04-sessions.png" alt="会话抽屉：置顶、重命名、正文搜索" />
+      <br /><sub>会话管理：置顶、重命名、删除，以及跨会话的正文搜索（不只是标题）。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="assets/screenshots/05-settings.png" alt="设置面板" />
+      <br /><sub>设置 · 主题 / 智能体模式 / 模型 / 权限与安全 / 上下文与记忆 / MCP。</sub>
+    </td>
+    <td align="center">
+      <img src="assets/screenshots/06-stats.png" alt="运行统计" />
+      <br /><sub>运行统计：请求数、LLM 调用、token 与工具失败——真实计数器，不是配置回显。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="assets/screenshots/07-timers.png" alt="定时任务与配方" />
+      <br /><sub>定时任务与配方：一键模板、立即执行按钮、电量条件。</sub>
+    </td>
+    <td align="center">
+      <img src="assets/screenshots/08-dark.png" alt="深色主题" />
+      <br /><sub>深色主题，对比度由 <code>smoke/p9_a11y_contrast_test.py</code> 断言（WCAG AA）。</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="assets/screenshots/09-mobile.png" width="300" alt="手机端" />
+  <br />
+  <sub>390&times;844 · 触摸目标 &ge; 36px、无横向溢出、适配安全区。
+  手机适配由 8 个 Playwright 视口断言，而不是靠肉眼看。</sub>
 </p>
 
 <p align="center">
   <img src="assets/screenshots/capabilities.png" width="720" alt="环境自检与设备能力矩阵" />
   <br />
   <sub>环境自检 + 设备能力矩阵：这台设备能做什么、不能做什么、每一项该补什么。</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/settings.png" width="720" alt="设置面板" />
-  <br />
-  <sub>设置面板 · 主题 / 智能体模式 / 模型 / 权限与安全 / 上下文与记忆 / MCP</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/recipes.png" width="720" alt="定时配方" />
-  <br />
-  <sub>定时任务 · 配方一键创建（低电量提醒 / 每日总结 / 每日天气）</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/mobile.png" width="300" alt="手机端" />
-  <br />
-  <sub>390&times;844 · 触摸目标 &ge; 36px、无横向溢出、适配安全区</sub>
 </p>
 
 ---

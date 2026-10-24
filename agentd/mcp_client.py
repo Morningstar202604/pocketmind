@@ -29,6 +29,8 @@ import asyncio
 import logging
 import warnings
 
+from .mcp import tool_schema
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,7 +80,7 @@ class MCPClientWrapper:
                 {
                     "name": f"{self.name}.{t.name}",
                     "description": t.description or "",
-                    "input_schema": getattr(t, "inputSchema", {}) or {},
+                    "input_schema": tool_schema(t),
                     # 透传注解：main.py 用 mcp_tool_risk 决定只读工具能否免审批
                     "annotations": self._annotation_dict(getattr(t, "annotations", None)),
                 }

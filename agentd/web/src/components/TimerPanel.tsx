@@ -5,6 +5,7 @@ import {
   deleteJob,
   getJobs,
   getRecipes,
+  runJobNow,
   updateJob,
   type Job,
   type Recipe,
@@ -65,6 +66,8 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [applyingId, setApplyingId] = useState("");
+  // 正在触发「立即执行」的任务 id：按钮显示「触发中…」并防抖
+  const [runningId, setRunningId] = useState("");
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState({
     name: "",
@@ -153,6 +156,21 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // 立即执行：调试与「现在就想看结果」时不用等到触发点。
+  // 后端后台起跑、HTTP 立即返回，所以这里只提示「已触发」，不假装已经跑完。
+  const runNow = async (j: Job) => {
+    setMsg("");
+    setRunningId(j.id);
+    try {
+      await runJobNow(j.id);
+      setMsg(`已触发「${j.name}」，结果会出现在会话里`);
+    } catch (e) {
+      setMsg((e as Error).message || "触发失败");
+    } finally {
+      setRunningId("");
+    }
+  };
+
   return (
     <div className="overlay" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
@@ -227,6 +245,14 @@ export function TimerPanel({ onClose }: { onClose: () => void }) {
                   <div className="job-actions">
                     <button className="btn sm" onClick={() => void toggle(j)}>
                       {j.enabled ? "停用" : "启用"}
+                    </button>
+                    <button
+                      className="btn sm"
+                      onClick={() => void runNow(j)}
+                      disabled={runningId === j.id}
+                      title="立即执行一次，不用等到下一个触发点"
+                    >
+                      {runningId === j.id ? "触发中…" : "立即执行"}
                     </button>
                     <button className="btn sm danger" onClick={() => void remove(j)}>
                       删除

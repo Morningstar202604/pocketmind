@@ -23,6 +23,8 @@ const e2eHome =
 
 export default defineConfig({
   testDir: path.resolve(here, "e2e"),
+  // 每轮结束删掉 mkdtemp 出来的数据目录（E2E_AGENT_HOME 显式指定时不动）
+  globalTeardown: path.resolve(here, "e2e/global-teardown.ts"),
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
