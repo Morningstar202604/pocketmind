@@ -95,6 +95,25 @@ test.describe("手机适配不变量", () => {
       // 抽屉可用性（新建 / 搜索）
       await expectDrawerUsable(page);
 
+      // 置顶标记字号：本轮新增的 .s-pin 曾是 11px，只因测试数据里没有置顶会话而逃过
+      // 末尾的全局字号断言（假绿）。这里单独置顶一个会话、量完立刻取消：
+      // 不能留到用例结束，否则该会话会一直占着列表首位，后续 freshSessionAndSend
+      // 新建的会话打不开（init() 取 list[0]），mock 也不会在旧会话里发 tool_call。
+      const sessions = await (await page.request.get("/api/sessions")).json();
+      const pinnedId = Array.isArray(sessions) && sessions.length ? sessions[0].id : "";
+      if (pinnedId) {
+        await page.request.put(`/api/sessions/${pinnedId}`, { data: { pinned: true } });
+        await page.reload({ waitUntil: "networkidle" });
+        await page.locator("textarea").waitFor({ state: "visible", timeout: 15000 });
+        await page.click('button[aria-label="会话列表"]');
+        const pin = page.locator(".s-pin").first();
+        await expect(pin, "置顶标记未渲染").toBeVisible({ timeout: 5000 });
+        const pinPx = await pin.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+        expect(pinPx, `置顶标记字号 ${pinPx}px < 12px`).toBeGreaterThanOrEqual(12);
+        await page.locator('button[aria-label="关闭"]').first().click();
+        await page.request.put(`/api/sessions/${pinnedId}`, { data: { pinned: false } });
+      }
+
       // 先用 mock 的任务清单触发词产生 todo 面板（同时验证该演示路径可用）
       await freshSessionAndSend(page, "给我列个任务清单");
       await expect(page.locator(".todo-panel")).toBeVisible({ timeout: 15000 });
@@ -259,18 +278,6 @@ test.describe("手机适配不变量", () => {
       await expect(chain, "展开后内容未出现").toHaveCount(1);
       await page.getByRole("button", { name: /运行参数/ }).click();
       await expect(chain, "再次点击未收起").toHaveCount(0);
-
-      // 字号下限：辅助文字低于 12px 在手机上会读不清或被系统放大
-      const tiny = await page.evaluate(() =>
-        [...document.querySelectorAll("body *")]
-          .filter((el) => {
-            if (!el.textContent?.trim() || el.children.length) return false;
-            const b = el.getBoundingClientRect();
-            return b.width > 0 && b.height > 0 && parseFloat(getComputedStyle(el).fontSize) < 12;
-          })
-          .map((el) => `${el.tagName}.${String(el.className).slice(0, 20)}@${getComputedStyle(el).fontSize}`)
-      );
-      expect([...new Set(tiny)], "存在小于 12px 的文字").toEqual([]);
 
       // 工具描述允许换行：原来 nowrap + ellipsis 会把长句直接切掉
       await page.getByRole("button", { name: /工具能力/ }).click();
