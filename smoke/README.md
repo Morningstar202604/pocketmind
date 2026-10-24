@@ -21,6 +21,8 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 | 脚本 | 覆盖 | 项数 |
 |---|---|---|
 | `m5_regression.py` | 安全加固回归：短 key 打码、DB/目录权限 600/700、电池链路（auto）、danger 审批+拒绝+收尾、未知工具审批、会话命名、工具清单 ≥38 项 | 11 |
+| `p9_a11y_contrast_test.py` | 主题对比度（WCAG AA 4.5:1）：正文/次要/提示文字、状态色（warn/err/ok）、**brand-text（正文品牌色）**、**白字压 brand-fill/fill-2（气泡/主按钮/发送键）**，双主题 × 全部承载背景 | 20 |
+| `p11_termux_install_test.py` | Termux 安装脚本幂等性 + boot.sh 失败信号 + 无 tzdata 时调度器不崩；假 Termux 环境只用白名单 shim（不继承宿主 PATH，否则 CI 会因宿主自带 rustc/python 假红） | 10 |
 | `p28_mcp_roundtrip_test.py` | MCP 双端真实 stdio 握手：list_tools → schema 转换（驼峰/下划线兼容）、工具调用返回、无 termux-api 时结构化失败 | 7 |
 | `p29_stats_usage_test.py` | /api/stats 真数据（metrics 快照）、token 计数（prompt/completion/total）、done 事件 usage、Prometheus token 指标 | 15 |
 | `p30_features_test.py` | 会话置顶排序、只改 pinned 不清标题、定时任务立即执行、导出→导入恢复、重复导入幂等、坏备份 400 | 22 |

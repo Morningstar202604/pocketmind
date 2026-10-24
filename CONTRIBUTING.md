@@ -48,6 +48,7 @@
    ```
 7. **发布**：基于该 tag 在各 GitHub 仓库创建 Release，Release Notes 写清变更要点；
    官网 `website/index.html` 为自包含单页，由 `badhope/pocketmind` 的 Pages（main 根目录）托管。
-   发布脚本：`bash scripts/release.sh vX.Y.Z`（打 tag、推送、建 Release、校验 tree 一致）
+   发布脚本：`bash scripts/release.sh X.Y.Z`（不带 v；打 tag、推五处、建 Release）。
+   先 `--dry-run` 看计划；GitHub 三个账号用各自 token 调 REST（gh CLI 只能用一个登录身份）。
 
 变更记录以 [CHANGELOG.md](CHANGELOG.md)、Releases 与 git log 为准。
