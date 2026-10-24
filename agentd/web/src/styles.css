@@ -1237,15 +1237,18 @@ body {
   color: var(--brand);
 }
 /* 置顶标记：小号文字标签而不是 emoji —— emoji 在不同机型字体差异大，
- * 且会破坏列表的等宽对齐（与项目「不堆 emoji」的视觉约定一致）。 */
+ * 且会破坏列表的等宽对齐（与项目「不堆 emoji」的视觉约定一致）。
+ * 字号必须 ≥ 12px：mobile.spec.ts 会对全部可见文本做字号下限断言，
+ * 11px 只在「没有会话被置顶」时逃过检查（本轮审计发现）。 */
 .s-pin {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--brand);
   border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
   border-radius: 4px;
   padding: 0 4px;
   margin-right: 4px;
   vertical-align: 1px;
+  line-height: 18px;
 }
 .s-empty {
   text-align: center;
