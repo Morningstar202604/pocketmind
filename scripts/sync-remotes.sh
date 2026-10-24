@@ -22,12 +22,17 @@ for arg in "$@"; do
   esac
 done
 
+# 字段：名称|URL|推送模式（plain = 快进推送；mirror = 允许 force-with-lease）
+# 为什么 GitHub 三个镜像要 force：它们的历史与主仓不同源（早前是独立重建的提交，
+# 同一个 tree 但不同 hash）。普通 push 一定被拒；用 force-with-lease 把同一提交
+# 推过去，才能让五处的 commit/tree 完全一致——这正是「多平台同步」的定义。
+# lease 语义保证：如果别人在此期间推了新提交，本次会失败而不是覆盖。
 REMOTES=(
-  "origin|https://gitcode.com/badhope/pocketmind.git"
-  "gitee|https://gitee.com/badhope/pocketmind.git"
-  "github|https://github.com/X33834/pocketmind.git"
-  "gh-morning|https://github.com/Morningstar202604/pocketmind.git"
-  "gh-badhope|https://github.com/badhope/pocketmind.git"
+  "origin|https://gitcode.com/badhope/pocketmind.git|plain"
+  "gitee|https://gitee.com/badhope/pocketmind.git|plain"
+  "github|https://github.com/X33834/pocketmind.git|mirror"
+  "gh-morning|https://github.com/Morningstar202604/pocketmind.git|mirror"
+  "gh-badhope|https://github.com/badhope/pocketmind.git|mirror"
 )
 
 run() {
@@ -47,7 +52,9 @@ echo "tree   $LOCAL_TREE"
 FAILED=0
 for entry in "${REMOTES[@]}"; do
   name="${entry%%|*}"
-  url="${entry#*|}"
+  rest="${entry#*|}"
+  url="${rest%%|*}"
+  mode="${rest#*|}"
   echo ""
   echo "== $name =="
   if ! git remote get-url "$name" >/dev/null 2>&1; then
@@ -61,7 +68,11 @@ for entry in "${REMOTES[@]}"; do
       run git remote set-url "$name" "$url" || { FAILED=1; continue; }
     fi
   fi
-  if ! run git push "$name" HEAD:main; then
+  push_args=("$name" "HEAD:main")
+  if [ "$mode" = "mirror" ]; then
+    push_args=(--force-with-lease "$name" "HEAD:main")
+  fi
+  if ! run git push "${push_args[@]}"; then
     echo "  ✗ 推送失败"
     FAILED=1
     continue
