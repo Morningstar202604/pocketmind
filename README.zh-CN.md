@@ -295,7 +295,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（需先装浏览器）
   p3 健壮性 API / p5 前端契约对活动 mock 服务执行（服务跑在自动挑选的空闲端口 +
   faketermux 桩）。最后跑部署链路自检（`--lan` 无令牌拒启 / `AGENT_TOKEN` 引导 /
   `--clear-token` 恢复）。
-- **前端**——`tsc -b --noEmit` + 67 个 Vitest 单测 + 生产构建 +
+- **前端**——`tsc -b --noEmit` + 69 个 Vitest 单测 + 生产构建 +
   dist 新鲜度检查（提交的 `dist/` 必须与当前源码一致，因为手机不做构建）。
 - **E2E**——Playwright（8 视口移动适配矩阵），用 `--with-e2e` 显式开启，
   首次需 `npx playwright install chromium`。每次运行都用独立的空数据目录，

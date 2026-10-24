@@ -296,7 +296,7 @@ Exit code is 0 only when everything passes; failures are listed in the summary a
   p2 recipes / p3 robustness API / p5 frontend contract run against a mock server on an
   auto-picked free port with faketermux stubs. A deploy-path self-check runs last
   (`--lan` refuses to boot without a token, `AGENT_TOKEN` bootstrap, `--clear-token`).
-- **Frontend** — `tsc -b --noEmit` + 67 Vitest unit tests + production build +
+- **Frontend** — `tsc -b --noEmit` + 69 Vitest unit tests + production build +
   a dist-freshness check (the committed `dist/` must match the current source,
   since phones build nothing).
 - **E2E** — Playwright (8-viewport mobile matrix), opt-in via `--with-e2e`; needs
