@@ -24,6 +24,8 @@ vi.mock("../api", async (importOriginal) => {
     listKb: () => get("/api/kb").then((d: { items?: unknown[] }) => d.items ?? []),
     deleteKb: (id: number) => del(`/api/kb/${id}`),
     getSkills: () => get("/api/skills"),
+    getStats: () => get("/api/stats"),
+    importAll: (body: unknown) => put("/api/import", body),
     getProfile: () => get("/api/memory/profile"),
     putProfile: (body: unknown) => put("/api/memory/profile", body),
     getApprovalRules: () => get("/api/approvals"),
@@ -230,5 +232,58 @@ describe("SettingsPanel 能力面", () => {
     await openGroup(/技能/);
     expect(await screen.findByText("battery-care")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /安装技能/ })).toBeNull();
+  });
+
+  // 运行统计：后端把 metrics 并入 /api/stats 之后新增的分组。
+  // 这里锁两件事：真数据要显示出来；结构不完整时不能让面板崩（旧后端/半截响应）。
+  it("运行统计显示真实计数与 token", async () => {
+    withCapabilities();
+    get.mockImplementation((path: string) => {
+      if (path === "/api/settings") return Promise.resolve(SETTINGS);
+      if (path === "/api/providers") return Promise.resolve({ providers: [] });
+      if (path === "/api/tools") return Promise.resolve({ tools: [] });
+      if (path === "/api/kb") return Promise.resolve({ items: [] });
+      if (path === "/api/skills") return Promise.resolve({ skills: [], dir: "" });
+      if (path === "/api/memory/profile")
+        return Promise.resolve({ enabled: false, user: "", facts: "", journal_lines: 0 });
+      if (path === "/api/approvals") return Promise.resolve({ global: [], deny: [], sessions: {} });
+      if (path === "/api/stats")
+        return Promise.resolve({
+          use_litellm: false,
+          use_mem0: false,
+          metrics: {
+            uptime_seconds: 120,
+            requests: { total: 42, by_status: { "200": 42 } },
+            tools: { list_dir: { calls: 3, avg_ms: 10, failures: 1 } },
+            llm: { calls: 5, avg_ms: 100, prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200 },
+            errors: {},
+          },
+        });
+      return Promise.resolve({});
+    });
+    renderPanel();
+    await openGroup(/运行统计/);
+    expect(await screen.findByText("HTTP 请求")).toBeInTheDocument();
+    expect(screen.getByText("42 次")).toBeInTheDocument();
+    expect(screen.getByText(/合计/)).toBeInTheDocument();
+  });
+
+  it("统计响应结构不完整时降级为「暂无数据」，不白屏", async () => {
+    withCapabilities();
+    get.mockImplementation((path: string) => {
+      if (path === "/api/settings") return Promise.resolve(SETTINGS);
+      if (path === "/api/providers") return Promise.resolve({ providers: [] });
+      if (path === "/api/tools") return Promise.resolve({ tools: [] });
+      if (path === "/api/kb") return Promise.resolve({ items: [] });
+      if (path === "/api/skills") return Promise.resolve({ skills: [], dir: "" });
+      if (path === "/api/memory/profile")
+        return Promise.resolve({ enabled: false, user: "", facts: "", journal_lines: 0 });
+      if (path === "/api/approvals") return Promise.resolve({ global: [], deny: [], sessions: {} });
+      if (path === "/api/stats") return Promise.resolve({ use_litellm: false }); // 旧后端
+      return Promise.resolve({});
+    });
+    renderPanel();
+    await openGroup(/运行统计/);
+    expect(await screen.findByText(/拿不到统计数据/)).toBeInTheDocument();
   });
 });

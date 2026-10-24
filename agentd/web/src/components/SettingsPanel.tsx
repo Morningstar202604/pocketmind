@@ -213,9 +213,16 @@ export function SettingsPanel({
     } catch {
       setSkills([]);
     }
-    // 运行统计：拿不到就保持 null（面板显示「暂无数据」而不是编造 0）
+    // 运行统计：拿不到就保持 null（面板显示「暂无数据」而不是编造 0）。
+    // 归一化 metrics 结构：旧后端/异常响应缺字段时不能让它把整个设置面板炸掉
+    // （nextTick 里 stats.metrics.llm.prompt_tokens 是直接解引用）。
     try {
-      setStats(await getStats());
+      const raw = await getStats();
+      if (raw && raw.metrics && raw.metrics.llm && raw.metrics.requests && raw.metrics.tools) {
+        setStats(raw);
+      } else {
+        setStats(null);
+      }
     } catch {
       setStats(null);
     }
