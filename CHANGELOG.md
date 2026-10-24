@@ -50,6 +50,8 @@
 - 新增 `docs/COMPETITORS.md`（对标 Mobilerun / Mobile-Agent / Cline / Open Interpreter / Letta，
   含能力矩阵与「该借什么」的具体结论，所有外部事实附来源链接）。
 - README 双语重写展示区：演示视频、9 张实拍截图、能力矩阵、与竞品的边界说明。
+- 新增 `scripts/release.sh`（五平台发布：GitHub ×3 + Gitee + GitCode，按仓库显式选 token）
+  与 `scripts/sync-remotes.sh`（推 main/tags 并逐个核对 commit）。
 
 ## [1.1.0] - 2026-10-23
 
