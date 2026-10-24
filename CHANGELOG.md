@@ -37,9 +37,13 @@
   坏文件 400 且不写半截数据。
 - **运行统计面板**：设置 → 运行统计，展示运行时长 / 请求数 / LLM 调用与 token / 工具失败数。
 - **消息级 token 用量**：每条助手回复下方显示本轮消耗（端点未回报时标注「估」）。
-- 回归套件 p28/p29/p30 进入门禁（默认路径）。
+- 回归套件 p28/p29/p30/p31 进入门禁（默认路径）。
 - 发布素材：`assets/screenshots/01-09`（本轮实拍，light/dark/mobile）与
   `docs/demo/pocketmind-demo.mp4` / `.gif`（真实操作录制）。
+- **门禁在 CI 上假绿/假红**：`smoke/p11_termux_install_test.py` 的假 Termux 环境沿用了
+  宿主机 PATH。CI 的 ubuntu runner 自带 rustc 与 python，于是「真缺 rust」「没有 python」
+  两个场景被宿主命令补上——本机 10/10 全绿，CI 上 8/10（2026-10-24 GitHub Actions 实测）。
+  改为只暴露白名单 shim（sh/grep/tail/…），不含 python/rustc。
 
 ### 文档
 
