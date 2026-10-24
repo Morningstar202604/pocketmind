@@ -40,6 +40,13 @@
 - 回归套件 p28/p29/p30/p31 进入门禁（默认路径）。
 - 发布素材：`assets/screenshots/01-09`（本轮实拍，light/dark/mobile）与
   `docs/demo/pocketmind-demo.mp4` / `.gif`（真实操作录制）。
+- **UI 假绿：置顶徽章 11px 逃过字号断言**：`.s-pin` 用了 11px，而
+  `mobile.spec.ts` 会对全部可见文本断言 ≥12px——只因测试数据里没有置顶会话，
+  这条断言从没量到它。已改为 12px，并在手机矩阵里显式置顶一个会话、
+  量完字号立刻取消（不取消会让该会话占住 `list[0]`，后续用例的消息发进旧会话）。
+- **徽章在 GitCode 全 broken**：GitCode 的图片代理抓 `img.shields.io` 失败
+  （实测 4 个徽章 `naturalWidth=0`）。改为仓库内自绘 SVG（`assets/badges/`），
+  只在 GitCode/Gitee/GitHub 共用的 raw 通道取图；GitHub Actions 徽章保留（它必须是活的）。
 - **门禁在 CI 上假绿/假红**：`smoke/p11_termux_install_test.py` 的假 Termux 环境沿用了
   宿主机 PATH。CI 的 ubuntu runner 自带 rustc 与 python，于是「真缺 rust」「没有 python」
   两个场景被宿主命令补上——本机 10/10 全绿，CI 上 8/10（2026-10-24 GitHub Actions 实测）。
