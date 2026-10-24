@@ -4,10 +4,11 @@
   <p><b>The always-on Agent that actually operates your phone — right from your pocket.</b><br/>
   Local-first · Privacy-first · Native on Termux · 41 tools · Server-enforced approval</p>
   <img src="https://github.com/X33834/pocketmind/actions/workflows/ci.yml/badge.svg" alt="CI" />
-  <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="Local gate" />
-  <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
-  <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
-  <img src="https://img.shields.io/badge/License-Apache--2.0-blue" alt="License" />
+  <img src="assets/badges/gate.svg" alt="Local gate" />
+  <img src="assets/badges/platform.svg" alt="Platform" />
+  <img src="assets/badges/tools.svg" alt="41 tools" />
+  <img src="assets/badges/language.svg" alt="Language" />
+  <img src="assets/badges/license.svg" alt="License" />
   <br />
   <sub>Web UI · PWA · APK · MCP Server + Client · Telegram Gateway · Recipes · Plan/Act Modes · Backup &amp; Restore</sub>
 </div>

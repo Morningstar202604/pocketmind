@@ -4,10 +4,11 @@
   <p><b>口袋里能真正操作你手机的 always-on Agent</b><br/>
   本地优先 · 隐私保护 · Termux 原生 · 41 个工具 · 服务端强制审批</p>
   <img src="https://github.com/X33834/pocketmind/actions/workflows/ci.yml/badge.svg" alt="CI" />
-  <img src="https://img.shields.io/badge/gate-bash%20tests%2Frun__all.sh-blue" alt="本地门禁" />
-  <img src="https://img.shields.io/badge/Platform-Android_Termux-green" alt="Platform" />
-  <img src="https://img.shields.io/badge/Language-Python%20%2B%20TypeScript-blue" alt="Language" />
-  <img src="https://img.shields.io/badge/License-Apache--2.0-blue" alt="License" />
+  <img src="assets/badges/gate.svg" alt="本地门禁" />
+  <img src="assets/badges/platform.svg" alt="Platform" />
+  <img src="assets/badges/tools.svg" alt="41 tools" />
+  <img src="assets/badges/language.svg" alt="Language" />
+  <img src="assets/badges/license.svg" alt="License" />
   <br />
   <sub>Web UI · PWA · APK · MCP Server + Client · Telegram 网关 · 定时配方 · Plan/Act 双模式 · 备份恢复</sub>
 </div>
