@@ -12,7 +12,7 @@ sse-starlette>=2.1
 # 上限不是摆设：pydantic v3 会改 API，而 >=2.0 会在某天被 pip 静默升上去，
 # 然后所有用户在重装时一起挂（本仓库已经因为 mcp 1.x→2.x 的改名做过一次兼容分支）。
 # 锁大版本 = 可预测的升级点；需要 v3 时改这里并跑全量回归。
-pydantic>=2.0,<3
+pydantic>=2.14.2,<3
 pydantic-settings>=2.0,<3
 mcp>=1.0
 sqlalchemy[asyncio]>=2.0,<3
