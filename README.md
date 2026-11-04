@@ -2,14 +2,14 @@
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind</h1>
   <p><b>The always-on agent that actually operates your phone.</b><br/>
-  Runs on the device · 41 tools · Server-enforced approval · Local-first storage</p>
+  One APK, no Termux · Server-enforced approval · Local-first storage</p>
   <img src="assets/badges/gate.svg" alt="Local gate" />
   <img src="assets/badges/platform.svg" alt="Platform" />
-  <img src="assets/badges/tools.svg" alt="41 tools" />
+  <img src="assets/badges/tools.svg" alt="Tools" />
   <img src="assets/badges/language.svg" alt="Language" />
   <img src="assets/badges/license.svg" alt="License" />
   <br />
-  <sub>Web UI · PWA · APK · MCP server + client · Telegram gateway · Scheduled recipes · Plan/Act modes · Backup &amp; restore</sub>
+  <sub>Standalone APK · Native engine · Streaming chat · Approval center · Sessions &amp; backup · Plan/Act modes</sub>
 </div>
 
 **English** | [简体中文](README.zh-CN.md)
@@ -26,9 +26,11 @@ files — as structured tools, and it asks you before it does anything destructi
 Everything it remembers stays on the device. Only inference leaves it.
 
 ```
-You ──▶ Web UI / PWA / APK ──▶ agentd (Python, single process) ──▶ tools ──▶ your phone
-                                        │
-                                        └──▶ your LLM endpoint (inference only)
+You ──▶ APK ──▶ Kotlin native engine ──▶ 26 native tools ──▶ your phone
+                        │
+                        └──▶ your LLM endpoint (inference only)
+
+Full runtime (optional): Web UI / PWA ──▶ agentd (Python, Termux) ──▶ 41 tools
 ```
 
 ## See it work
@@ -41,6 +43,11 @@ runtime statistics → scheduled jobs → dark theme → mobile viewport.
 Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s).</sub>
 
 ## The parts that matter
+
+> Scope: approvals, structured results, backups, Plan/Act and usage stats exist in
+> both runtimes. **41 tools, scheduled jobs, MCP and Telegram belong to the Termux
+> full runtime**; the standalone APK ships 26 native tools and reports unsupported
+> capabilities explicitly instead of faking success.
 
 ### Approval is a security boundary, not a dialog
 
@@ -95,12 +102,13 @@ did not succeed.
   to the reply. Copy is one tap away.</sub>
 </p>
 
-### It runs without a laptop
+### Install it and go
 
-The built `dist/` ships in the repository, so the phone needs no Node toolchain.
-`termux/install.sh` installs Python and the dependencies once; `termux/start.sh`
-starts the service; `boot.sh` restarts it on boot. Works as a PWA, or install the
-APK for an app icon, a foreground service and a native clipboard bridge.
+Since 1.4.0 the APK ships the native engine and a prebuilt frontend: install it,
+open it, configure a provider, and start chatting. No Termux, Python or Node on the
+phone. Termux is only needed for the full 41-tool runtime: `termux/install.sh`
+installs dependencies, `termux/start.sh` starts the service, `boot.sh` restarts it
+on boot.
 
 ### Scheduled work that survives a reboot
 

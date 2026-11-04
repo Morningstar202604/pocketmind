@@ -2,14 +2,14 @@
   <img src="assets/pocketmind-logo.png" width="440" alt="PocketMind Logo" />
   <h1>PocketMind · 口袋智灵</h1>
   <p><b>真正能操作你手机的常驻 Agent</b><br/>
-  运行在设备内 · 41 个工具 · 服务端强制审批 · 本地优先存储</p>
+  装一个 APK 即可运行 · 无需 Termux · 服务端强制审批 · 数据留在本机</p>
   <img src="assets/badges/gate.svg" alt="本地门禁" />
-  <img src="assets/badges/platform.svg" alt="Platform" />
-  <img src="assets/badges/tools.svg" alt="41 tools" />
-  <img src="assets/badges/language.svg" alt="Language" />
-  <img src="assets/badges/license.svg" alt="License" />
+  <img src="assets/badges/platform.svg" alt="运行平台" />
+  <img src="assets/badges/tools.svg" alt="工具数量" />
+  <img src="assets/badges/language.svg" alt="开发语言" />
+  <img src="assets/badges/license.svg" alt="开源许可" />
   <br />
-  <sub>Web UI · PWA · APK · MCP 服务端与客户端 · Telegram 网关 · 定时配方 · Plan/Act 双模式 · 备份恢复</sub>
+  <sub>独立 APK · 原生引擎 · 流式对话 · 审批中心 · 会话与备份 · Plan/Act 双模式</sub>
 </div>
 
 [English](README.md) | **简体中文**
@@ -25,9 +25,11 @@
 它记住的一切都留在设备上。离开设备的只有推理请求。
 
 ```
-你 ──▶ Web UI / PWA / APK ──▶ agentd（Python 单进程）──▶ 工具 ──▶ 你的手机
-                                      │
-                                      └──▶ 你配置的 LLM 端点（仅推理）
+你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 26 个原生工具 ──▶ 你的手机
+                     │
+                     └──▶ 你配置的 LLM 端点（仅推理）
+
+完整运行时（可选）：Web UI / PWA ──▶ agentd（Python，Termux）──▶ 41 个工具
 ```
 
 ## 看它跑起来
@@ -39,6 +41,10 @@
 完整视频：[docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4)（40 秒）。</sub>
 
 ## 真正重要的部分
+
+> 范围说明：审批、结构化结果、备份、Plan/Act、用量统计在 APK 与 Termux 两个运行时都有；
+> **41 个工具、定时任务、MCP、Telegram 属于 Termux 完整运行时**，独立 APK 当前提供
+> 26 个原生工具，未覆盖的能力会明确返回"不可用"，不会假装成功。
 
 ### 审批是安全边界，不是弹窗
 
@@ -88,11 +94,11 @@
   <sub>上面是工具入参，下面是结构化结果，回复附带耗时与 token 消耗。一键复制。</sub>
 </p>
 
-### 不需要电脑也能跑
+### 装上就能用
 
-构建好的 `dist/` 随仓库分发，手机端不需要 Node 工具链。`termux/install.sh` 一次性
-装好 Python 与依赖，`termux/start.sh` 启动服务，`boot.sh` 开机自启。可以用 PWA，
-也可以装 APK 获得独立图标、前台服务与原生剪贴板桥。
+1.4.0 起 APK 自带原生引擎与已构建的前端，装完打开即可配置使用，**不需要 Termux、
+Python 或 Node**。需要完整 41 工具运行时时才用 Termux：`termux/install.sh` 装依赖、
+`termux/start.sh` 启动、`boot.sh` 开机自启。
 
 ### 重启也不会丢的定时任务
 
