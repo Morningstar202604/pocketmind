@@ -111,6 +111,8 @@ class ApiRouter(
             path == "/api/llm/test" && ex.method == "POST" -> llmTest(ex)
             path == "/api/sessions" && ex.method == "GET" ->
                 ex.respond(200, JSON, store.listSessions().toString())
+            // 必须排在 startsWith("/api/sessions/") 之前，否则会被当成会话 id="search"。
+            path == "/api/sessions/search" && ex.method == "GET" -> searchSessions(ex)
             path == "/api/sessions" && ex.method == "POST" -> {
                 val body = bodyJson(ex)
                 val s = store.createSession(body.optString("title", "新会话").ifEmpty { "新会话" })
@@ -212,8 +214,31 @@ class ApiRouter(
                 store.clearTodos(sid)
                 ex.respond(200, JSON, "{\"ok\":true}")
             }
+            parts.getOrNull(1) == "compact" && ex.method == "POST" -> compactSession(ex, sid)
             else -> ex.respond(404, JSON, "{\"error\":\"not_found\"}")
         }
+    }
+
+    private fun searchSessions(ex: Exchange) {
+        val q = (ex.query["q"] ?: "").trim()
+        val limit = (ex.query["limit"]?.toIntOrNull() ?: 20).coerceIn(1, 50)
+        if (q.isEmpty()) return ex.respond(200, JSON, "{\"query\":\"\",\"count\":0,\"items\":[]}")
+        val items = store.searchMessages(q, limit)
+        ex.respond(200, JSON, JSONObject()
+            .put("query", q).put("count", items.length()).put("items", items).toString())
+    }
+
+    /**
+     * 手动压缩会话：把较早的历史归档成摘要，保留最近 keep 条原文。
+     *
+     * 与 Python 一样，LLM 不可用时降级为「最后一条用户消息」占位摘要——
+     * 压缩的价值是别丢上下文，为此让整个操作失败没有意义。
+     * 水位（archived_upto）只在摘要真正落库后推进，失败不丢历史。
+     */
+    private fun compactSession(ex: Exchange, sid: String) {
+        if (store.getSession(sid) == null) return ex.respond(404, JSON, "{\"error\":\"会话不存在\"}")
+        val keep = bodyJson(ex).optInt("keep", 10)
+        ex.respond(200, JSON, agent.compact(sid, keep).toString())
     }
 
     private fun health(ex: Exchange) {

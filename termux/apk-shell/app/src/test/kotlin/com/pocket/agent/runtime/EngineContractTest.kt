@@ -47,6 +47,8 @@ class EngineContractTest {
     /** 脚本化假 LLM：不碰网络，逐轮弹出脚本。 */
     class FakeLlm(cfg: SettingsStore.LlmConfig) : LlmClient(cfg) {
         val turns = ArrayDeque<FakeTurn>()
+        /** 最近一次 streamChat 收到的完整 messages，用于断言上下文注入。 */
+        var lastMessages: List<JSONObject> = emptyList()
 
         override fun streamChat(
             messages: JSONArray,
@@ -55,6 +57,7 @@ class EngineContractTest {
             callbacks: StreamCallbacks,
             abortSignal: () -> Boolean,
         ): List<Triple<String, String, String>> {
+            lastMessages = (0 until messages.length()).mapNotNull { messages.optJSONObject(it) }
             val turn = turns.removeFirstOrNull() ?: FakeTurn("(脚本耗尽)")
             turn.text?.let { callbacks.onText(it) }
             callbacks.onDone(LlmClient.Usage(10, 5, false), turn.calls)
@@ -470,5 +473,106 @@ class EngineContractTest {
             .handler(JSONObject().put("command", "exit 3"), env)
         assertEquals("非零退出码应原样返回：$r", 3, r.optInt("exit_code", -99))
         assertFalse("非零退出不应报 ok", r.optBoolean("ok"))
+    }
+
+    // ---------- 会话搜索 / 压缩（1.5.1：前端一直在调，原生此前 404） ----------
+
+    @Test
+    fun `会话搜索 - 跨会话命中正文与工具输出并标注来源`() {
+        bootstrap()
+        val a = newSession()
+        val b = newSession()
+        store.addMessage(a, "user", "明天记得买牛奶")
+        store.addMessage(b, "assistant", "这里是无关内容")
+        store.addMessage(b, "tool", "{\"battery\":42}", JSONObject().put("tool_call_id", "c1"))
+
+        val resp = JSONObject(get("/api/sessions/search?q=" + java.net.URLEncoder.encode("牛奶", "UTF-8")).body)
+        assertEquals(1, resp.getInt("count"))
+        val hit = resp.getJSONArray("items").getJSONObject(0)
+        assertEquals(a, hit.getString("session_id"))
+        assertEquals("message", hit.getString("matched"))
+        assertTrue("摘要应含关键词：$hit", hit.getString("snippet").contains("牛奶"))
+
+        // 工具输出也要能搜到（1.3 起的契约）
+        val toolHit = JSONObject(get("/api/sessions/search?q=battery").body)
+        assertEquals(1, toolHit.getInt("count"))
+        assertEquals("tool_output", toolHit.getJSONArray("items").getJSONObject(0).getString("matched"))
+
+        // 空查询返回空集而不是全量
+        assertEquals(0, JSONObject(get("/api/sessions/search?q=").body).getInt("count"))
+    }
+
+    @Test
+    fun `会话压缩 - 归档早期消息并把摘要注入后续上下文`() {
+        bootstrap()
+        val sid = newSession()
+        // 12 条消息：压缩后保留最近 4 条
+        for (i in 1..12) {
+            store.addMessage(sid, if (i % 2 == 1) "user" else "assistant", "第 $i 条消息")
+        }
+        val resp = JSONObject(send("POST", "/api/sessions/$sid/compact",
+            JSONObject().put("keep", 4).toString()).body)
+        assertTrue("压缩应成功：$resp", resp.optBoolean("ok"))
+        assertEquals(8, resp.getInt("archived_messages"))
+        assertEquals(4, resp.getInt("kept"))
+        assertTrue("应产出摘要：$resp", resp.optString("summary").isNotEmpty())
+
+        // 水位推进：再压一次应报「已归档」
+        val again = JSONObject(send("POST", "/api/sessions/$sid/compact",
+            JSONObject().put("keep", 4).toString()).body)
+        assertEquals(false, again.optBoolean("ok"))
+
+        // 消息本身不能被删（压缩是归档不是截断）
+        assertEquals(12, JSONArray(get("/api/sessions/$sid/messages").body).length())
+
+        // 摘要要进后续对话的 system prompt，否则模型仍然失忆
+        fakeLlm.turns.addLast(FakeTurn(text = "好的"))
+        send("POST", "/api/chat", JSONObject().put("session_id", sid).put("message", "继续说").toString())
+        val sent = fakeLlm.lastMessages
+        assertTrue("system prompt 应含归档摘要，实际：${sent.take(300)}",
+            sent.any { it.optString("role") == "system" && it.optString("content").contains("早期对话摘要") ||
+                it.optString("content").contains("摘要") })
+    }
+
+    @Test
+    fun `会话压缩 - 消息不足时报无需压缩`() {
+        bootstrap()
+        val sid = newSession()
+        store.addMessage(sid, "user", "只有一条")
+        val r = JSONObject(send("POST", "/api/sessions/$sid/compact", "{}").body)
+        assertEquals(false, r.optBoolean("ok"))
+        assertTrue(r.optString("reason").contains("无需压缩"))
+        // 不存在的会话 → 404
+        assertEquals(404, send("POST", "/api/sessions/nope/compact", "{}").code)
+    }
+
+    // ---------- 契约表自检（防止文档再次与实现脱节） ----------
+
+    @Test
+    fun `接口契约 - 列在 implemented 的端点都不返回 503 not_implemented`() {
+        bootstrap()
+        // 逐个打真实路径：只要返回 `migration:not_implemented` 就说明契约表撒谎。
+        // 用 GET 探测只读端点；写端点用最小请求体，断言"不是 503 未实现"而非具体成功。
+        val probes = mapOf(
+            "/api/health" to "GET", "/api/native/status" to "GET",
+            "/api/tools" to "GET", "/api/settings" to "GET", "/api/providers" to "GET",
+            "/api/sessions" to "GET", "/api/approvals" to "GET",
+            "/api/approvals/pending" to "GET", "/api/jobs" to "GET",
+            "/api/recipes" to "GET", "/api/kb" to "GET", "/api/skills" to "GET",
+            "/api/stats" to "GET", "/api/metrics" to "GET", "/api/diagnostics" to "GET",
+            "/api/export" to "GET", "/api/memory/profile" to "GET",
+        )
+        for ((path, method) in probes) {
+            val r = send(method, path, null)
+            assertFalse("$path 出现在契约表里却返回 503 未实现：${r.body.take(120)}",
+                r.code == 503 && r.body.contains("not_implemented"))
+        }
+        // 搜索与压缩：前端一直在调，曾经是 404/503 的黑洞
+        assertEquals("搜索不应 404", 200, get("/api/sessions/search?q=x").code)
+        val sid = newSession()
+        assertEquals("压缩不应 404", 200,
+            send("POST", "/api/sessions/$sid/compact", "{}").code)
+        // 真正没实现的路径必须仍然 fail-closed，不能因为加了自检就放开
+        assertEquals(503, get("/api/never-implemented").code)
     }
 }

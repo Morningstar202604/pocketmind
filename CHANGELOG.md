@@ -11,6 +11,35 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-06
+
+### Fixed
+
+- **Two endpoints the frontend called but the native engine never implemented.**
+  `GET /api/sessions/search` and `POST /api/sessions/{sid}/compact` returned 404
+  in the standalone APK, so the session drawer's full-text search (including
+  tool output and tool-call arguments) and the "compress history" button were
+  silently dead. Both are now real: LIKE-based search across sessions with the
+  same `matched` labels as Python (`message` / `tool_output` / `tool_call`), and
+  archive-based compaction that keeps the last N messages, emits a summary, and
+  advances the `archived_upto` watermark so a second press does not re-summarise
+  the same range.
+- **Compaction summaries are actually injected.** A new `archives` table stores
+  the rolling summaries and `AgentLoop` prepends them to the system prompt;
+  without this, "compress" would have hidden messages while the model still
+  forgot them.
+- **`ApiContract` described a runtime that no longer existed.** It still listed
+  chat/tools/sessions/jobs as unimplemented. Rewritten to match reality and
+  backed by a new contract self-check test that probes every endpoint in the
+  list and fails if any returns `not_implemented`.
+
+### Changed
+
+- README (both languages): tool counts corrected (37 native / 41 Termux =
+  39 built-in + 2 runtime), the Termux-only list narrowed to MCP / Telegram /
+  skills / subagent, and the scheduler section now states what makes it real
+  (Doze survival, reboot re-arm, next-occurrence scheduling).
+
 ## [1.5.0] - 2026-11-06
 
 ### Added

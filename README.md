@@ -44,11 +44,11 @@ Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s
 
 ## The parts that matter
 
-> Scope: approvals, structured results, backups, Plan/Act, usage stats and the
-> scheduler exist in both runtimes. **41 tools, MCP, Telegram and the skills
-> directory belong to the Termux full runtime**; the standalone APK ships 37
-> native tools and reports unsupported capabilities explicitly instead of faking
-> success.
+> Scope: approvals, structured results, backups, Plan/Act, usage stats, the
+> scheduler, shell and undo exist in both runtimes. The standalone APK ships 37
+> native tools. Only **MCP, the Telegram gateway, the skills directory and the
+> subagent** are Termux-only; unsupported capabilities are reported explicitly
+> instead of faking success.
 
 ### Approval is a security boundary, not a dialog
 
@@ -70,6 +70,11 @@ way past it, and a compromised page cannot either.
 </p>
 
 ### 41 tools across the phone
+
+> The table below describes the Termux runtime (41 = 39 built-in plus the
+> `remember_fact` / `read_skill` tools registered at startup). The standalone APK
+> covers most of them with 37 native tools; the difference is the "three things it
+> cannot do" listed under honest boundaries.
 
 | Group | Count | Examples |
 |---|---|---|
@@ -113,10 +118,16 @@ on boot.
 
 ### Scheduled work that survives a reboot
 
-Jobs persist in SQLite and are restored on startup. Triggers are `interval`,
-`cron`, or a **battery condition** (`battery < 20`). Four recipes ship built in —
+`AlarmManager` in the APK, APScheduler under Termux; both persist jobs in SQLite.
+Triggers are `interval`, `cron` (5-field, with ranges/lists/steps) and one-shot
+`date`, plus a **battery condition** (`battery < 20`). Four recipes ship built in —
 low-battery alert, daily summary, daily weather, lunch reminder — and any of them
-instantiates with one tap. Jobs can be run immediately without waiting for the
+instantiates with one tap.
+
+Three things that are easy to fake and are done for real here: **it still fires
+when the screen is locked** (`setExactAndAllowWhileIdle` across Doze), **alarms are
+re-armed after a reboot** (`BOOT_COMPLETED`), and **the next occurrence is
+scheduled on fire**. Jobs can also run immediately without waiting for the
 trigger, which is the only way to know a job actually works.
 
 <p align="center">

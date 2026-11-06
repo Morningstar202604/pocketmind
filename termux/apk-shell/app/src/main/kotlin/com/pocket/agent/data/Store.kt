@@ -61,6 +61,12 @@ class Store(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERS
                 "created_at REAL NOT NULL)"
         )
         db.execSQL("CREATE INDEX idx_ckpt_call ON checkpoints(session_id, tool_call_id)")
+        db.execSQL(
+            "CREATE TABLE archives(" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
+                "content TEXT NOT NULL, created_at REAL NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX idx_archives_session ON archives(session_id, id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -81,6 +87,15 @@ class Store(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERS
                     "created_at REAL NOT NULL)"
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_ckpt_call ON checkpoints(session_id, tool_call_id)")
+        }
+        // v2 → v3：会话压缩需要归档表（滚动摘要），否则 compact 只能是假动作。
+        if (oldVersion < 3) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS archives(" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
+                    "content TEXT NOT NULL, created_at REAL NOT NULL)"
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_archives_session ON archives(session_id, id)")
         }
     }
 
@@ -486,9 +501,116 @@ class Store(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERS
         writableDatabase.update("checkpoints", cv, "id = ?", arrayOf(id.toString()))
     }
 
+    // ---------- 会话搜索（跨会话，正文 + 工具输出 + 工具调用参数） ----------
+
+    /**
+     * 搜索消息：与 Python `search_messages` 同语义，LIKE 子串而非 FTS。
+     *
+     * `matched` 字段前端用来打标签：
+     *  - message：user/assistant 正文命中
+     *  - tool_output：role='tool' 的正文命中
+     *  - tool_call：assistant 的 meta（含 tool_calls.arguments）命中
+     * 同一行两个条件都命中时按 message 优先，与 Python 的判定顺序一致。
+     */
+    fun searchMessages(query: String, limit: Int = 20): JSONArray {
+        val words = query.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.take(6)
+        val out = JSONArray()
+        if (words.isEmpty()) return out
+        val contentConds = words.joinToString(" OR ") { "(m.content LIKE ?)" }
+        val metaConds = words.joinToString(" OR ") { "(m.meta LIKE ?)" }
+        val args = ArrayList<String>()
+        // 正文条件参数
+        words.forEach { args.add("%$it%") }
+        // 参数条件参数
+        words.forEach { args.add("%$it%") }
+        args.add((limit.coerceIn(1, 50)).toString())
+        readableDatabase.rawQuery(
+            "SELECT m.id, m.session_id, m.role, m.content, m.meta, m.created_at, s.title " +
+                "FROM messages m JOIN sessions s ON s.id = m.session_id " +
+                "WHERE (m.role IN ('user','assistant','tool') AND ($contentConds)) " +
+                "   OR (m.role='assistant' AND ($metaConds)) " +
+                "ORDER BY m.id DESC LIMIT ?",
+            args.toTypedArray()
+        ).use { c ->
+            while (c.moveToNext()) {
+                val content = c.getString(3)
+                val meta = c.getString(4) ?: ""
+                val role = c.getString(2)
+                val lowered = words.map { it.lowercase() }
+                val hitContent = lowered.any { content.lowercase().contains(it) }
+                val hitMeta = lowered.any { meta.lowercase().contains(it) }
+                val matched = when {
+                    role == "tool" && hitContent -> "tool_output"
+                    hitContent -> "message"
+                    hitMeta -> "tool_call"
+                    else -> "message"
+                }
+                out.put(
+                    JSONObject()
+                        .put("id", c.getLong(0)).put("session_id", c.getString(1))
+                        .put("title", c.getString(6)).put("role", role)
+                        .put("matched", matched)
+                        .put("snippet", snippetOf(content, lowered))
+                        .put("created_at", c.getDouble(5))
+                )
+            }
+        }
+        return out
+    }
+
+    /** 命中位置前后各截一段，避免把整条长消息塞给前端。 */
+    private fun snippetOf(text: String, words: List<String>): String {
+        if (text.isEmpty()) return ""
+        val lower = text.lowercase()
+        var at = -1
+        for (w in words) {
+            val i = lower.indexOf(w)
+            if (i >= 0 && (at < 0 || i < at)) at = i
+        }
+        if (at < 0) return text.take(120)
+        val start = (at - 40).coerceAtLeast(0)
+        val end = (at + 80).coerceAtMost(text.length)
+        val prefix = if (start > 0) "…" else ""
+        val suffix = if (end < text.length) "…" else ""
+        return prefix + text.substring(start, end).replace('\n', ' ') + suffix
+    }
+
+    // ---------- 会话压缩（滚动摘要归档） ----------
+
+    fun appendArchive(sessionId: String, content: String) {
+        val text = content.trim()
+        if (text.isEmpty()) return
+        val cv = android.content.ContentValues().apply {
+            put("session_id", sessionId); put("content", text.take(4000)); put("created_at", now())
+        }
+        writableDatabase.insert("archives", null, cv)
+    }
+
+    /** 最近 N 段归档，按时间正序（旧→新），供上下文注入。 */
+    fun getArchives(sessionId: String, limit: Int = 5): JSONArray {
+        val rows = ArrayList<String>()
+        readableDatabase.rawQuery(
+            "SELECT content FROM archives WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+            arrayOf(sessionId, limit.toString())
+        ).use { c -> while (c.moveToNext()) rows.add(c.getString(0)) }
+        rows.reverse()
+        val out = JSONArray()
+        rows.forEach { out.put(it) }
+        return out
+    }
+
+    fun setArchivedUpto(sessionId: String, msgId: Long) {
+        val cv = android.content.ContentValues().apply { put("archived_upto", msgId) }
+        writableDatabase.update("sessions", cv, "id = ?", arrayOf(sessionId))
+    }
+
+    fun archivedUpto(sessionId: String): Long =
+        readableDatabase.rawQuery("SELECT archived_upto FROM sessions WHERE id = ?", arrayOf(sessionId))
+            .use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
+
     companion object {
         private const val DB_NAME = "pocketmind.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
 
         fun newId(): String {
             val chars = "abcdefghijklmnopqrstuvwxyz0123456789"

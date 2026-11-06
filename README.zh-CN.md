@@ -25,7 +25,7 @@
 它记住的一切都留在设备上。离开设备的只有推理请求。
 
 ```
-你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 26 个原生工具 ──▶ 你的手机
+你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 37 个原生工具 ──▶ 你的手机
                      │
                      └──▶ 你配置的 LLM 端点（仅推理）
 
@@ -42,9 +42,10 @@
 
 ## 真正重要的部分
 
-> 范围说明：审批、结构化结果、备份、Plan/Act、用量统计在 APK 与 Termux 两个运行时都有；
-> **41 个工具、定时任务、MCP、Telegram 属于 Termux 完整运行时**，独立 APK 当前提供
-> 26 个原生工具，未覆盖的能力会明确返回"不可用"，不会假装成功。
+> 范围说明：审批、结构化结果、备份、Plan/Act、用量统计、**定时任务、shell、撤销**
+> 在 APK 与 Termux 两个运行时都有。独立 APK 提供 **37 个原生工具**；
+> 只有 **MCP、Telegram 网关、技能目录、子代理** 属于 Termux 专属，
+> 未覆盖的能力会明确返回"不可用"，不会假装成功。
 
 ### 审批是安全边界，不是弹窗
 
@@ -63,6 +64,9 @@
 </p>
 
 ### 覆盖手机的 41 个工具
+
+> 下表是 Termux 完整运行时（41 = 39 内置 + `remember_fact`/`read_skill` 两个运行时注册）。
+> 独立 APK 的 37 个原生工具覆盖其中绝大多数；差额是上面「有三件事做不到」里的那几项。
 
 | 分组 | 数量 | 例子 |
 |---|---|---|
@@ -102,9 +106,14 @@ Python 或 Node**。需要完整 41 工具运行时时才用 Termux：`termux/in
 
 ### 重启也不会丢的定时任务
 
-任务落在 SQLite，启动时恢复。触发器支持 `interval`、`cron`，以及**电量条件**
-（`battery < 20`）。内置四个配方——低电量提醒、每日总结、每日天气、午餐提醒——
-一键实例化。任务可以「立即执行」，不必等触发点，这也是确认任务真的能跑通的唯一办法。
+APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落在 SQLite。
+触发器支持 `interval`、`cron`（5 字段，含区间/列表/步长）与一次性 `date`，
+外加**电量条件**（`battery < 20`）。内置四个配方——低电量提醒、每日总结、
+每日天气、午餐提醒——一键实例化。
+
+关键是三个容易被糊弄的点，这里都做了：**锁屏后照样触发**（`setExactAndAllowWhileIdle`
+撑过 Doze）、**重启后自动重排**（`BOOT_COMPLETED` 重放全部闹钟）、**触发后自动排下一次**。
+任务可以「立即执行」，不必等触发点，这也是确认任务真的能跑通的唯一办法。
 
 <p align="center">
   <img src="assets/screenshots/07-timers.png" width="880" alt="定时任务与配方模板" />
@@ -145,9 +154,16 @@ Python 或 Node**。需要完整 41 工具运行时时才用 Termux：`termux/in
 - **`run_shell` 是任意代码执行**，一旦批准就生效。看清命令再点。
 - **局域网模式**（`--lan`）意味着任何拿到令牌的设备都能调用全部端点，包括 shell。
   无令牌时它拒绝启动。不要在不可信网络开启；公网暴露请在前面加 HTTPS（见 `DEPLOY.md`）。
-- **设备能力有差异。** 短信、电话、定位、传感器、电量、相机需要真机 + `termux-api`。
+- **设备能力有差异。** 短信、电话、定位、传感器、电量、相机需要真机；
+  Termux 运行时经 `termux-api`，原生运行时直接走 Android API。
   聊天、文件、记忆、清单与调度在任何环境都能用。查
   [docs/capability-matrix.md](docs/capability-matrix.md) 或在设备上跑 `GET /api/diagnostics`。
+- **原生 shell 不是 Termux。** `run_shell` 跑 `/system/bin/sh`，身份是应用自己的 uid：
+  没有 root、没有 `pkg`/`apt`、只有 toybox 的命令子集、没有 Python/Node。
+  诊断页把它标成 `restricted` 而不是 `ok`。
+- **有三件事做不到，且不打算做。** 应用内开关 WiFi（Android 10+ 禁止）、
+  离线 TTS 模型（数百 MB）、`subagent`（成本权衡）。见
+  [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
 - **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell）。** 核心功能不装 Termux 即可用；
   MCP、Telegram 与技能目录仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
 
