@@ -77,9 +77,9 @@ class EngineContractTest {
         AgentLoop.appContext = { context }
         fakeLlm = FakeLlm(SettingsStore.LlmConfig("http://fake.local", "sk-test", "fake-model", 0.7, 2048))
         val loop = AgentLoop(store, settings, approval) { fakeLlm }
-        router = ApiRouter(context, store, settings, approval, loop) {
+        router = ApiRouter(context, store, settings, approval, loop, {
             engine?.takeIf { it.state == EngineState.RUNNING }
-        }
+        }, NativeScheduler(context, store, loop))
         engine = NativeEngine(0, router)
         assertTrue("引擎应启动成功", engine.start())
     }
@@ -324,5 +324,151 @@ class EngineContractTest {
     fun `未实现的 api 路径 fail-closed 503`() {
         bootstrap()
         assertEquals(503, get("/api/never-implemented").code)
+    }
+
+    // ---------- 定时任务（1.5：原生 AlarmManager 调度） ----------
+
+    @Test
+    fun `定时任务 CRUD - 创建校验表达式与非法输入`() {
+        bootstrap()
+        // 缺字段 → 400
+        assertEquals(400, send("POST", "/api/jobs", "{}").code)
+        // 非法 cron → 400
+        assertEquals(400, send("POST", "/api/jobs", JSONObject()
+            .put("name", "坏任务").put("trigger_type", "cron").put("expr", "not a cron")
+            .put("message", "x").toString()).code)
+        // 非法 interval（inf）→ 400
+        assertEquals(400, send("POST", "/api/jobs", JSONObject()
+            .put("name", "坏间隔").put("trigger_type", "interval").put("expr", "inf")
+            .put("message", "x").toString()).code)
+
+        val created = send("POST", "/api/jobs", JSONObject()
+            .put("name", "每日总结").put("trigger_type", "cron").put("expr", "0 8 * * *")
+            .put("message", "总结昨天").toString())
+        assertEquals(200, created.code)
+        val job = JSONObject(created.body)
+        val id = job.getString("id")
+        assertTrue("应算出下次触发时间", !job.isNull("next_run"))
+
+        val list = JSONObject(get("/api/jobs").body).getJSONArray("jobs")
+        assertEquals(1, list.length())
+        assertEquals("每日总结", list.getJSONObject(0).getString("name"))
+
+        val off = JSONObject(send("PUT", "/api/jobs/$id",
+            JSONObject().put("enabled", false).toString()).body)
+        assertEquals(false, off.getBoolean("enabled"))
+        assertTrue("停用后无下次触发", off.isNull("next_run"))
+
+        assertEquals(200, send("DELETE", "/api/jobs/$id", null).code)
+        assertEquals(0, JSONObject(get("/api/jobs").body).getJSONArray("jobs").length())
+        assertEquals(404, send("DELETE", "/api/jobs/$id", null).code)
+    }
+
+    @Test
+    fun `定时任务 - 配方可列出且可应用`() {
+        bootstrap()
+        val recipes = JSONObject(get("/api/recipes").body).getJSONArray("recipes")
+        assertEquals(4, recipes.length())
+        assertTrue("配方应带 applied 字段", recipes.getJSONObject(0).has("applied"))
+
+        val applied = send("POST", "/api/recipes/daily_summary/apply", "{}")
+        assertEquals(200, applied.code)
+        val job = JSONObject(applied.body)
+        assertEquals("每日总结", job.getString("name"))
+        assertEquals("0 8 * * *", job.getString("expr"))
+
+        val again = JSONObject(get("/api/recipes").body).getJSONArray("recipes")
+        val ds = (0 until again.length()).map { again.getJSONObject(it) }
+            .first { it.getString("id") == "daily_summary" }
+        assertEquals(true, ds.getBoolean("applied"))
+
+        assertEquals(404, send("POST", "/api/recipes/nope/apply", "{}").code)
+    }
+
+    @Test
+    fun `定时任务 - 立即执行一次会把消息写进会话`() {
+        bootstrap()
+        val sid = newSession()
+        val created = JSONObject(send("POST", "/api/jobs", JSONObject()
+            .put("name", "手动跑").put("trigger_type", "interval").put("expr", "3600")
+            .put("message", "现在跑一次").put("session_id", sid).toString()).body)
+        val id = created.getString("id")
+
+        assertEquals(200, send("POST", "/api/jobs/$id/run", "{}").code)
+        // 后台线程执行：轮询等 user 消息落库
+        var found = false
+        for (i in 0 until 100) {
+            Thread.sleep(100)
+            val msgs = JSONArray(get("/api/sessions/$sid/messages").body)
+            found = (0 until msgs.length()).any {
+                msgs.getJSONObject(it).getString("role") == "user" &&
+                    msgs.getJSONObject(it).getString("content") == "现在跑一次"
+            }
+            if (found) break
+        }
+        assertTrue("立即执行应把任务消息写进目标会话", found)
+    }
+
+    // ---------- 撤销（1.5：写/删前自动备份） ----------
+
+    @Test
+    fun `撤销 - 覆盖写可还原，重复撤销被拒绝`() {
+        bootstrap()
+        configureLlm(permissionMode = "auto")
+        val sid = newSession()
+        val target = java.io.File(context.filesDir, "undo-demo.txt")
+        target.writeText("原始内容")
+
+        fakeLlm.turns.addLast(FakeTurn(calls = listOf(
+            Triple("call-w1", "write_file", "{\"path\":\"undo-demo.txt\",\"content\":\"新内容\"}"))))
+        fakeLlm.turns.addLast(FakeTurn(text = "已写入"))
+        val resp = send("POST", "/api/chat",
+            JSONObject().put("session_id", sid).put("message", "改一下文件").toString())
+        assertTrue("写入应成功：${resp.body.take(200)}", resp.body.contains("\"status\":\"completed\""))
+        assertTrue("应标记可撤销", resp.body.contains("\"undoable\":true"))
+        assertEquals("新内容", target.readText())
+
+        val undone = JSONObject(send("POST", "/api/undo",
+            JSONObject().put("session_id", sid).put("tool_call_id", "call-w1").toString()).body)
+        assertTrue("撤销应成功：$undone", undone.has("ok"))
+        assertEquals("原始内容", target.readText())
+
+        val twice = JSONObject(send("POST", "/api/undo",
+            JSONObject().put("session_id", sid).put("tool_call_id", "call-w1").toString()).body)
+        assertTrue("重复撤销应报错：$twice", twice.has("error"))
+    }
+
+    @Test
+    fun `撤销 - 无备份的调用返回错误而不是崩溃`() {
+        bootstrap()
+        val r = JSONObject(send("POST", "/api/undo",
+            JSONObject().put("session_id", "nope").put("tool_call_id", "nope").toString()).body)
+        assertTrue(r.has("error"))
+        assertEquals(400, send("POST", "/api/undo", "{}").code)
+    }
+
+    // ---------- run_shell（1.5：原生 /system/bin/sh） ----------
+
+    @Test
+    fun `run_shell - 原生可执行并返回退出码与输出`() {
+        bootstrap()
+        val env = com.pocket.agent.tools.DeviceEnv(context, store, "")
+        val tool = com.pocket.agent.tools.ToolRegistry.byName("run_shell")!!
+        val r = tool.handler(JSONObject().put("command", "echo pm-shell-ok"), env)
+        assertFalse("原生 shell 不应再返回 capability_unavailable：$r",
+            r.optString("error_code") == "capability_unavailable")
+        assertEquals("退出码应为 0：$r", 0, r.optInt("exit_code", -99))
+        assertTrue("stdout 应含命令输出：$r", r.optString("stdout").contains("pm-shell-ok"))
+        assertTrue(r.optBoolean("ok"))
+    }
+
+    @Test
+    fun `run_shell - 非零退出码如实上报`() {
+        bootstrap()
+        val env = com.pocket.agent.tools.DeviceEnv(context, store, "")
+        val r = com.pocket.agent.tools.ToolRegistry.byName("run_shell")!!
+            .handler(JSONObject().put("command", "exit 3"), env)
+        assertEquals("非零退出码应原样返回：$r", 3, r.optInt("exit_code", -99))
+        assertFalse("非零退出不应报 ok", r.optBoolean("ok"))
     }
 }

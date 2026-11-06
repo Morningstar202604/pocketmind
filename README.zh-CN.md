@@ -148,8 +148,8 @@ Python 或 Node**。需要完整 41 工具运行时时才用 Termux：`termux/in
 - **设备能力有差异。** 短信、电话、定位、传感器、电量、相机需要真机 + `termux-api`。
   聊天、文件、记忆、清单与调度在任何环境都能用。查
   [docs/capability-matrix.md](docs/capability-matrix.md) 或在设备上跑 `GET /api/diagnostics`。
-- **APK 自带原生 Kotlin 引擎（1.4.0 起）。** 核心功能不装 Termux 即可用；
-  原生调度器、MCP 与 Termux 可选桥是 1.5 的切片——见 [ROADMAP.md](ROADMAP.md)。
+- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell）。** 核心功能不装 Termux 即可用；
+  MCP、Telegram 与技能目录仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
 
 ## 安装
 
@@ -163,10 +163,16 @@ bash scripts/build-apk.sh            # debug APK，已校验、可直接安装
 bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签名件
 ```
 
-原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、26 个
-手机/文件/知识库工具（Android API 直调）、会话、导出导入、搜索。
-暂未覆盖且会**明确告知**（不伪成功）：shell 命令、定时任务、MCP、Telegram。
-需要这些请用方案 B。
+原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、37 个
+手机/文件/知识库/系统工具（Android API 直调）、会话、导出导入、搜索、
+定时任务（AlarmManager + cron/间隔/一次性，锁屏与重启后仍生效）、
+文件写删的可撤销备份、开机自启。仍属 Termux 专属并会**明确告知**
+（不伪成功）：MCP、Telegram 网关、技能目录、子代理。需要这些请用方案 B。
+
+> **原生 shell 的边界**：`run_shell` 跑的是系统的 `/system/bin/sh`，身份是
+> 应用自己的 uid——没有 root，没有 `pkg`/`apt`，只有 toybox 提供的命令子集，
+> 也没有 Python/Node。能做的事很多（文件、文本处理、调用系统二进制），
+> 但不要期待一个 Termux 环境。诊断页会把它标成 `restricted` 而不是 `ok`。
 
 ### 方案 B —— Termux 完整 41 工具运行时
 

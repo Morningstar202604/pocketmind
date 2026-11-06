@@ -334,13 +334,60 @@ class AgentLoop(
         } catch (e: Exception) {
             err("工具执行异常：${e.message}")
         }
+        // 撤销凭证从工具结果里剥离单独登记（与 Python `_ckpt` 约定一致）：
+        // 留在 result 里会被模型当成"备份路径"复述给用户，也不该进上下文。
+        val undoable = registerCheckpoint(sessionId, tid, name, result)
         val status = if (result.has("error") || result.has("error_code")) "failed" else "completed"
-        sse.send(JSONObject().put("type", "tool_update").put("id", tid).put("name", name)
-            .put("status", status).put("result", result).toString())
+        val update = JSONObject().put("type", "tool_update").put("id", tid).put("name", name)
+            .put("status", status).put("result", result)
+        if (undoable) update.put("undoable", true)
+        sse.send(update.toString())
         val text = result.toString()
         messages.put(JSONObject().put("role", "tool").put("tool_call_id", tid).put("content", text))
         store.addMessage(sessionId, "tool", text,
             JSONObject().put("tool_call_id", tid).put("name", name).put("status", status))
+    }
+
+    /** 从工具结果里取出 `_ckpt` 并落库；返回该调用是否可撤销。 */
+    private fun registerCheckpoint(sessionId: String, toolCallId: String, toolName: String, result: JSONObject): Boolean {
+        val ck = result.optJSONObject("_ckpt") ?: return false
+        result.remove("_ckpt")
+        return try {
+            store.recordCheckpoint(
+                sessionId, toolCallId, toolName,
+                ck.optString("path"), ck.optString("backup"), ck.optString("kind", "overwrite")
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 撤销一次文件操作：把备份拷回原路径。
+     *
+     * kind（overwrite / restore）都归结为「写回备份」，差别只在语义来源：
+     * 前者是被覆盖前备份，后者是被删除前备份。目录不清空——原生版本只备份单文件。
+     */
+    fun undo(sessionId: String, toolCallId: String): JSONObject {
+        val ck = store.findCheckpoint(sessionId, toolCallId)
+            ?: return JSONObject().put("error", "没有可撤销的操作（可能未备份或记录已删除）")
+        if (ck.optBoolean("undone")) return JSONObject().put("error", "该操作已撤销过")
+        val backup = java.io.File(ck.optString("backup"))
+        if (!backup.isFile) return JSONObject().put("error", "备份文件已丢失，无法撤销")
+        return try {
+            val target = java.io.File(ck.optString("path"))
+            target.parentFile?.mkdirs()
+            if (target.exists() && !target.delete()) {
+                return JSONObject().put("error", "目标文件被占用，无法还原")
+            }
+            backup.copyTo(target, overwrite = true)
+            store.markCheckpointUndone(ck.optLong("id"))
+            JSONObject().put("ok", true).put("restored", target.absolutePath)
+                .put("tool", ck.optString("tool"))
+        } catch (e: Exception) {
+            JSONObject().put("error", "撤销失败：${e.message}")
+        }
     }
 
     private fun needsAsk(risk: String, mode: String): Boolean =

@@ -46,10 +46,42 @@ class Store(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERS
             "CREATE TABLE facts(" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, created_at REAL NOT NULL)"
         )
+        db.execSQL(
+            "CREATE TABLE jobs(" +
+                "id TEXT PRIMARY KEY, name TEXT NOT NULL, trigger_type TEXT NOT NULL, " +
+                "expr TEXT NOT NULL, message TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', " +
+                "condition TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, " +
+                "created_at REAL NOT NULL, last_run REAL NOT NULL DEFAULT 0)"
+        )
+        db.execSQL(
+            "CREATE TABLE checkpoints(" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
+                "tool_call_id TEXT NOT NULL, tool_name TEXT NOT NULL, path TEXT NOT NULL, " +
+                "backup TEXT NOT NULL, kind TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0, " +
+                "created_at REAL NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX idx_ckpt_call ON checkpoints(session_id, tool_call_id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // v1 是首个 schema；未来迁移在此按 oldVersion 分支。
+        // v1 → v2：定时任务（原生调度器）与撤销检查点两处功能各加一张表。
+        if (oldVersion < 2) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS jobs(" +
+                    "id TEXT PRIMARY KEY, name TEXT NOT NULL, trigger_type TEXT NOT NULL, " +
+                    "expr TEXT NOT NULL, message TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', " +
+                    "condition TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, " +
+                    "created_at REAL NOT NULL, last_run REAL NOT NULL DEFAULT 0)"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS checkpoints(" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
+                    "tool_call_id TEXT NOT NULL, tool_name TEXT NOT NULL, path TEXT NOT NULL, " +
+                    "backup TEXT NOT NULL, kind TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0, " +
+                    "created_at REAL NOT NULL)"
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_ckpt_call ON checkpoints(session_id, tool_call_id)")
+        }
     }
 
     // ---------- 会话 ----------
@@ -355,9 +387,108 @@ class Store(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERS
                 .put("messages", messages).put("knowledge", knowledge).put("todos", 0))
     }
 
+    // ---------- 定时任务 ----------
+
+    fun listJobs(): JSONArray {
+        val out = JSONArray()
+        readableDatabase.rawQuery(
+            "SELECT id, name, trigger_type, expr, message, session_id, condition, enabled, created_at, last_run " +
+                "FROM jobs ORDER BY created_at", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.put(
+                    JSONObject()
+                        .put("id", c.getString(0)).put("name", c.getString(1))
+                        .put("trigger_type", c.getString(2)).put("expr", c.getString(3))
+                        .put("message", c.getString(4)).put("session_id", c.getString(5))
+                        .put("condition", c.getString(6)).put("enabled", c.getInt(7) == 1)
+                        .put("created_at", c.getDouble(8)).put("last_run", c.getDouble(9))
+                )
+            }
+        }
+        return out
+    }
+
+    fun getJob(id: String): JSONObject? {
+        val arr = listJobs()
+        for (i in 0 until arr.length()) {
+            val j = arr.optJSONObject(i) ?: continue
+            if (j.optString("id") == id) return j
+        }
+        return null
+    }
+
+    fun insertJob(job: JSONObject): JSONObject {
+        val id = job.optString("id").ifEmpty { newId() }
+        val cv = android.content.ContentValues().apply {
+            put("id", id)
+            put("name", job.optString("name").take(60))
+            put("trigger_type", job.optString("trigger_type", "interval"))
+            put("expr", job.optString("expr"))
+            put("message", job.optString("message"))
+            put("session_id", job.optString("session_id"))
+            put("condition", job.optString("condition"))
+            put("enabled", if (job.optBoolean("enabled", true)) 1 else 0)
+            put("created_at", now())
+            put("last_run", 0.0)
+        }
+        writableDatabase.insert("jobs", null, cv)
+        return getJob(id) ?: job.put("id", id)
+    }
+
+    /** 部分更新：只写传入的字段，避免 PUT 只带 enabled 时把 expr 清空。 */
+    fun updateJob(id: String, patch: JSONObject): JSONObject? {
+        val cv = android.content.ContentValues()
+        for (k in arrayOf("name", "trigger_type", "expr", "message", "session_id", "condition")) {
+            if (patch.has(k)) cv.put(k, patch.optString(k))
+        }
+        if (patch.has("enabled")) cv.put("enabled", if (patch.optBoolean("enabled")) 1 else 0)
+        if (cv.size() > 0) writableDatabase.update("jobs", cv, "id = ?", arrayOf(id))
+        return getJob(id)
+    }
+
+    fun markJobRun(id: String) {
+        val cv = android.content.ContentValues().apply { put("last_run", now()) }
+        writableDatabase.update("jobs", cv, "id = ?", arrayOf(id))
+    }
+
+    fun deleteJob(id: String): Boolean = writableDatabase.delete("jobs", "id = ?", arrayOf(id)) > 0
+
+    // ---------- 检查点（撤销） ----------
+
+    fun recordCheckpoint(sessionId: String, toolCallId: String, toolName: String,
+                         path: String, backup: String, kind: String) {
+        val cv = android.content.ContentValues().apply {
+            put("session_id", sessionId); put("tool_call_id", toolCallId); put("tool_name", toolName)
+            put("path", path); put("backup", backup); put("kind", kind)
+            put("undone", 0); put("created_at", now())
+        }
+        writableDatabase.insert("checkpoints", null, cv)
+    }
+
+    /** 找某次工具调用的最新未撤销备份；没有则 null。 */
+    fun findCheckpoint(sessionId: String, toolCallId: String): JSONObject? =
+        readableDatabase.rawQuery(
+            "SELECT id, tool_name, path, backup, kind, undone FROM checkpoints " +
+                "WHERE session_id = ? AND tool_call_id = ? ORDER BY id DESC LIMIT 1",
+            arrayOf(sessionId, toolCallId)
+        ).use { c ->
+            if (c.moveToFirst()) {
+                JSONObject()
+                    .put("id", c.getLong(0)).put("tool", c.getString(1)).put("path", c.getString(2))
+                    .put("backup", c.getString(3)).put("kind", c.getString(4))
+                    .put("undone", c.getInt(5) == 1)
+            } else null
+        }
+
+    fun markCheckpointUndone(id: Long) {
+        val cv = android.content.ContentValues().apply { put("undone", 1) }
+        writableDatabase.update("checkpoints", cv, "id = ?", arrayOf(id.toString()))
+    }
+
     companion object {
         private const val DB_NAME = "pocketmind.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
 
         fun newId(): String {
             val chars = "abcdefghijklmnopqrstuvwxyz0123456789"

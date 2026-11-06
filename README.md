@@ -26,7 +26,7 @@ files — as structured tools, and it asks you before it does anything destructi
 Everything it remembers stays on the device. Only inference leaves it.
 
 ```
-You ──▶ APK ──▶ Kotlin native engine ──▶ 26 native tools ──▶ your phone
+You ──▶ APK ──▶ Kotlin native engine ──▶ 37 native tools ──▶ your phone
                         │
                         └──▶ your LLM endpoint (inference only)
 
@@ -44,10 +44,11 @@ Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s
 
 ## The parts that matter
 
-> Scope: approvals, structured results, backups, Plan/Act and usage stats exist in
-> both runtimes. **41 tools, scheduled jobs, MCP and Telegram belong to the Termux
-> full runtime**; the standalone APK ships 26 native tools and reports unsupported
-> capabilities explicitly instead of faking success.
+> Scope: approvals, structured results, backups, Plan/Act, usage stats and the
+> scheduler exist in both runtimes. **41 tools, MCP, Telegram and the skills
+> directory belong to the Termux full runtime**; the standalone APK ships 37
+> native tools and reports unsupported capabilities explicitly instead of faking
+> success.
 
 ### Approval is a security boundary, not a dialog
 
@@ -169,9 +170,12 @@ limits:
   real Android phone with `termux-api`. Chat, files, memory, todos and the scheduler
   work anywhere. Check [docs/capability-matrix.md](docs/capability-matrix.md) or
   `GET /api/diagnostics` on your device.
-- **The APK ships a native Kotlin engine (since 1.4.0).** Core features run
-  without Termux; a fully native Android scheduler, MCP and Termux-provider
-  bridge are the 1.5 slices — see [ROADMAP.md](ROADMAP.md).
+- **The APK ships a native Kotlin engine (since 1.4.0; scheduler and shell since
+  1.5.0).** Core features run without Termux. MCP, the Telegram gateway and the
+  skills directory stay Termux-only — see [ROADMAP.md](ROADMAP.md).
+- **The native shell is not Termux.** `run_shell` runs `/system/bin/sh` as the
+  app's own uid: no root, no `pkg`/`apt`, only the toybox command subset, no
+  Python or Node. Diagnostics reports it as `restricted`, not `ok`.
 
 ## Install
 
@@ -186,10 +190,12 @@ bash scripts/build-apk.sh --release  # unsigned unless keystore.properties is pr
 ```
 
 What the native engine covers today: chat (SSE), all three permission modes,
-server-enforced approvals, 26 phone/file/knowledge tools via Android APIs,
-sessions, export/import, search. What it deliberately does not do yet (the app
-says so explicitly instead of faking it): shell commands, scheduled jobs, MCP,
-Telegram. For those, use Option B.
+server-enforced approvals, 37 phone/file/knowledge/system tools via Android
+APIs, sessions, export/import, search, a real `/system/bin/sh`, and scheduled
+jobs (AlarmManager with cron/interval/one-shot triggers that survive screen
+lock and reboot), plus undoable file writes and deletes. What stays Termux-only
+(the app says so explicitly instead of faking it): MCP, the Telegram gateway,
+the skills directory and the subagent. For those, use Option B.
 
 ### Option B — on your phone with Termux (full 41-tool runtime)
 
