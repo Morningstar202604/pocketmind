@@ -68,9 +68,11 @@
 | GET | `/api/workspace/git?cwd=` | 兼容旧接口：原始分支/status/diffstat 文本 |
 | GET | `/api/workspace/git/status?cwd=` | 结构化 Git 状态：branch、clean、ahead/behind、merging、files、branches、conflicts |
 | POST | `/api/workspace/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
-| POST | `/api/workspace/git/merge/preview` | 进入两阶段合并 `{cwd,branch}`，返回冲突列表与状态 |
-| POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态 |
-| POST | `/api/workspace/git/merge/commit` | 提交合并 `{cwd,message}`；还有未解决冲突则 409 |
+| POST | `/api/workspace/git/merge/preview` | 进入两阶段合并 `{cwd,branch}`，返回冲突列表、状态与 premerge 检查点 |
+| POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态并清理检查点 |
+| POST | `/api/workspace/git/merge/commit` | 提交合并 `{cwd,message}`；返回检查点；还有未解决冲突则 409 |
+| GET | `/api/workspace/git/merge/checkpoint` | 查询当前 premerge 检查点 |
+| POST | `/api/workspace/git/merge/undo` | 把已提交的双亲合并 reset 回检查点；脏工作区/非合并提交 409 |
 | GET | `/api/workspace/git/conflicts?cwd=` | 读取 base/ours/theirs/工作区文本 |
 | POST | `/api/workspace/git/conflicts/resolve` | 解决单个冲突：`ours` / `theirs` / `manual`，并 `git add` |
 | POST | `/api/workspace/patch` | 应用 unified diff；默认 `dry_run=true` 只预检 |

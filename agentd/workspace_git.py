@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from .paths import workspace_dir
@@ -236,6 +237,77 @@ def checkout(cwd: str, branch: str, create: bool = False) -> dict:
     return {"ok": True, "branch": branch, "changed": True, "output": r.get("stdout", "")}
 
 
+_CHECKPOINT_FILE = "pocketmind-premerge"
+_CHECKPOINT_REF_RE = re.compile(r"^refs/pocketmind/premerge/[A-Za-z0-9._-]{1,120}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _checkpoint_path(repo: Path) -> Path:
+    return Path(repo) / ".git" / _CHECKPOINT_FILE
+
+
+def create_merge_checkpoint(repo: Path) -> dict | None:
+    """在真正 merge 前钉一个 ref；没有 HEAD（空仓库）时不创建。"""
+    head = _git(repo, ["rev-parse", "HEAD"])
+    if not head["ok"]:
+        return None
+    sha = head["stdout"].strip()
+    if not _SHA_RE.match(sha):
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    ref = f"refs/pocketmind/premerge/{stamp}-{os.getpid()}"
+    r = _git(repo, ["update-ref", ref, sha])
+    if not r["ok"]:
+        raise GitOperationError("无法创建合并前检查点", detail=r.get("stderr", ""), status=409)
+    _checkpoint_path(repo).write_text(f"{ref}\n{sha}\n", encoding="utf-8")
+    return {"ref": ref, "sha": sha, "short": sha[:8]}
+
+
+def read_merge_checkpoint(repo: Path) -> dict | None:
+    path = _checkpoint_path(repo)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    if len(lines) < 2:
+        return None
+    ref, sha = lines[0].strip(), lines[1].strip()
+    if not _CHECKPOINT_REF_RE.match(ref) or not _SHA_RE.match(sha):
+        return None
+    current = _git(repo, ["rev-parse", ref])
+    if not current["ok"] or current["stdout"].strip() != sha:
+        return None
+    return {"ref": ref, "sha": sha, "short": sha[:8]}
+
+
+def clear_merge_checkpoint(repo: Path) -> None:
+    cp = read_merge_checkpoint(repo)
+    if cp:
+        _git(repo, ["update-ref", "-d", cp["ref"]])
+    try:
+        _checkpoint_path(repo).unlink()
+    except OSError:
+        pass
+
+
+def undo_merge(cwd: str) -> dict:
+    """把已提交的合并重置回 premerge ref；只允许干净工作区上的双亲提交。"""
+    repo = open_repo(cwd)
+    cp = read_merge_checkpoint(repo)
+    if not cp:
+        raise GitOperationError("没有可撤销的合并检查点", status=409)
+    if _porcelain(repo):
+        raise GitOperationError("工作区有未提交改动，先提交/stash 再撤销合并", status=409)
+    parents = _git(repo, ["rev-list", "--parents", "-n", "1", "HEAD"])
+    if not parents["ok"] or len(parents["stdout"].strip().split()) < 3:
+        raise GitOperationError("当前 HEAD 不是合并提交，拒绝 reset", status=409)
+    r = _git(repo, ["reset", "--hard", cp["sha"]])
+    if not r["ok"]:
+        raise GitOperationError("撤销合并失败", detail=r.get("stderr", ""), status=409)
+    clear_merge_checkpoint(repo)
+    return {"ok": True, "checkpoint": cp, "state": status(str(repo))}
+
+
 def merge_preview(cwd: str, branch: str) -> dict:
     repo = open_repo(cwd)
     branch = _validate_branch(branch)
@@ -246,11 +318,13 @@ def merge_preview(cwd: str, branch: str) -> dict:
         raise GitOperationError("已有未完成的合并，先继续提交或中止", status=409)
     if _porcelain(repo):
         raise GitOperationError("工作区有未提交改动，先提交或 stash 后再合并", status=409)
+    checkpoint = create_merge_checkpoint(repo)
     # 真实进入 MERGING 状态；冲突文件会留在工作区，UI 用 abort 退出。
     r = _git(repo, ["merge", "--no-commit", "--no-ff", "--no-edit", branch])
     state = status(str(repo))
     return {
         "ok": bool(r["ok"]),
+        "checkpoint": checkpoint,
         "merge_exit": r["exit_code"],
         "branch": branch,
         "clean": not state["conflicts"],
@@ -265,10 +339,12 @@ def merge_abort(cwd: str) -> dict:
     repo = open_repo(cwd)
     if not _merging(repo):
         raise GitOperationError("当前没有进行中的合并", status=409)
+    cp = read_merge_checkpoint(repo)
     r = _git(repo, ["merge", "--abort"])
     if not r["ok"]:
         raise GitOperationError("中止合并失败", detail=r.get("stderr", ""), status=409)
-    return {"ok": True, "state": status(str(repo))}
+    clear_merge_checkpoint(repo)
+    return {"ok": True, "checkpoint": cp, "state": status(str(repo))}
 
 
 def merge_commit(cwd: str, message: str = "") -> dict:
@@ -280,10 +356,11 @@ def merge_commit(cwd: str, message: str = "") -> dict:
     msg = (message or "").strip() or "Merge branch"
     if len(msg) > 500:
         raise GitOperationError("提交说明过长")
+    cp = read_merge_checkpoint(repo)
     r = _git(repo, ["commit", "-m", msg])
     if not r["ok"]:
         raise GitOperationError("提交合并失败", detail=r.get("stderr") or r.get("stdout", ""), status=409)
-    return {"ok": True, "output": r.get("stdout", ""), "state": status(str(repo))}
+    return {"ok": True, "output": r.get("stdout", ""), "checkpoint": cp, "state": status(str(repo))}
 
 
 def log(cwd: str = ".", limit: int = 10, path: str = "") -> dict:

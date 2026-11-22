@@ -184,6 +184,7 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p38 M1.1 代码工具与工作区任务（编辑/Git/变更撤销/后台取消/PTY 复用）" run_py smoke/p38_m11_test.py
   step "p39 M1.2 文件锁与 Git 合并（分支/冲突/patch）" run_py smoke/p39_m12_test.py
   step "p40 Agent Harness（单轮预算/重复调用/非法参数/原子写/Git 工具）" run_py smoke/p40_harness_test.py
+  step "p41 合并检查点（预合并 ref/撤销/中止清理）" run_py smoke/p41_merge_checkpoint_test.py
   step "版本一致性（main.py / package.json / gradle.properties）" run_py tests/check_version.py
   if [ "$WITH_DEP_AUDIT" = 1 ]; then
     step "p22 依赖漏洞扫描（OSV.dev，需外网）" run_py smoke/p22_dep_audit_test.py

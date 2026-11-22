@@ -29,7 +29,7 @@ from ..paths import workspace_dir
 from ..tools.files import _resolve
 from ..tools.shell import run_shell
 from ..workspace_changes import get_store
-from ..workspace_git import GitOperationError, GitUnavailable, open_repo
+from ..workspace_git import GitOperationError, GitUnavailable, open_repo, read_merge_checkpoint
 from ..workspace_git import apply_patch as git_apply_patch
 from ..workspace_git import checkout as git_checkout
 from ..workspace_git import conflicts as git_conflicts
@@ -38,6 +38,7 @@ from ..workspace_git import merge_commit as git_merge_commit
 from ..workspace_git import merge_preview as git_merge_preview
 from ..workspace_git import resolve_conflict as git_resolve_conflict
 from ..workspace_git import status as git_status
+from ..workspace_git import undo_merge as git_undo_merge
 from ..workspace_locks import WorkspaceLockBusy, hold
 from ..workspace_tasks import get_manager
 
@@ -621,6 +622,24 @@ async def abort_merge(body: GitMergeCommitBody) -> dict:
 async def commit_merge(body: GitMergeCommitBody) -> dict:
     try:
         return await asyncio.to_thread(git_merge_commit, body.cwd, body.message)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.get("/git/merge/checkpoint")
+async def get_merge_checkpoint(cwd: str = Query(".")) -> dict:
+    try:
+        repo = await asyncio.to_thread(open_repo, cwd)
+        cp = await asyncio.to_thread(read_merge_checkpoint, repo)
+        return {"ok": True, "checkpoint": cp}
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/merge/undo")
+async def undo_merge(body: GitMergeCommitBody) -> dict:
+    try:
+        return await asyncio.to_thread(git_undo_merge, body.cwd)
     except Exception as exc:  # noqa: BLE001
         raise _git_http_error(exc) from None
 

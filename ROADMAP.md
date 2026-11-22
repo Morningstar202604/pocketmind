@@ -21,6 +21,7 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Plan / Act agent modes | shipped | Both runtimes (native plan-approve via resend). |
 | Agent harness baseline (1.6.x) | shipped | Wall-clock budget, repeated-tool guard, malformed-argument rejection, hard context fit, atomic writes, agent-facing Git/patch tools; Python p40 + native HarnessTest. |
 | Native skills directory (1.6.x) | shipped | `filesDir/skills/<name>/SKILL.md` scanning, system-prompt index, on-demand `read_skill`, `/api/skills`; progressive disclosure on both runtimes. |
+| Merge checkpoint (1.6.x) | shipped | `refs/pocketmind/premerge/*` pinned before `git merge`; committed merge can be reset, abort clears it; `/api/workspace/git/merge/checkpoint` + `/undo`. |
 | Runtime permission flow (1.6.x) | shipped | Tool errors carry exact permission names; foreground Activity shows the system dialog; tool card has one-tap grant; background calls fail with `no_activity`. |
 | Backup export / import | shipped | `format_version` stamped on both runtimes; bundles are cross-compatible. |
 | MCP stdio server / Telegram gateway | Python only | Native engine degrades explicitly. |
@@ -35,6 +36,9 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Item | Status | Notes |
 |---|---|---|
 | MCP client/server over the native engine | exploring | stdio is Termux-bound; evaluate in-app socket transport. |
+| Native workspace API (tree/edit/search/terminal) | planned | APK has file tools but no `/api/workspace` surface yet; WorkspacePage stays Python-only. |
+| Three-way block conflict resolution + changeset aggregation | planned | Current conflict resolve is whole-file; multi-tool results are not grouped into one changeset. |
+| Background-task output streaming | planned | `/api/workspace/tasks/{id}` returns a snapshot; long tasks do not stream incrementally. |
 
 
 ## Not planned — platform limits

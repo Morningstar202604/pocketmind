@@ -57,6 +57,10 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
   `todo_read`; registered in `tests/run_all.sh`. The native `HarnessTest.kt`
   adds 4 Robolectric cases (invalid JSON, repeat guard, turn wall-clock,
   settings clamping); the native suite is now 70/70, including M1.4 skills and M1.5 permission coverage.
+- **M1.6 merge checkpoint**: `merge_preview` pins a `refs/pocketmind/premerge/*`
+ref before touching the worktree; `merge_commit` keeps it, `merge_abort` clears it,
+and `POST /api/workspace/git/merge/undo` resets a committed two-parent merge
+back to that ref. `p41` covers 15 cases (ref, query, commit, undo, abort, refusal).
 - **M1.5 runtime permission flow**: tools now return `permission_required` with
 the exact Android permission names; a `PermissionBroker` posts the system dialog
 from the foreground Activity, `/api/permissions` reports state, and the tool card

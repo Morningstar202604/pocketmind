@@ -435,6 +435,11 @@ export interface WorkspaceConflict {
   theirs: string;
   work: string;
 }
+export interface WorkspaceCheckpoint {
+  ref: string;
+  sha: string;
+  short: string;
+}
 export interface WorkspaceMergeResult {
   ok: boolean;
   branch?: string;
@@ -444,6 +449,7 @@ export interface WorkspaceMergeResult {
   stderr?: string;
   state?: WorkspaceGitStatus;
   output?: string;
+  checkpoint?: WorkspaceCheckpoint | null;
 }
 export interface WorkspaceChange {
   id: string;
@@ -521,9 +527,19 @@ export const checkoutWorkspaceBranch = (cwd: string, branch: string, create = fa
 export const previewWorkspaceMerge = (cwd: string, branch: string) =>
   api.post<WorkspaceMergeResult>("/api/workspace/git/merge/preview", { cwd, branch });
 export const abortWorkspaceMerge = (cwd: string) =>
-  api.post<{ ok: boolean; state: WorkspaceGitStatus }>("/api/workspace/git/merge/abort", { cwd });
+  api.post<{ ok: boolean; checkpoint?: WorkspaceCheckpoint | null; state: WorkspaceGitStatus }>(
+    "/api/workspace/git/merge/abort", { cwd }
+  );
 export const commitWorkspaceMerge = (cwd: string, message: string) =>
   api.post<WorkspaceMergeResult>("/api/workspace/git/merge/commit", { cwd, message });
+export const getWorkspaceMergeCheckpoint = (cwd: string) =>
+  api.get<{ ok: boolean; checkpoint?: WorkspaceCheckpoint | null }>(
+    `/api/workspace/git/merge/checkpoint?cwd=${encodeURIComponent(cwd)}`
+  );
+export const undoWorkspaceMerge = (cwd: string) =>
+  api.post<{ ok: boolean; checkpoint?: WorkspaceCheckpoint | null; state: WorkspaceGitStatus }>(
+    "/api/workspace/git/merge/undo", { cwd }
+  );
 export const getWorkspaceConflicts = (cwd: string) =>
   api.get<{ items: WorkspaceConflict[]; count: number }>(
     `/api/workspace/git/conflicts?cwd=${encodeURIComponent(cwd)}`

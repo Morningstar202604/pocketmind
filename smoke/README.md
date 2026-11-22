@@ -34,6 +34,7 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 | `p6_unconfigured_test.py` | P6 首次使用（未配置模型）：自起真实模式服务，断言 health 给出缺失项、发消息 5 秒内返回指引、连续两条都处理（不被永久锁成「排队」）、历史留完整一问一答 | 8 |
 | `p7_cross_audit_test.py` | P7 横向审计修复回归：非 ASCII 令牌不 500、非法配置块不污染（否则设置页永久 500）、litellm/MCP env 密钥不回传、interval 极值 400、get_messages 取最近 N 条、run_shell 非零退出带 error、phone 写操作校验退出码、凭据目录不可读、MCP readOnlyHint 不降级、取消后不续跑、清空任务清单有服务端端点（刷新不复活）、delete_session 失败回滚、配置回退不绕范围收敛 | 49 |
 | `p40_harness_test.py` | M1.3 Agent Harness：单轮墙钟、重复调用拦截、非法 JSON 不执行、上下文硬裁剪、原子写/mtime、Git status/log/commit、apply_patch、todo_read | 26 |
+| `p41_merge_checkpoint_test.py` | M1.6 合并前检查点：premerge ref、提交后撤销、abort 清理 | 15 |
 | `p0_queue_test.py` | P0 排队验收：并发——第一轮挂审批时第二轮应 `queued`，审批放行后自动执行 | 3 |
 | `p1_jobs_test.py` | P1 定时任务验收：创建 interval 任务 → 触发执行 → 启停 → 条件拒绝 → 删除 → jobs.db 持久化恢复 | 8 |
 

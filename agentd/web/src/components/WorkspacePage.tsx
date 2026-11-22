@@ -10,6 +10,7 @@ import {
   getWorkspaceConflicts,
   getWorkspaceFile,
   getWorkspaceGitStatus,
+  getWorkspaceMergeCheckpoint,
   getWorkspaceInfo,
   getWorkspaceTasks,
   getWorkspaceTree,
@@ -22,7 +23,9 @@ import {
   searchWorkspace,
   startWorkspaceTask,
   undoWorkspaceChange,
+  undoWorkspaceMerge,
   type WorkspaceChange,
+  type WorkspaceCheckpoint,
   type WorkspaceConflict,
   type WorkspaceEntry,
   type WorkspaceFile,
@@ -102,6 +105,7 @@ export function WorkspacePage() {
   const [gitTarget, setGitTarget] = useState("");
   const [gitMessage, setGitMessage] = useState("Merge branch");
   const [gitBusy, setGitBusy] = useState("");
+  const [mergeCheckpoint, setMergeCheckpoint] = useState<WorkspaceCheckpoint | null>(null);
   const [conflicts, setConflicts] = useState<WorkspaceConflict[]>([]);
   const [conflictOpen, setConflictOpen] = useState<string | null>(null);
   const [manualDrafts, setManualDrafts] = useState<Record<string, string>>({});
@@ -344,6 +348,12 @@ export function WorkspacePage() {
       } else {
         setConflicts([]);
         setConflictOpen(null);
+        if (g.available) {
+          const cp = await getWorkspaceMergeCheckpoint(g.repo_root || base || cwd || ".");
+          setMergeCheckpoint(cp.checkpoint ?? null);
+        } else {
+          setMergeCheckpoint(null);
+        }
       }
       return g;
     } catch (e) {
@@ -383,6 +393,7 @@ export function WorkspacePage() {
     try {
       const r = await previewWorkspaceMerge(git.repo_root || cwd, gitTarget.trim());
       if (r.state) setGit(r.state);
+      setMergeCheckpoint(r.checkpoint ?? null);
       if (r.state?.merging) {
         const c = await getWorkspaceConflicts(git.repo_root || cwd);
         setConflicts(c.items ?? []);
@@ -404,10 +415,30 @@ export function WorkspacePage() {
     try {
       const r = await abortWorkspaceMerge(git.repo_root || cwd);
       setGit(r.state);
+      setMergeCheckpoint(r.checkpoint ?? null);
       setConflicts([]);
       setConflictOpen(null);
       refreshCurrentTree();
       setStatus("已中止合并");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const undoMerge = async () => {
+    if (!git) return;
+    if (!window.confirm("撤销刚提交的合并，回到合并前？工作区会被重置。")) return;
+    setGitBusy("undo");
+    setError("");
+    try {
+      const r = await undoWorkspaceMerge(git.repo_root || cwd);
+      setGit(r.state);
+      setMergeCheckpoint(r.checkpoint ?? null);
+      setConflicts([]);
+      refreshCurrentTree();
+      setStatus("已撤销合并");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -422,6 +453,7 @@ export function WorkspacePage() {
     try {
       const r = await commitWorkspaceMerge(git.repo_root || cwd, gitMessage.trim());
       if (r.state) setGit(r.state);
+      setMergeCheckpoint(r.checkpoint ?? null);
       setConflicts([]);
       setConflictOpen(null);
       refreshCurrentTree();
@@ -826,6 +858,23 @@ export function WorkspacePage() {
                     </button>
                   )}
                 </div>
+                {!git?.merging && mergeCheckpoint && (
+                  <div className="ws-merge-box">
+                    <p>
+                      上次合并已提交，可撤销到合并前 <code>{mergeCheckpoint.short}</code>
+                    </p>
+                    <div className="ws-merge-commit">
+                      <button
+                        className="btn sm danger"
+                        onClick={() => void undoMerge()}
+                        disabled={gitBusy !== "" || !git?.clean}
+                      >
+                        {gitBusy === "undo" ? "正在撤销…" : "撤销合并"}
+                      </button>
+                      {!git?.clean && <span className="ws-muted">先处理未提交改动</span>}
+                    </div>
+                  </div>
+                )}
                 {git?.merging && (
                   <div className="ws-merge-box">
                     <p>
