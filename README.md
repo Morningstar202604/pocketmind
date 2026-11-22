@@ -71,7 +71,7 @@ way past it, and a compromised page cannot either.
 
 ### 44 tools across the phone
 
-> The table below describes the Termux runtime (41 = 39 built-in plus the
+> The table below describes the Termux runtime (44 = 42 built-in plus the
 > `remember_fact` / `read_skill` tools registered at startup). The standalone APK
 > covers most of them with 37 native tools; the difference is the "three things it
 > cannot do" listed under honest boundaries.
@@ -91,7 +91,7 @@ way past it, and a compromised page cannot either.
 <p align="center">
   <img src="assets/screenshots/05-capabilities.png" width="880" alt="Capability page listing all 44 tools by group with risk badges" />
   <br />
-  <sub>Every tool is browsable in the app with its risk tier — 3 of the 41 are
+  <sub>Every tool is browsable in the app with its risk tier — 3 of the 44 are
   marked as destructive and always require confirmation.</sub>
 </p>
 
@@ -112,7 +112,7 @@ did not succeed.
 
 Since 1.4.0 the APK ships the native engine and a prebuilt frontend: install it,
 open it, configure a provider, and start chatting. No Termux, Python or Node on the
-phone. Termux is only needed for the full 41-tool runtime: `termux/install.sh`
+phone. Termux is only needed for the full 44-tool runtime: `termux/install.sh`
 installs dependencies, `termux/start.sh` starts the service, `boot.sh` restarts it
 on boot.
 
@@ -208,7 +208,7 @@ lock and reboot), plus undoable file writes and deletes. What stays Termux-only
 (the app says so explicitly instead of faking it): MCP, the Telegram gateway,
 the skills directory and the subagent. For those, use Option B.
 
-### Option B — on your phone with Termux (full 41-tool runtime)
+### Option B — on your phone with Termux (full 44-tool runtime)
 
 ```bash
 # One-time setup in Termux (F-Droid build, plus Termux:API)

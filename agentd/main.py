@@ -173,7 +173,10 @@ async def run_agent(session_id: str, message: str) -> None:
                 await store.touch_session(session_id, title or "新会话")
             except Exception:  # noqa: BLE001 —— 命名失败不阻塞
                 pass
-        agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0, profile=profile, skills=skills)
+        agent = Agent(
+            store, settings_mgr, mock=MOCK, mem0=mem0, profile=profile,
+            skills=skills, deny_check=approval.is_auto_denied,
+        )
 
         async def ask(tid: str, name: str, summary: str, risk: str) -> str:
             # 「始终拒绝」（全局黑名单）优先于一切：直接拒绝，不推审批卡、不注册 gate。
@@ -183,7 +186,7 @@ async def run_agent(session_id: str, message: str) -> None:
             # 已「始终允许」的工具：不再弹审批卡、不注册 gate，直接放行。
             # 必须在 emit 之前判断——否则前端会收到一张早已自动批准的幽灵审批卡，
             # 用户点同意时 gate 已不存在（404），体验上是「卡了一下又消失」。
-            if approval.is_auto_allowed(session_id, name):
+            if approval.is_auto_allowed(session_id, name) and risk != "danger":
                 return "allow"
             emit = emit_now(session_id)
             if emit:

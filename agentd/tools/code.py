@@ -130,9 +130,15 @@ async def edit_file(
     replace_all: bool = False,
     expected_mtime: float | None = None,
 ) -> dict:
-    return await asyncio.to_thread(
-        _edit_file_sync, path, old_string, new_string, replace_all, expected_mtime
-    )
+    from ..workspace_locks import WorkspaceLockBusy, hold
+
+    try:
+        async with hold(path, "agent:edit_file"):
+            return await asyncio.to_thread(
+                _edit_file_sync, path, old_string, new_string, replace_all, expected_mtime
+            )
+    except WorkspaceLockBusy as exc:
+        return {"error": str(exc)}
 
 
 def _grep_sync(

@@ -1,6 +1,8 @@
-# Dev Workspace：手机开发工作区（M1.0 + M1.1）
+# Dev Workspace：手机开发工作区（M1.0 + M1.1 + M1.2）
 
-本文档对应 `feat/dev-workspace` 分支的 Phase 1 实现。目标不是做「手机 IDE」，而是给 PocketMind 补上开发环境最缺的那一层：**文件树、编辑器、保存前 diff、终端、代码工具、变更/任务面板**，并把它接进现有 Agent 宿主。完整方案见 [`DEV-WORKSPACE-FULL-PLAN.md`](./DEV-WORKSPACE-FULL-PLAN.md)。
+本文档对应 `feat/dev-workspace` 分支的 Phase 1 实现。目标不是做「手机 IDE」，而是给 PocketMind 补上开发环境最缺的那一层：**文件树、编辑器、保存前 diff、终端、代码工具、变更/任务面板、Git 分支与合并**，并把它接进现有 Agent 宿主。完整方案见 [`DEV-WORKSPACE-FULL-PLAN.md`](./DEV-WORKSPACE-FULL-PLAN.md)。
+
+M1.2 的核心闭环已经落地：分支切换、预合并、冲突 ours/theirs/手动解决、提交/中止、patch 预检与应用，以及进程内文件锁和 mtime 双保险。
 
 ## 1. 现在能做什么
 
@@ -13,7 +15,9 @@
 - **变更面板**：保存/新建/删除后落一条变更记录；支持逐文件撤销，且会拒绝覆盖你在保存后又改过的内容。
 - **任务面板**：长命令后台执行，显示 running / done / failed / cancelled，可取消；输出与日志路径会保留。
 - **搜索**：当前目录下逐行搜索，跳过 `.git`、`node_modules`、`dist`、`.venv`、缓存目录；最多 200 条。
-- **Git 状态**：`/api/workspace/git` 返回当前分支、`git status --porcelain` 与 `git diff --stat`。
+- **Git 面板**：结构化显示当前分支、脏文件数、ahead/behind、分支列表；支持切分支（脏工作区/合并中拒绝）、选择目标分支预合并、查看冲突 ours/theirs、用我的/用对方的/手动编辑保存、提交合并、中止合并。
+- **patch**：`POST /api/workspace/patch` 先 `git apply --check`，确认后才真正应用；合并冲突未解决时拒绝。
+- **文件锁**：人保存、Agent `write_file`/`edit_file`/`delete_file`、工作区删除/重命名/撤销、冲突 resolve 都经过同一路径锁；拿不到锁 8 秒后返回 409。mtime 仍作为跨进程兜底。
 
 Agent 侧新增五个代码工具：
 
@@ -49,7 +53,15 @@ Agent 侧新增五个代码工具：
 | POST | `/mkdir` | 新建目录 |
 | POST | `/rename` | 重命名 |
 | DELETE | `/file?path=` | 删除文件（先备份）；目录只允许删空目录 |
-| GET | `/git?cwd=` | Git 分支/状态/diffstat |
+| GET | `/git/status?cwd=` | 结构化 Git 状态：branch/clean/ahead/behind/merging/files/branches/conflicts |
+| POST | `/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
+| POST | `/git/merge/preview` | 两阶段预合并，返回冲突列表 |
+| POST | `/git/merge/abort` | 中止合并，恢复合并前状态 |
+| POST | `/git/merge/commit` | 提交合并；未解决冲突 409 |
+| GET | `/git/conflicts?cwd=` | base/ours/theirs/工作区文本 |
+| POST | `/git/conflicts/resolve` | ours / theirs / manual，解决后自动 `git add` |
+| POST | `/patch` | unified diff 预检/应用；默认 dry-run |
+| GET | `/git?cwd=` | 兼容旧接口：原始 status/diffstat 文本 |
 | WS | `/term?cwd=&token=&session=` | PTY 终端；`session` 用于断线重连接管 |
 
 ### 路径与权限
@@ -59,6 +71,9 @@ Agent 侧新增五个代码工具：
 - **命令台/后台任务**：先拦明显破坏性命令（`rm -rf /`、`mkfs`、`dd of=/dev/...`、fork bomb、`reboot` 等）；这不是完整沙箱。
 - **冲突检测**：保存时带 `expected_mtime`；文件被其他程序改过会返回 409，让用户刷新后再保存。
 - **撤销冲突**：变更记录带写入后的 mtime/size；再次修改后撤销会拒绝，避免把新改动覆盖掉。
+- **文件锁**：同进程内按 resolve 后的绝对路径加 `asyncio.Lock`；保存/删除/重命名/撤销/冲突 resolve 串行化，超时 409。锁是协作锁，不是跨进程文件锁；跨进程仍靠 mtime。
+- **Git 安全**：所有 Git 操作走 `subprocess.run(["git","-C",repo,...])`，不拼 shell；仓库根必须在 `AGENT_WORKSPACE` 内；分支名走 `git check-ref-format`；脏工作区/合并中拒绝切分支。
+- **P0 审批**：`auto` 模式现在仍检查全局拒绝名单；危险工具（`run_shell` 等）的「始终允许」降级为单次 allow，不落全局/会话白名单。
 
 ## 3. 前端结构
 
@@ -76,6 +91,8 @@ Agent 侧新增五个代码工具：
 - `agentd/workspace_terms.py`：PTY 会话池；30 秒宽限、滚动缓冲、重连接管。
 - `agentd/workspace_tasks.py`：后台任务管理；取消时回收进程组，日志落 `$AGENT_HOME/workspace_tasks/`。
 - `agentd/workspace_changes.py`：变更记录与撤销；`$AGENT_HOME/workspace_changes.json`，0600。
+- `agentd/workspace_locks.py`：进程内路径锁；保存/删除/编辑/撤销共用。
+- `agentd/workspace_git.py`：Git 状态、分支、预合并、冲突读取/解决、提交/中止、patch。
 - `agentd/tools/code.py`：Agent 的 edit_file / grep / glob / git_diff / run_tests。
 - `agentd/diff_preview.py`：审批卡里的文件 diff 预览。
 
@@ -101,15 +118,19 @@ AGENT_HOME=/tmp/pm-home AGENT_WORKSPACE=/tmp/pm-ws \
 - `python3 -m compileall`：通过；
 - `smoke/p37_workspace_test.py`：13/13；覆盖 info/tree/file/preview/exec、路径越界、危险命令、PTY echo；
 - `smoke/p38_m11_test.py`：21/21；覆盖 edit_file/grep/glob/git_diff/run_tests、变更撤销、后台任务取消、PTY 重连接管；
-- 后端全量门禁：53 项通过，唯一失败仍是 mypy 2.4.1 与锁文件 1.20.2 的版本漂移（旧问题）；
+- `smoke/p39_m12_test.py`：20/20；覆盖锁占用超时、Git status/分支、预合并冲突、ours/theirs 冲突读取、合并提交、patch 预检/应用、旧 mtime 409；
+- `tests/security_test.py`：43/43；新增 auto 模式黑名单、危险工具始终允许降级、旧全局白名单仍需逐次确认；
+- 后端全量门禁：55 项通过 / 0 失败，`ruff` 与 `mypy` 均全绿（顺手修掉 `mcp_server.py` 的 `FastMCP` 重复定义）；
 - `npx tsc -b`：通过；
-- `npm test`：15 个测试文件、81/81 通过；
-- `npm run build`：`WorkspacePage` 约 422.59 KB（gzip 137.77 KB），`WorkspaceTerminal` 约 339.01 KB（gzip 86.74 KB）；两者都不进首屏。
+- `npm test`：15 个测试文件、81/81 通过（M1.2 最终版）；
+- `npm run build`：`WorkspacePage` 约 429.51 KB（gzip 139.80 KB），`WorkspaceTerminal` 约 339.01 KB（gzip 86.74 KB）；两者都不进首屏。
 
 ## 6. 已知边界
 
 - **不是完整 IDE**：有语法高亮，但没有 LSP、补全、调试、测试结果面板。
 - **PTY 不是沙箱**：终端里可以跑任意命令；它只做 shell 隔离，不是安全边界。
+- **冲突解决是整文件级**：当前支持 ours / theirs / 手动编辑后 `git add`，还没有三栏逐块（block-level）合并 UI。
+- **没有变更集**：变更记录仍是按文件一条，尚未按 Agent 回合/工具调用聚合成「本次改了什么」。
 - **原生 APK 暂不可用**：Kotlin `ApiRouter` 还没有工作区端点；当前会自动隐藏页签。下一阶段要么在原生侧实现 app-private 工作区，要么等 PRoot 内置。
 - **PRoot 未接**：目前工作区跑在 Termux 的 Python 运行时里；内置 Debian/Alpine rootfs 是 Phase 2。
 - **任务输出不是流式**：任务结束才一次性返回 stdout/stderr；日志文件已落盘，真正的实时 tail 留到下一阶段。
@@ -119,12 +140,12 @@ AGENT_HOME=/tmp/pm-home AGENT_WORKSPACE=/tmp/pm-ws \
 
 ## 7. 下一阶段
 
-1. **合并**：分支切换、预合并、三栏冲突解决、patch 应用、合并前 checkpoint、文件锁。
+1. **合并收尾**：三栏逐块冲突编辑、合并前 checkpoint、合并后一键撤销、变更集。
 2. **调整**：计划暂停/改计划/继续；模型按任务路由与成本上限；工作区级权限规则；Termux/PRoot 运行时切换。
 3. **PRoot 内置**：首次下载 Alpine/Debian rootfs，`proot` 启动；工作区 API 增加 runtime 适配层。
 4. **原生 APK**：在 Kotlin 侧实现 app-private workspace API，或通过 PRoot 提供 Linux 用户态；让「一个 APK」也能打开工作区。
 5. **上下文**：repo map、ignore、CJK 友好 token 估算、长对话压缩；修掉 `CHARS_PER_TOKEN = 4` 的偏差。
-6. **安全 P0**：`auto` 模式下全局拒绝名单失效；危险工具「始终允许」只记工具名。审批边界要在这两项修完后才算真正成立。
+6. **审批边界**：`auto` 黑名单与危险工具始终允许已收紧；后续把命令级参数绑定（例如只允许特定 `run_shell` 命令）接入审批规则。
 
 ## 8. 与现有项目的关系
 

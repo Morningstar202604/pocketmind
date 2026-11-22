@@ -2,7 +2,7 @@
 
 > 目标不是「把桌面 IDE 塞进手机」，而是把 **写代码、跑命令、看 diff、合并改动、中断恢复、检查修改** 这套动作，变成手机上一个常驻 Agent 能参与的工作流。
 >
-> 本文是总方案；当前已落地 M1.0 + M1.1，见 `docs/DEV-WORKSPACE.md`。
+> 本文是总方案；当前已落地 M1.0 + M1.1 + M1.2（核心），见 `docs/DEV-WORKSPACE.md`。
 
 ---
 
@@ -259,20 +259,29 @@ workspace_locks(
 | POST | `/api/workspace/changes/{id}/undo` | 撤销变更 |
 | WS | `/api/workspace/term` | PTY 终端；`session` 断线重连 |
 
-### 5.2 待实现（Phase 2+）
+### 5.2 M1.2 已实现（核心）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/workspace/git/status` | 结构化状态：分支/脏文件/ahead/behind/merge/冲突 |
+| POST | `/api/workspace/git/checkout` | 切分支；脏工作区或合并中拒绝 |
+| POST | `/api/workspace/git/merge/preview` | 两阶段预合并（`--no-commit --no-ff`），返回冲突 |
+| POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态 |
+| POST | `/api/workspace/git/merge/commit` | 提交合并；未解决冲突 409 |
+| GET | `/api/workspace/git/conflicts` | 读取 base/ours/theirs/工作区文本 |
+| POST | `/api/workspace/git/conflicts/resolve` | ours/theirs/manual 解冲突并 `git add` |
+| POST | `/api/workspace/patch` | patch 预检/应用 |
+| GET | `/api/workspace/info` | capabilities 新增 `locks`、`git_merge` |
+
+### 5.3 待实现（Phase 2+）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET/POST | `/api/workspace/projects` | 多项目 |
-| GET | `/api/workspace/git/branches` | 分支列表/ahead/behind |
-| POST | `/api/workspace/git/checkout` | 切分支（先检查脏工作区） |
-| POST | `/api/workspace/git/merge/preview` | 预合并/冲突文件 |
-| POST | `/api/workspace/git/merge/apply` | 执行合并 |
-| POST | `/api/workspace/git/conflict/resolve` | 逐块解冲突 |
-| POST | `/api/workspace/patch/apply` | 应用 patch |
 | GET | `/api/workspace/tasks/{id}/log` | 增量日志尾随（当前只有结束快照） |
 | POST | `/api/workspace/tests` | 跑测试并结构化输出 |
 | GET | `/api/workspace/diagnostics` | 语法/依赖/端口诊断 |
+| POST | `/api/workspace/git/conflicts/blocks` | 三栏逐块冲突选择（当前整文件 ours/theirs/manual） |
 
 ---
 
@@ -348,11 +357,12 @@ workspace_locks(
 - 任务面板 + cancel API；长任务日志落盘。
 - 终端断线宽限/重连接管。
 
-### M1.2（2–3 周）
+### M1.2（核心已完成）
 
-- Git 分支/合并/冲突 UI。
-- patch 应用、三方合并、逐块解冲突。
-- 文件锁、并发写保护、变更集。
+- Git status / 分支切换 / 预合并 / 冲突 ours/theirs/manual / 提交 / 中止。
+- patch 预检与应用；仓库根限制在 AGENT_WORKSPACE 内。
+- 进程内文件锁、mtime 双重保护，覆盖人保存、Agent 写/删、撤销、冲突 resolve。
+- 还没有三栏逐块冲突 UI；变更集仍按文件一条。
 
 ### M2（4–6 周）
 
@@ -424,7 +434,8 @@ workspace_locks(
 
 ## 十一、当前代码位置
 
-- 后端：`agentd/routes/workspace.py`（工作区 API + 变更/任务路由）。
+- 后端：`agentd/routes/workspace.py`（工作区 API + 变更/任务/Git 路由）。
+- Git：`agentd/workspace_git.py`；锁：`agentd/workspace_locks.py`。
 - PTY：`agentd/workspace_terms.py`；任务：`agentd/workspace_tasks.py`；变更：`agentd/workspace_changes.py`。
 - 代码工具：`agentd/tools/code.py`；审批 diff：`agentd/diff_preview.py`。
 - 注册：`agentd/main.py`（`/api/workspace/*` + `/api/workspace/term`）。

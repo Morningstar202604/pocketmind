@@ -343,6 +343,8 @@ export interface WorkspaceInfo {
     git: boolean;
     changes?: boolean;
     tasks?: boolean;
+    locks?: boolean;
+    git_merge?: boolean;
   };
 }
 export interface WorkspaceEntry {
@@ -389,14 +391,57 @@ export interface WorkspaceSearch {
   results: WorkspaceSearchHit[];
   truncated?: boolean;
 }
-export interface WorkspaceGit {
+export interface WorkspaceGitFile {
+  path: string;
+  original_path?: string | null;
+  index: string;
+  worktree: string;
+  staged: boolean;
+  untracked: boolean;
+  unmerged: boolean;
+}
+export interface WorkspaceGitBranch {
+  name: string;
+  sha: string;
+  upstream: string;
+  current: boolean;
+}
+export interface WorkspaceGitStatus {
   available: boolean;
   cwd: string;
-  ok?: boolean;
-  exit_code?: number | null;
+  repo_root?: string;
+  branch?: string;
+  detached?: boolean;
+  commit?: string;
+  upstream?: string;
+  ahead?: number | null;
+  behind?: number | null;
+  clean?: boolean;
+  merging?: boolean;
+  merge_head?: string;
+  files?: WorkspaceGitFile[];
+  branches?: WorkspaceGitBranch[];
+  conflicts?: string[];
+  diffstat?: string;
+  message?: string;
+}
+export interface WorkspaceConflict {
+  path: string;
+  binary: boolean;
+  base: string;
+  ours: string;
+  theirs: string;
+  work: string;
+}
+export interface WorkspaceMergeResult {
+  ok: boolean;
+  branch?: string;
+  clean?: boolean;
+  conflicts?: string[];
   stdout?: string;
   stderr?: string;
-  message?: string;
+  state?: WorkspaceGitStatus;
+  output?: string;
 }
 export interface WorkspaceChange {
   id: string;
@@ -465,8 +510,32 @@ export const deleteWorkspaceFile = (path: string) =>
     backup?: string | null;
     change_id?: string | null;
   }>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
-export const getWorkspaceGit = (cwd: string) =>
-  api.get<WorkspaceGit>(`/api/workspace/git?cwd=${encodeURIComponent(cwd)}`);
+export const getWorkspaceGitStatus = (cwd: string) =>
+  api.get<WorkspaceGitStatus>(`/api/workspace/git/status?cwd=${encodeURIComponent(cwd)}`);
+export const checkoutWorkspaceBranch = (cwd: string, branch: string, create = false) =>
+  api.post<{ ok: boolean; branch: string; changed: boolean }>("/api/workspace/git/checkout", {
+    cwd, branch, create,
+  });
+export const previewWorkspaceMerge = (cwd: string, branch: string) =>
+  api.post<WorkspaceMergeResult>("/api/workspace/git/merge/preview", { cwd, branch });
+export const abortWorkspaceMerge = (cwd: string) =>
+  api.post<{ ok: boolean; state: WorkspaceGitStatus }>("/api/workspace/git/merge/abort", { cwd });
+export const commitWorkspaceMerge = (cwd: string, message: string) =>
+  api.post<WorkspaceMergeResult>("/api/workspace/git/merge/commit", { cwd, message });
+export const getWorkspaceConflicts = (cwd: string) =>
+  api.get<{ items: WorkspaceConflict[]; count: number }>(
+    `/api/workspace/git/conflicts?cwd=${encodeURIComponent(cwd)}`
+  );
+export const resolveWorkspaceConflict = (
+  cwd: string, path: string, strategy: "ours" | "theirs" | "manual", content?: string
+) =>
+  api.post<{ ok: boolean; path: string; remaining: string[]; state: WorkspaceGitStatus }>(
+    "/api/workspace/git/conflicts/resolve", { cwd, path, strategy, content }
+  );
+export const applyWorkspacePatch = (cwd: string, patch: string, dryRun = true) =>
+  api.post<{ ok: boolean; dry_run: boolean; state?: WorkspaceGitStatus }>("/api/workspace/patch", {
+    cwd, patch, dry_run: dryRun,
+  });
 export const getWorkspaceChanges = (limit = 50, includeUndone = false) =>
   api.get<{ items: WorkspaceChange[] }>(
     `/api/workspace/changes?limit=${limit}&include_undone=${includeUndone ? "true" : "false"}`

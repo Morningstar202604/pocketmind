@@ -33,6 +33,15 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 - **M1.1 PTY takeover**: a disconnected terminal keeps its shell for 30 seconds
   and `session_id` reconnect attaches to the same process instead of spawning a
   new one.
+- **M1.2 Git merge**: structured branch/status, checkout with dirty-worktree
+  protection, two-phase merge preview, ours/theirs/manual conflict resolution,
+  commit/abort, and patch check/apply. Repo roots are jailed to `AGENT_WORKSPACE`.
+- **M1.2 file locks**: per-path in-process locks serialize human saves, Agent
+  writes/deletes, undo, and conflict resolution; lock wait timeout returns 409,
+  with `expected_mtime` still covering cross-process changes.
+- **Approval hardening**: `auto` mode now still honors the global deny list, and
+  dangerous tools (`run_shell`, etc.) downgrade "always allow" to a single call
+  instead of persisting a tool-name-wide allow rule.
 
 ## [1.6.2] - 2026-11-07
 

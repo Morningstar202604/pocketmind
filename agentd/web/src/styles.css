@@ -3712,3 +3712,165 @@ body {
   background: transparent !important;
   border-radius: 6px;
 }
+
+/* Git 分支/合并面板：手机上是纵向滚动，桌面上冲突并排两栏。 */
+.ws-git-summary-inline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.ws-git-panel {
+  flex: 1;
+  min-height: 0;
+  max-height: 58dvh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 2px;
+}
+.ws-git-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.ws-git-summary strong {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+.ws-git-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-3);
+  flex: none;
+}
+.ws-git-dot.ok { background: var(--ok); }
+.ws-git-dot.dirty { background: var(--warn); }
+.ws-git-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ws-git-actions select {
+  min-width: 0;
+  max-width: 180px;
+  height: 29px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--inset);
+  color: var(--text);
+  padding: 0 6px;
+  font: inherit;
+  font-size: 12px;
+}
+.ws-merge-box {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--inset);
+  padding: 8px 9px;
+}
+.ws-merge-box p {
+  margin: 0 0 6px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.ws-merge-commit {
+  display: flex;
+  gap: 6px;
+}
+.ws-merge-commit input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.ws-conflict-list,
+.ws-branch-list {
+  flex: none;
+  max-height: 26dvh;
+}
+.ws-conflict-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 6px 0;
+}
+.ws-conflict-cols > div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.ws-conflict-label {
+  display: block;
+  padding: 3px 7px;
+  background: var(--panel-2, var(--panel));
+  color: var(--text-3);
+  font-size: 10px;
+}
+.ws-conflict-cols pre {
+  max-height: 140px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 7px;
+  color: var(--text-2);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ws-conflict-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.ws-branch-current {
+  flex: none;
+  color: var(--brand-text);
+  font-size: 11px;
+}
+@media (max-width: 520px) {
+  .ws-conflict-cols { grid-template-columns: 1fr; }
+}
+.ws-conflict-manual {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.ws-conflict-manual textarea {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  max-height: 220px;
+  box-sizing: border-box;
+  border: 0;
+  background: var(--code-bg);
+  color: var(--text-2);
+  padding: 6px 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  resize: vertical;
+  outline: none;
+}
+.ws-conflict-cols pre { max-height: 72px; }
+.ws-git-panel { max-height: 64dvh; }
+.ws-conflict-list, .ws-branch-list { max-height: 34dvh; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }

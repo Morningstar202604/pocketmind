@@ -3,23 +3,30 @@ import {
   cancelWorkspaceTask,
   deleteWorkspaceFile,
   execWorkspace,
+  abortWorkspaceMerge,
+  checkoutWorkspaceBranch,
+  commitWorkspaceMerge,
   getWorkspaceChanges,
+  getWorkspaceConflicts,
   getWorkspaceFile,
-  getWorkspaceGit,
+  getWorkspaceGitStatus,
   getWorkspaceInfo,
   getWorkspaceTasks,
   getWorkspaceTree,
   makeWorkspaceDir,
   previewWorkspaceFile,
+  previewWorkspaceMerge,
   putWorkspaceFile,
   renameWorkspace,
+  resolveWorkspaceConflict,
   searchWorkspace,
   startWorkspaceTask,
   undoWorkspaceChange,
   type WorkspaceChange,
+  type WorkspaceConflict,
   type WorkspaceEntry,
   type WorkspaceFile,
-  type WorkspaceGit,
+  type WorkspaceGitStatus,
   type WorkspaceInfo,
   type WorkspacePreview,
   type WorkspaceSearchHit,
@@ -91,10 +98,16 @@ export function WorkspacePage() {
   const [running, setRunning] = useState(false);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<WorkspaceSearchHit[]>([]);
-  const [git, setGit] = useState<WorkspaceGit | null>(null);
+  const [git, setGit] = useState<WorkspaceGitStatus | null>(null);
+  const [gitTarget, setGitTarget] = useState("");
+  const [gitMessage, setGitMessage] = useState("Merge branch");
+  const [gitBusy, setGitBusy] = useState("");
+  const [conflicts, setConflicts] = useState<WorkspaceConflict[]>([]);
+  const [conflictOpen, setConflictOpen] = useState<string | null>(null);
+  const [manualDrafts, setManualDrafts] = useState<Record<string, string>>({});
   const [jumpLine, setJumpLine] = useState<number | null>(null);
   const [consoleMode, setConsoleMode] = useState<"term" | "cmd">("term");
-  const [panel, setPanel] = useState<"changes" | "tasks" | null>(null);
+  const [panel, setPanel] = useState<"changes" | "tasks" | "git" | null>(null);
   const [changes, setChanges] = useState<WorkspaceChange[]>([]);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [panelBusy, setPanelBusy] = useState("");
@@ -315,14 +328,134 @@ export function WorkspacePage() {
     }
   };
 
-  const refreshGit = async () => {
+  const refreshGit = useCallback(async (base?: string) => {
     setError("");
     try {
-      const g = await getWorkspaceGit(cwd);
+      const g = await getWorkspaceGitStatus(base || cwd || info?.root || ".");
       setGit(g);
-      setStatus(g.available ? "已刷新 Git 状态" : g.message || "当前环境没有 git");
+      setGitTarget((prev) => {
+        if (prev && g.branches?.some((b) => b.name === prev)) return prev;
+        return g.branches?.find((b) => !b.current)?.name || "";
+      });
+      if (g.merging) {
+        const c = await getWorkspaceConflicts(g.repo_root || base || cwd || ".");
+        setConflicts(c.items ?? []);
+        setConflictOpen(null);
+      } else {
+        setConflicts([]);
+        setConflictOpen(null);
+      }
+      return g;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }, [cwd, info?.root]);
+
+  const openGit = async () => {
+    await refreshGit();
+    setPanel("git");
+  };
+
+  const checkoutBranch = async (branch: string) => {
+    if (!git) return;
+    if (!git.clean && !window.confirm("工作区有未提交改动，切换分支会被拒绝。仍要尝试？")) return;
+    setGitBusy(`checkout:${branch}`);
+    setError("");
+    try {
+      await checkoutWorkspaceBranch(git.repo_root || cwd, branch);
+      setCurrent(null);
+      setDraft("");
+      await loadTree(tree?.path || cwd);
+      await refreshGit();
+      setStatus(`已切换到 ${branch}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const startMerge = async () => {
+    if (!git || !gitTarget.trim()) return;
+    setGitBusy("merge");
+    setError("");
+    try {
+      const r = await previewWorkspaceMerge(git.repo_root || cwd, gitTarget.trim());
+      if (r.state) setGit(r.state);
+      if (r.state?.merging) {
+        const c = await getWorkspaceConflicts(git.repo_root || cwd);
+        setConflicts(c.items ?? []);
+        setConflictOpen(null);
+      }
+      setStatus(r.clean ? "已进入合并状态：无冲突，可提交合并" : `合并有 ${r.conflicts?.length || 0} 个冲突文件，先解决冲突`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const abortMerge = async () => {
+    if (!git) return;
+    if (!window.confirm("中止合并并恢复到合并前状态？")) return;
+    setGitBusy("abort");
+    setError("");
+    try {
+      const r = await abortWorkspaceMerge(git.repo_root || cwd);
+      setGit(r.state);
+      setConflicts([]);
+      setConflictOpen(null);
+      refreshCurrentTree();
+      setStatus("已中止合并");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const commitMerge = async () => {
+    if (!git) return;
+    setGitBusy("commit");
+    setError("");
+    try {
+      const r = await commitWorkspaceMerge(git.repo_root || cwd, gitMessage.trim());
+      if (r.state) setGit(r.state);
+      setConflicts([]);
+      setConflictOpen(null);
+      refreshCurrentTree();
+      setStatus("合并已提交");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const resolveConflict = async (
+    path: string, strategy: "ours" | "theirs" | "manual", content?: string,
+  ) => {
+    if (!git) return;
+    setGitBusy(`resolve:${path}:${strategy}`);
+    setError("");
+    try {
+      const r = await resolveWorkspaceConflict(git.repo_root || cwd, path, strategy, content);
+      if (r.state) setGit(r.state);
+      setManualDrafts((prev) => {
+        const next = { ...prev };
+        delete next[path];
+        return next;
+      });
+      const c = await getWorkspaceConflicts(git.repo_root || cwd);
+      setConflicts(c.items ?? []);
+      setConflictOpen(c.items?.[0]?.path || null);
+      setStatus(r.remaining.length ? `已解决 ${path}，还剩 ${r.remaining.length} 个冲突` : "冲突已全部解决，可提交合并");
+      refreshCurrentTree();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
     }
   };
 
@@ -386,6 +519,7 @@ export function WorkspacePage() {
 
   const entries = useMemo(() => tree?.entries ?? [], [tree]);
   const rootLabel = info?.roots.find((r) => r.path === info.root)?.label || "工作区";
+  const panelTitle = panel === "changes" ? "工作区变更" : panel === "tasks" ? "后台任务" : "Git 分支 / 合并";
 
   if (!info) {
     return (
@@ -417,6 +551,9 @@ export function WorkspacePage() {
           </button>
           <button className="btn sm" onClick={newFile}>
             新建文件
+          </button>
+          <button className="btn sm" onClick={() => void openGit()}>
+            Git{git?.branch ? ` ${git.branch}` : ""}{git && !git.clean ? " •" : ""}
           </button>
           <button className="btn sm" onClick={() => setPanel("changes")}>
             变更{changes.length ? ` ${changes.length}` : ""}
@@ -599,14 +736,12 @@ export function WorkspacePage() {
                   </button>
                 </div>
                 <div className="ws-git">
-                  <button className="btn sm" onClick={() => void refreshGit()}>
-                    刷新 Git 状态
+                  <button className="btn sm" onClick={() => void openGit()}>
+                    Git 分支 / 合并
                   </button>
-                  {git && (
-                    <pre className="ws-git-out">
-                      {git.available ? git.stdout || git.stderr || "（无输出）" : git.message}
-                    </pre>
-                  )}
+                  <span className="ws-git-summary-inline">
+                    {git ? `${git.branch || "HEAD"} · ${git.clean ? "干净" : "有未提交改动"}` : "打开后读取分支状态"}
+                  </span>
                 </div>
               </>
             )}
@@ -641,15 +776,178 @@ export function WorkspacePage() {
       )}
 
       {panel && (
-        <div className="ws-modal" role="dialog" aria-modal="true" aria-label={panel === "changes" ? "工作区变更" : "后台任务"}>
+        <div className="ws-modal" role="dialog" aria-modal="true" aria-label={panelTitle}>
           <div className="ws-modal-card ws-panel-card">
             <div className="ws-modal-head">
-              <h3>{panel === "changes" ? "工作区变更" : "后台任务"}</h3>
+              <h3>{panelTitle}</h3>
               <button className="ws-x" onClick={() => setPanel(null)} aria-label="关闭">
                 ×
               </button>
             </div>
-            {panel === "changes" ? (
+            {panel === "git" ? (
+              <div className="ws-git-panel">
+                {git && !git.available && (
+                  <p className="ws-muted">{git.message || "当前目录不是 Git 仓库；先 git init 或把项目放到工作区。"}</p>
+                )}
+                <div className="ws-git-summary">
+                  <span className={`ws-git-dot ${git?.clean ? "ok" : "dirty"}`} />
+                  <strong>{git?.branch || "未读取"}</strong>
+                  {git?.detached && <span className="ws-muted">detached</span>}
+                  <span className="ws-muted">
+                    {git ? (git.clean ? "工作区干净" : `${git.files?.length || 0} 个未提交文件`) : "尚未读取"}
+                  </span>
+                  {git?.upstream && (
+                    <span className="ws-muted">↑{git.ahead ?? 0} ↓{git.behind ?? 0}</span>
+                  )}
+                </div>
+                <div className="ws-git-actions">
+                  <button className="btn sm" onClick={() => void refreshGit()} disabled={gitBusy !== ""}>
+                    刷新
+                  </button>
+                  <select
+                    value={gitTarget}
+                    onChange={(e) => setGitTarget(e.target.value)}
+                    aria-label="合并目标分支"
+                  >
+                    {(git?.branches || []).filter((b) => !b.current).map((b) => (
+                      <option key={b.name} value={b.name}>{b.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn primary sm"
+                    onClick={() => void startMerge()}
+                    disabled={!git || !gitTarget || !git.clean || git.merging || gitBusy !== ""}
+                  >
+                    预合并
+                  </button>
+                  {git?.merging && (
+                    <button className="btn sm danger" onClick={() => void abortMerge()} disabled={gitBusy !== ""}>
+                      中止合并
+                    </button>
+                  )}
+                </div>
+                {git?.merging && (
+                  <div className="ws-merge-box">
+                    <p>
+                      合并中：{git.merge_head || "MERGE_HEAD"} · {conflicts.length ? `${conflicts.length} 个冲突` : "无冲突"}
+                    </p>
+                    <div className="ws-merge-commit">
+                      <input
+                        value={gitMessage}
+                        onChange={(e) => setGitMessage(e.target.value)}
+                        placeholder="合并提交说明"
+                        aria-label="合并提交说明"
+                      />
+                      <button
+                        className="btn primary sm"
+                        onClick={() => void commitMerge()}
+                        disabled={gitBusy !== "" || conflicts.length > 0}
+                      >
+                        {conflicts.length > 0 ? "先解冲突" : "提交合并"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {conflicts.length > 0 && (
+                  <ul className="ws-conflict-list">
+                    {conflicts.map((c) => (
+                      <li key={c.path}>
+                        <div className="ws-panel-row">
+                          <div>
+                            <code title={c.path}>{c.path}</code>
+                            <span className="ws-muted">
+                              {c.binary ? "二进制冲突，需用命令行处理" : "选择保留我的或对方的版本"}
+                            </span>
+                          </div>
+                          <button
+                            className="ws-x"
+                            onClick={() => setConflictOpen(conflictOpen === c.path ? null : c.path)}
+                          >
+                            {conflictOpen === c.path ? "收起" : "查看"}
+                          </button>
+                        </div>
+                        {conflictOpen === c.path && (
+                          <div className="ws-conflict-cols">
+                            <div>
+                              <span className="ws-conflict-label">我的（ours）</span>
+                              <pre>{c.ours || "（空）"}</pre>
+                            </div>
+                            <div>
+                              <span className="ws-conflict-label">对方的（theirs）</span>
+                              <pre>{c.theirs || "（空）"}</pre>
+                            </div>
+                          </div>
+                        )}
+                        {conflictOpen === c.path && (
+                          <div className="ws-conflict-manual">
+                            <span className="ws-conflict-label">手动编辑（保存后 git add）</span>
+                            <textarea
+                              value={manualDrafts[c.path] ?? c.work}
+                              onChange={(e) => setManualDrafts((prev) => ({ ...prev, [c.path]: e.target.value }))}
+                              spellCheck={false}
+                              aria-label={`手动解决 ${c.path}`}
+                            />
+                          </div>
+                        )}
+                        <div className="ws-conflict-actions">
+                          <button
+                            className="btn sm"
+                            disabled={gitBusy !== "" || c.binary}
+                            onClick={() => void resolveConflict(c.path, "ours")}
+                          >
+                            用我的
+                          </button>
+                          <button
+                            className="btn sm"
+                            disabled={gitBusy !== "" || c.binary}
+                            onClick={() => void resolveConflict(c.path, "theirs")}
+                          >
+                            用对方的
+                          </button>
+                          <button
+                            className="btn primary sm"
+                            disabled={gitBusy !== "" || c.binary}
+                            onClick={() => void resolveConflict(c.path, "manual", manualDrafts[c.path] ?? c.work)}
+                          >
+                            保存手动解决
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {(git?.branches?.length || 0) > 0 && (
+                  <ul className="ws-branch-list">
+                    {(git?.branches || []).map((b) => (
+                      <li key={b.name}>
+                        <div className="ws-panel-row">
+                          <div>
+                            <code>{b.name}</code>
+                            <span className="ws-muted">
+                              {b.sha}{b.upstream ? ` · ${b.upstream}` : " · 本地分支"}
+                            </span>
+                          </div>
+                          {b.current ? (
+                            <span className="ws-branch-current">当前</span>
+                          ) : (
+                            <button
+                              className="btn sm"
+                              disabled={!git?.clean || git?.merging || gitBusy !== ""}
+                              onClick={() => void checkoutBranch(b.name)}
+                            >
+                              切换
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="ws-muted">
+                  合并会在工作区留下冲突文件；先选 ours/theirs，再提交合并。中止会恢复合并前状态。
+                </p>
+              </div>
+            ) : panel === "changes" ? (
               changes.length === 0 ? (
                 <p className="ws-muted">还没有变更。保存文件、新建或删除后会出现在这里。</p>
               ) : (

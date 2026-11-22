@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import difflib
 import os
 import re
@@ -28,6 +29,16 @@ from ..paths import workspace_dir
 from ..tools.files import _resolve
 from ..tools.shell import run_shell
 from ..workspace_changes import get_store
+from ..workspace_git import GitOperationError, GitUnavailable, open_repo
+from ..workspace_git import apply_patch as git_apply_patch
+from ..workspace_git import checkout as git_checkout
+from ..workspace_git import conflicts as git_conflicts
+from ..workspace_git import merge_abort as git_merge_abort
+from ..workspace_git import merge_commit as git_merge_commit
+from ..workspace_git import merge_preview as git_merge_preview
+from ..workspace_git import resolve_conflict as git_resolve_conflict
+from ..workspace_git import status as git_status
+from ..workspace_locks import WorkspaceLockBusy, hold
 from ..workspace_tasks import get_manager
 
 router = APIRouter(tags=["workspace"])
@@ -98,6 +109,46 @@ class RenameBody(BaseModel):
     to_path: str = Field(min_length=1, max_length=4096)
 
 
+class GitCheckoutBody(BaseModel):
+    cwd: str = "."
+    branch: str = Field(min_length=1, max_length=200)
+    create: bool = False
+
+
+class GitMergeBody(BaseModel):
+    cwd: str = "."
+    branch: str = Field(min_length=1, max_length=200)
+
+
+class GitMergeCommitBody(BaseModel):
+    cwd: str = "."
+    message: str = Field(default="", max_length=500)
+
+
+class GitResolveBody(BaseModel):
+    cwd: str = "."
+    path: str = Field(min_length=1, max_length=4096)
+    strategy: str = "ours"
+    content: str | None = Field(default=None, max_length=MAX_WRITE)
+
+
+class GitPatchBody(BaseModel):
+    cwd: str = "."
+    patch: str = Field(min_length=1, max_length=MAX_DIFF_CHARS)
+    dry_run: bool = True
+
+
+def _git_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, GitUnavailable):
+        return HTTPException(503, str(exc))
+    if isinstance(exc, GitOperationError):
+        detail = str(exc)
+        if exc.detail:
+            detail = f"{detail}：{exc.detail[:300]}"
+        return HTTPException(exc.status, detail)
+    return HTTPException(400, f"Git 操作失败：{exc}")
+
+
 def _root() -> Path:
     root = workspace_dir().expanduser()
     root.mkdir(parents=True, exist_ok=True)
@@ -154,7 +205,7 @@ def _read_text(p: Path) -> dict:
     return {"path": str(p), "content": content, "size": size, "mtime": mtime}
 
 
-def _write_text(p: Path, content: str) -> dict:
+def _write_text(p: Path, content: str, expected_mtime: float | None = None) -> dict:
     data = str(content or "")
     try:
         encoded = data.encode("utf-8")
@@ -163,6 +214,13 @@ def _write_text(p: Path, content: str) -> dict:
     if len(encoded) > MAX_WRITE:
         raise HTTPException(413, f"内容过大（{len(encoded)} 字节，上限 {MAX_WRITE}）")
     existed = p.exists() and p.is_file()
+    if expected_mtime is not None and existed:
+        try:
+            current = p.stat().st_mtime
+        except OSError as exc:
+            raise HTTPException(400, f"读取失败：{exc}") from None
+        if abs(current - expected_mtime) > 0.001:
+            raise HTTPException(409, "文件已被其他程序修改，请刷新后再保存")
     backup = None
     if existed:
         # 覆盖前先备份原文件；这里不走 files.py 的 _write_file_sync，因为它会
@@ -297,6 +355,8 @@ async def get_info() -> dict:
             "git": shutil.which("git") is not None,
             "changes": True,
             "tasks": True,
+            "locks": True,
+            "git_merge": shutil.which("git") is not None,
         },
     }
 
@@ -342,14 +402,11 @@ async def preview_file(body: PreviewBody) -> dict:
 @router.put("/file")
 async def put_file(body: WriteBody) -> dict:
     p = _resolve_writable(body.path)
-    if body.expected_mtime is not None and p.exists():
-        try:
-            current = p.stat().st_mtime
-        except OSError as exc:
-            raise HTTPException(400, f"读取失败：{exc}") from None
-        if abs(current - body.expected_mtime) > 0.001:
-            raise HTTPException(409, "文件已被其他程序修改，请刷新后再保存")
-    out = await asyncio.to_thread(_write_text, p, body.content)
+    try:
+        async with hold(p, "human:save"):
+            out = await asyncio.to_thread(_write_text, p, body.content, body.expected_mtime)
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
     return {"ok": True, **out}
 
 
@@ -381,10 +438,13 @@ async def exec_command(body: ExecBody) -> dict:
 @router.post("/mkdir")
 async def make_dir(body: PathBody) -> dict:
     p = _resolve_writable(body.path)
-    if p.exists():
-        raise HTTPException(409, f"已存在：{p}")
     try:
-        p.mkdir(parents=True, exist_ok=False)
+        async with hold(p, "human:mkdir"):
+            if p.exists():
+                raise HTTPException(409, f"已存在：{p}")
+            p.mkdir(parents=True, exist_ok=False)
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
     except OSError as exc:
         raise HTTPException(400, f"创建失败：{exc}") from None
     return {"ok": True, "path": str(p)}
@@ -394,12 +454,18 @@ async def make_dir(body: PathBody) -> dict:
 async def rename(body: RenameBody) -> dict:
     src = _resolve_writable(body.from_path)
     dst = _resolve_writable(body.to_path)
-    if not src.exists():
-        raise HTTPException(404, f"不存在：{src}")
-    if dst.exists():
-        raise HTTPException(409, f"目标已存在：{dst}")
     try:
-        src.rename(dst)
+        async with contextlib.AsyncExitStack() as stack:
+            # 固定按路径排序加锁，避免两个反向重命名互相等待。
+            for lock_path in sorted({str(src), str(dst)}):
+                await stack.enter_async_context(hold(lock_path, "human:rename"))
+            if not src.exists():
+                raise HTTPException(404, f"不存在：{src}")
+            if dst.exists():
+                raise HTTPException(409, f"目标已存在：{dst}")
+            src.rename(dst)
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
     except OSError as exc:
         raise HTTPException(400, f"重命名失败：{exc}") from None
     return {"ok": True, "from": str(src), "to": str(dst)}
@@ -408,25 +474,28 @@ async def rename(body: RenameBody) -> dict:
 @router.delete("/file")
 async def delete_file(path: str = Query(..., min_length=1)) -> dict:
     p = _resolve_writable(path)
-    if not p.exists():
-        raise HTTPException(404, f"不存在：{p}")
     if p == _root():
         raise HTTPException(400, "不能删除工作区根目录")
     try:
-        if p.is_dir():
-            p.rmdir()  # 只允许删空目录，避免 Web UI 一键删掉整棵源码树
-            return {"ok": True, "deleted": str(p), "type": "dir"}
-        from ..checkpoints import backup_file
+        async with hold(p, "human:delete"):
+            if not p.exists():
+                raise HTTPException(404, f"不存在：{p}")
+            if p.is_dir():
+                p.rmdir()  # 只允许删空目录，避免 Web UI 一键删掉整棵源码树
+                return {"ok": True, "deleted": str(p), "type": "dir"}
+            from ..checkpoints import backup_file
 
-        bak = backup_file(p)
-        p.unlink()
-        change_id = None
-        try:
-            change = get_store().record(path=str(p), kind="delete", backup=bak)
-            change_id = change["id"]
-        except Exception:  # noqa: BLE001 —— 变更记录失败不阻塞删除
+            bak = backup_file(p)
+            p.unlink()
             change_id = None
-        return {"ok": True, "deleted": str(p), "type": "file", "backup": bak, "change_id": change_id}
+            try:
+                change = get_store().record(path=str(p), kind="delete", backup=bak)
+                change_id = change["id"]
+            except Exception:  # noqa: BLE001 —— 变更记录失败不阻塞删除
+                change_id = None
+            return {"ok": True, "deleted": str(p), "type": "file", "backup": bak, "change_id": change_id}
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
     except OSError as exc:
         raise HTTPException(400, f"删除失败：{exc}") from None
 
@@ -473,7 +542,14 @@ async def list_changes(limit: int = Query(50, ge=1, le=200), include_undone: boo
 
 @router.post("/changes/{change_id}/undo")
 async def undo_change(change_id: str) -> dict:
-    result = await asyncio.to_thread(get_store().undo, change_id)
+    item = get_store().get(change_id)
+    if not item:
+        raise HTTPException(404, "变更记录不存在")
+    try:
+        async with hold(str(item.get("path") or ""), "human:undo"):
+            result = await asyncio.to_thread(get_store().undo, change_id)
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
     if "error" in result:
         msg = str(result["error"])
         if "不存在" in msg:
@@ -485,7 +561,7 @@ async def undo_change(change_id: str) -> dict:
 
 
 @router.get("/git")
-async def git_status(cwd: str = Query(".")) -> dict:
+async def git_raw_status(cwd: str = Query(".")) -> dict:
     p = _resolve_any(cwd)
     if not p.is_dir():
         raise HTTPException(400, f"不是目录：{p}")
@@ -503,6 +579,83 @@ async def git_status(cwd: str = Query(".")) -> dict:
         30,
     )
     return {"available": True, "cwd": str(p), **result}
+
+
+
+
+@router.get("/git/status")
+async def get_git_status(cwd: str = Query(".")) -> dict:
+    """结构化 Git 状态：分支、脏文件、ahead/behind、合并状态。"""
+    try:
+        return await asyncio.to_thread(git_status, cwd)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/checkout")
+async def checkout_branch(body: GitCheckoutBody) -> dict:
+    try:
+        return await asyncio.to_thread(git_checkout, body.cwd, body.branch, body.create)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/merge/preview")
+async def preview_merge(body: GitMergeBody) -> dict:
+    """进入合并状态（--no-commit）；冲突文件由 /git/conflicts 读取。"""
+    try:
+        return await asyncio.to_thread(git_merge_preview, body.cwd, body.branch)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/merge/abort")
+async def abort_merge(body: GitMergeCommitBody) -> dict:
+    try:
+        return await asyncio.to_thread(git_merge_abort, body.cwd)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/merge/commit")
+async def commit_merge(body: GitMergeCommitBody) -> dict:
+    try:
+        return await asyncio.to_thread(git_merge_commit, body.cwd, body.message)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.get("/git/conflicts")
+async def get_git_conflicts(cwd: str = Query(".")) -> dict:
+    try:
+        return await asyncio.to_thread(git_conflicts, cwd)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/conflicts/resolve")
+async def resolve_git_conflict(body: GitResolveBody) -> dict:
+    try:
+        repo = await asyncio.to_thread(open_repo, body.cwd)
+        target = Path(repo) / body.path
+        async with hold(target, "human:conflict"):
+            return await asyncio.to_thread(
+                git_resolve_conflict, body.cwd, body.path, body.strategy, body.content
+            )
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/patch")
+async def apply_workspace_patch(body: GitPatchBody) -> dict:
+    """应用 unified diff；默认只预检（dry_run=true），确认后再落盘。"""
+    try:
+        return await asyncio.to_thread(git_apply_patch, body.cwd, body.patch, body.dry_run)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
 
 
 # ---------------------------------------------------------------------------

@@ -65,8 +65,19 @@
 | POST | `/api/workspace/changes/{id}/undo` | 撤销写入/删除/新建；后续修改冲突 409 |
 | POST | `/api/workspace/mkdir` / `/rename` | 新建目录 / 重命名 |
 | DELETE | `/api/workspace/file?path=` | 删除文件（先备份）或空目录 |
-| GET | `/api/workspace/git?cwd=` | 分支、status、diffstat |
+| GET | `/api/workspace/git?cwd=` | 兼容旧接口：原始分支/status/diffstat 文本 |
+| GET | `/api/workspace/git/status?cwd=` | 结构化 Git 状态：branch、clean、ahead/behind、merging、files、branches、conflicts |
+| POST | `/api/workspace/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
+| POST | `/api/workspace/git/merge/preview` | 进入两阶段合并 `{cwd,branch}`，返回冲突列表与状态 |
+| POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态 |
+| POST | `/api/workspace/git/merge/commit` | 提交合并 `{cwd,message}`；还有未解决冲突则 409 |
+| GET | `/api/workspace/git/conflicts?cwd=` | 读取 base/ours/theirs/工作区文本 |
+| POST | `/api/workspace/git/conflicts/resolve` | 解决单个冲突：`ours` / `theirs` / `manual`，并 `git add` |
+| POST | `/api/workspace/patch` | 应用 unified diff；默认 `dry_run=true` 只预检 |
 | WS | `/api/workspace/term?cwd=&token=&session=` | PTY；30 秒内带 `session` 重连可接管原 shell |
+
+写文件、删除、重命名、撤销、冲突 resolve 都经过进程内路径锁；默认等待 8 秒，
+超时返回 409。保存仍带 `expected_mtime`，跨进程/命令台改动由 mtime 兜底。
 
 WS 首帧为 `{"type":"ready","session_id":...,"reconnected":bool}`，其余为原始终端输出；客户端输入 `{"type":"input","data":...}`、`{"type":"resize","cols":..,"rows":..}`。
 

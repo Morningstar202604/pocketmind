@@ -153,7 +153,13 @@ def _write_file_sync(path: str, content: str) -> dict:
 
 
 async def write_file(path: str, content: str) -> dict:
-    return await asyncio.to_thread(_write_file_sync, path, content)
+    from ..workspace_locks import WorkspaceLockBusy, hold
+
+    try:
+        async with hold(path, "agent:write_file"):
+            return await asyncio.to_thread(_write_file_sync, path, content)
+    except WorkspaceLockBusy as exc:
+        return {"error": str(exc)}
 
 
 def _delete_file_sync(path: str) -> dict:
@@ -185,7 +191,13 @@ def _delete_file_sync(path: str) -> dict:
 
 
 async def delete_file(path: str) -> dict:
-    return await asyncio.to_thread(_delete_file_sync, path)
+    from ..workspace_locks import WorkspaceLockBusy, hold
+
+    try:
+        async with hold(path, "agent:delete_file"):
+            return await asyncio.to_thread(_delete_file_sync, path)
+    except WorkspaceLockBusy as exc:
+        return {"error": str(exc)}
 
 
 register(Tool(
