@@ -107,6 +107,28 @@ class ApiRouter(
                 ex.respond(200, JSON, settings.snapshot().toString())
             path == "/api/settings" && ex.method == "PUT" ->
                 ex.respond(200, JSON, settings.save(bodyJson(ex)).toString())
+            path == "/api/permissions" && ex.method == "GET" ->
+                ex.respond(200, JSON, JSONObject()
+                    .put("permissions", PermissionBroker.status(context))
+                    .put("activity", PermissionBroker.hasActivity()).toString())
+            path == "/api/permissions/request" && ex.method == "POST" -> {
+                val arr = bodyJson(ex).optJSONArray("permissions")
+                if (arr == null || arr.length() == 0) {
+                    return ex.respond(400, JSON, "{\"error\":\"permissions 不能为空\"}")
+                }
+                val names = (0 until arr.length()).mapNotNull { arr.optString(it, "").takeIf(String::isNotBlank) }
+                try {
+                    val result = PermissionBroker.request(names)
+                    val ok = result.values.all { it }
+                    ex.respond(200, JSON, JSONObject().put("ok", ok)
+                        .put("results", JSONObject(result as Map<*, *>)).toString())
+                } catch (e: IllegalStateException) {
+                    val code = if (e.message == "no_activity") "no_activity" else "permission_request_failed"
+                    ex.respond(409, JSON, JSONObject().put("error", e.message).put("error_code", code).toString())
+                } catch (e: IllegalArgumentException) {
+                    ex.respond(400, JSON, JSONObject().put("error", e.message).toString())
+                }
+            }
             path == "/api/providers" && ex.method == "GET" ->
                 ex.respond(200, JSON, "{\"providers\":${SettingsStore.PROVIDERS.trimIndent()}}")
             path == "/api/llm/test" && ex.method == "POST" -> llmTest(ex)

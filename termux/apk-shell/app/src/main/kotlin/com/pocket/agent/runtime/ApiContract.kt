@@ -29,6 +29,7 @@ object ApiContract {
     const val STOP = "/api/stop"
     const val KB = "/api/kb"
     const val SKILLS = "/api/skills"
+    const val PERMISSIONS = "/api/permissions"
     const val STATS = "/api/stats"
     const val METRICS = "/api/metrics"
     const val DIAGNOSTICS = "/api/diagnostics"
@@ -40,7 +41,7 @@ object ApiContract {
     /** 原生引擎真实实现并返回业务数据的端点。 */
     val implemented = setOf(
         HEALTH, STATUS, CHAT, TOOLS, EXPORT, IMPORT, SETTINGS, SESSIONS, SEARCH, COMPACT,
-        APPROVAL, APPROVALS, JOBS, JOB_RUN, RECIPES, UNDO, STOP, KB, SKILLS, STATS,
+        APPROVAL, APPROVALS, JOBS, JOB_RUN, RECIPES, UNDO, STOP, KB, SKILLS, PERMISSIONS, STATS,
         METRICS, DIAGNOSTICS, PROVIDERS, LLM_TEST, PROFILE,
     )
 

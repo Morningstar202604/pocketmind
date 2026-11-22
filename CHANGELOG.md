@@ -56,7 +56,11 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
   covers budget, repeat guard, invalid JSON, atomic write, Git tools, and
   `todo_read`; registered in `tests/run_all.sh`. The native `HarnessTest.kt`
   adds 4 Robolectric cases (invalid JSON, repeat guard, turn wall-clock,
-  settings clamping); the native suite grew to 67/67 with M1.4 skills coverage.
+  settings clamping); the native suite is now 70/70, including M1.4 skills and M1.5 permission coverage.
+- **M1.5 runtime permission flow**: tools now return `permission_required` with
+the exact Android permission names; a `PermissionBroker` posts the system dialog
+from the foreground Activity, `/api/permissions` reports state, and the tool card
+shows a one-tap「授予权限」action (409 `no_activity` when backgrounded).
 - **M1.4 native skills directory**: the Kotlin engine scans
   `filesDir/skills/<name>/SKILL.md`, parses frontmatter, injects only
   name + description into the system prompt, exposes `read_skill` for on-demand

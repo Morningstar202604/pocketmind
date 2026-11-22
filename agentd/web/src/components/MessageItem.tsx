@@ -3,6 +3,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { Msg, Part, ToolPart } from "../types";
 import type { ApprovalDecision } from "../api";
+import { api } from "../api";
 import { IconChevron } from "./icons";
 import { formatToolResult } from "../lib/format";
 import { structuredResult } from "../lib/structuredResult";
@@ -153,6 +154,17 @@ const STATUS_LABEL: Record<ToolPart["status"], string> = {
   denied: "已拒绝",
 };
 
+/** Android 运行时权限 → 用户能看懂的中文名；未知权限保持原样。 */
+const PERMISSION_LABEL: Record<string, string> = {
+  "android.permission.POST_NOTIFICATIONS": "通知",
+  "android.permission.ACCESS_FINE_LOCATION": "精确位置",
+  "android.permission.ACCESS_COARSE_LOCATION": "大致位置",
+  "android.permission.CAMERA": "相机",
+  "android.permission.SEND_SMS": "发送短信",
+  "android.permission.READ_SMS": "读取短信",
+  "android.permission.CALL_PHONE": "拨打电话",
+};
+
 function ToolCard({
   tool,
   onApproval,
@@ -168,6 +180,32 @@ function ToolCard({
 }) {
   const [open, setOpen] = useState(tool.status === "waiting");
   const [copied, setCopied] = useState(false);
+  const [permBusy, setPermBusy] = useState(false);
+  const [permMsg, setPermMsg] = useState("");
+  const permNames = useMemo(() => {
+    const r = tool.result;
+    if (!r || r.error_code !== "permission_required") return [];
+    return Array.isArray(r.permissions) ? r.permissions.map(String) : [];
+  }, [tool.result]);
+  const grantPermissions = async () => {
+    if (permBusy || permNames.length === 0) return;
+    setPermBusy(true);
+    setPermMsg("");
+    try {
+      const res = await api.post<{ ok?: boolean; results?: Record<string, boolean> }>(
+        "/api/permissions/request",
+        { permissions: permNames }
+      );
+      const denied = Object.entries(res.results ?? {}).filter(([, granted]) => !granted).map(([name]) => name);
+      setPermMsg(res.ok
+        ? "已授予，请重新发送刚才的操作"
+        : `未全部授予${denied.length ? `（${denied.map((n) => PERMISSION_LABEL[n] ?? n).join("、")}）` : ""}`);
+    } catch (e) {
+      setPermMsg((e as Error).message || "授权请求失败");
+    } finally {
+      setPermBusy(false);
+    }
+  };
   const bodyId = useMemo(() => `tool-${tool.id}-${Math.random().toString(36).slice(2, 6)}`, [tool.id]);
   const inputText =
     typeof tool.input === "string"
@@ -282,6 +320,18 @@ function ToolCard({
               )}
               <button className="tool-copy" onClick={() => void copyResult()} title="复制结果">
                 {copied ? "已复制" : "复制"}
+              </button>
+            </div>
+          )}
+          {!waiting && permNames.length > 0 && (
+            <div className="permission-bar">
+              <div className="permission-text">
+                <strong>缺少系统权限</strong>
+                <span>{permNames.map((n) => PERMISSION_LABEL[n] ?? n).join("、")}</span>
+                {permMsg && <span className="permission-msg">{permMsg}</span>}
+              </div>
+              <button className="btn sm primary" disabled={permBusy} onClick={() => void grantPermissions()}>
+                {permBusy ? "等待系统弹窗…" : "授予权限"}
               </button>
             </div>
           )}

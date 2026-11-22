@@ -181,7 +181,7 @@ bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签�
 
 原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、38 个
 手机/文件/知识库/系统/技能工具（Android API 直调）、技能目录（SKILL.md 扫描 +
-`read_skill` 渐进披露）、会话、导出导入、搜索、
+`read_skill` 渐进披露）、运行时权限引导（工具缺权限时可一键弹系统授权框）、会话、导出导入、搜索、
 定时任务（AlarmManager + cron/间隔/一次性，锁屏与重启后仍生效）、
 文件写删的可撤销备份、开机自启。仍属 Termux 专属并会**明确告知**
 （不伪成功）：MCP、Telegram 网关、子代理。需要这些请用方案 B。
@@ -260,7 +260,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（浏览器装一次）
 - **后端**：`ruff` + `mypy` + 51 个套件 + `compileall` + **依赖锁一致性** + **覆盖率红线**
 - **前端**：`tsc` + Vitest + 生产构建 + **`dist/` 新鲜度校验**
   （入库的产物必须与当前源码一致，因为手机端从不构建它）
-- **Android**：67 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
+- **Android**：70 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
 
 ```bash
 # Android 单独跑（需要 JDK 17+ 与 Android SDK）

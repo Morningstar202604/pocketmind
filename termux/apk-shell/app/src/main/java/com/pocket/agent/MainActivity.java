@@ -53,6 +53,8 @@ import android.webkit.WebViewClient;
 
 import android.widget.Toast;
 
+import com.pocket.agent.runtime.PermissionBroker;
+
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -128,6 +130,7 @@ public class MainActivity extends Activity {
         }
 
         setContentView(web);
+        PermissionBroker.INSTANCE.attach(this);
 
         // 注册监控广播 + 驻活 ForegroundService
         registerMonitorReceiver();
@@ -598,6 +601,7 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        PermissionBroker.INSTANCE.onResult(requestCode, permissions, grantResults);
         // 授权成功后补发缓存的待发通知（JS 不会自动重发）
         if (requestCode == NOTIFICATION_PERMISSION_CODE
                 && grantResults.length > 0
@@ -626,6 +630,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        PermissionBroker.INSTANCE.detach(this);
         if (nativeBound && nativeConnection != null) {
             try {
                 unbindService(nativeConnection);

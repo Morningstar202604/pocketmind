@@ -200,7 +200,7 @@ bash scripts/build-apk.sh --release  # unsigned unless keystore.properties is pr
 
 What the native engine covers today: chat (SSE), all three permission modes,
 server-enforced approvals, 38 phone/file/knowledge/system/skill tools via Android
-APIs, a `SKILL.md` directory with on-demand `read_skill`, sessions, export/import, search, a real `/system/bin/sh`, and scheduled
+APIs, a `SKILL.md` directory with on-demand `read_skill`, guided runtime-permission requests, sessions, export/import, search, a real `/system/bin/sh`, and scheduled
 jobs (AlarmManager with cron/interval/one-shot triggers that survive screen
 lock and reboot), plus undoable file writes and deletes. What stays Termux-only
 (the app says so explicitly instead of faking it): MCP, the Telegram gateway and the subagent. For those, use Option B.

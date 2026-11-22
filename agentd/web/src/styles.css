@@ -3874,3 +3874,42 @@ body {
 .ws-git-panel { max-height: 64dvh; }
 .ws-conflict-list, .ws-branch-list { max-height: 34dvh; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== 运行时权限条 ===== */
+.permission-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-radius: var(--radius-sm);
+}
+.permission-text {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+.permission-text strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.permission-msg {
+  color: var(--text-3);
+}
+.permission-bar .btn.sm {
+  flex: none;
+  white-space: nowrap;
+}
+@media (max-width: 380px) {
+  .permission-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

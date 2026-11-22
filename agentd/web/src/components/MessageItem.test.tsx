@@ -96,4 +96,24 @@ describe("MessageItem 审批卡", () => {
     expect(screen.getByText("已拒绝")).toBeInTheDocument();
     expect(screen.queryByText("允许一次")).toBeNull();
   });
+
+  it("permission_required 工具卡显示中文权限名与「授予权限」按钮", () => {
+    const p: ToolPart = {
+      id: "call_perm",
+      name: "take_photo",
+      input: { path: "a.jpg" },
+      status: "failed",
+      risk: "write",
+      result: {
+        error: "缺少系统权限：相机",
+        error_code: "permission_required",
+        permissions: ["android.permission.CAMERA"],
+      },
+    };
+    renderMsg([p]);
+    fireEvent.click(screen.getByText("拍照"));
+    expect(screen.getByText("缺少系统权限")).toBeInTheDocument();
+    expect(screen.getByText("相机")).toBeInTheDocument();
+    expect(screen.getByText("授予权限")).toBeInTheDocument();
+  });
 });

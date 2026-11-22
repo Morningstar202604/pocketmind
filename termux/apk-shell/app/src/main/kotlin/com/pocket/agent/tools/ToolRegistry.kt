@@ -58,10 +58,14 @@ class ToolAbort(val result: JSONObject) : RuntimeException(null, null, false, fa
 private fun err(msg: String, code: String = "tool_error"): JSONObject =
     JSONObject().put("error", msg).put("error_code", code)
 
-private fun needPermission(hint: String): JSONObject =
-    JSONObject().put("error", "缺少系统权限：$hint")
+private fun needPermission(hint: String, vararg permissions: String): JSONObject {
+    val names = JSONArray()
+    permissions.forEach { names.put(it) }
+    return JSONObject().put("error", "缺少系统权限：$hint")
         .put("error_code", "permission_required")
-        .put("hint", "请在系统设置 → 应用 → 口袋智灵 中授予该权限后重试")
+        .put("permissions", names)
+        .put("hint", "点「授予权限」由系统弹窗授权；也可在系统设置 → 应用 → 口袋智灵 中手动开启")
+}
 
 private fun unavailable(what: String, why: String): JSONObject =
     JSONObject().put("error", "$what 在原生引擎上不可用").put("error_code", "capability_unavailable")
@@ -437,7 +441,7 @@ object ToolRegistry {
             ) { args, env ->
                 if (Build.VERSION.SDK_INT >= 33 &&
                     env.context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                ) throw ToolAbort(needPermission("通知"))
+                ) throw ToolAbort(needPermission("通知", Manifest.permission.POST_NOTIFICATIONS))
                 val nm = env.context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                     ?: throw ToolAbort(err("通知服务不可用"))
                 nm.createNotificationChannel(
@@ -609,7 +613,7 @@ object ToolRegistry {
                 emptySchema
             ) { _, env ->
                 if (env.context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    throw ToolAbort(needPermission("精确位置（读取 WiFi 信息在 Android 8+ 需要）"))
+                    throw ToolAbort(needPermission("精确位置（读取 WiFi 信息在 Android 8+ 需要）", Manifest.permission.ACCESS_FINE_LOCATION))
                 }
                 @Suppress("DEPRECATION")
                 val wm = env.context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -631,7 +635,7 @@ object ToolRegistry {
                 emptySchema
             ) { _, env ->
                 if (env.context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    throw ToolAbort(needPermission("精确位置（WiFi 扫描在 Android 8+ 需要）"))
+                    throw ToolAbort(needPermission("精确位置（WiFi 扫描在 Android 8+ 需要）", Manifest.permission.ACCESS_FINE_LOCATION))
                 }
                 @Suppress("DEPRECATION")
                 val wm = env.context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -654,7 +658,7 @@ object ToolRegistry {
             ) { _, env ->
                 if (env.context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
                     env.context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                ) throw ToolAbort(needPermission("位置"))
+                ) throw ToolAbort(needPermission("位置", Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 val lm = env.context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
                     ?: throw ToolAbort(err("定位服务不可用"))
                 val providers = lm.getProviders(true)
@@ -678,7 +682,7 @@ object ToolRegistry {
                 schema("to" to ("string" to true), "text" to ("string" to true))
             ) { args, env ->
                 if (env.context.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-                    throw ToolAbort(needPermission("短信"))
+                    throw ToolAbort(needPermission("短信", Manifest.permission.SEND_SMS))
                 }
                 val to = optString(args, "to")
                 val text = optString(args, "text")
@@ -699,7 +703,7 @@ object ToolRegistry {
                 schema("limit" to ("integer" to false))
             ) { args, env ->
                 if (env.context.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-                    throw ToolAbort(needPermission("短信"))
+                    throw ToolAbort(needPermission("短信", Manifest.permission.READ_SMS))
                 }
                 val limit = optInt(args, "limit", 10).coerceIn(1, 50)
                 val arr = JSONArray()
@@ -768,7 +772,7 @@ object ToolRegistry {
                 schema("path" to ("string" to false))
             ) { args, env ->
                 if (env.context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                    throw ToolAbort(needPermission("相机"))
+                    throw ToolAbort(needPermission("相机", Manifest.permission.CAMERA))
                 }
                 // 后台服务不能直接持有 Camera2 会话（没有 Surface 与前台生命周期），
                 // 但可以走系统相机 Intent 让用户拍。

@@ -131,6 +131,8 @@ WS 首帧为 `{"type":"ready","session_id":...,"reconnected":bool}`，其余为�
 | GET | `/api/kb` | 知识库条目（标题 + 字数） |
 | DELETE | `/api/kb/{kid}` | 删除条目 |
 | GET | `/api/skills` | 已安装 SKILL.md 技能 |
+| GET | `/api/permissions` | Android 运行时权限状态（含是否有前台 Activity） |
+| POST | `/api/permissions/request` | 请求一组权限，由前台 Activity 弹系统授权框；无 Activity 返回 409 |
 
 ## 工具 / MCP / 设置 / 导出
 

@@ -827,6 +827,19 @@ class EngineContractTest {
     }
 
     @Test
+    fun `权限接口 - 状态可查 无 Activity 时请求明确失败`() {
+        bootstrap()
+        val status = JSONObject(get("/api/permissions").body)
+        assertTrue("应返回权限清单：$status", status.getJSONArray("permissions").length() >= 7)
+        assertEquals("测试进程没有挂 Activity", false, status.getBoolean("activity"))
+        assertEquals(400, send("POST", "/api/permissions/request", "{}").code)
+        val noActivity = send("POST", "/api/permissions/request",
+            JSONObject().put("permissions", JSONArray().put("android.permission.CAMERA")).toString())
+        assertEquals(409, noActivity.code)
+        assertEquals("no_activity", JSONObject(noActivity.body).getString("error_code"))
+    }
+
+    @Test
     fun `技能接口 - 返回真实索引与目录`() {
         bootstrap()
         val dir = File(context.filesDir, "skills/demo")
