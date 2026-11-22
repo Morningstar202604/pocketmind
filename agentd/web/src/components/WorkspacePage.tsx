@@ -305,7 +305,8 @@ export function WorkspacePage() {
     setPanelBusy(c.id);
     setError("");
     try {
-      await undoWorkspaceChange(c.id);
+      const r = await undoWorkspaceChange(c.id);
+      if (r.error) throw new Error(r.error);
       if (current?.path === c.path) {
         if (c.kind === "create") {
           setCurrent(null);
@@ -541,7 +542,7 @@ export function WorkspacePage() {
 
   const remove = async () => {
     if (!current) return;
-    if (!window.confirm(`删除 ${current.path}？${info?.features.changes !== false ? "文件会先备份，" : "原生运行时删除不可撤销，"}目录只允许删空目录。`)) return;
+    if (!window.confirm(`删除 ${current.path}？${info?.features.changes !== false ? "文件会先备份；" : "原生运行时删除不可撤销；"}目录只允许删空目录。`)) return;
     try {
       await deleteWorkspaceFile(current.path);
       setCurrent(null);

@@ -56,7 +56,8 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
   covers budget, repeat guard, invalid JSON, atomic write, Git tools, and
   `todo_read`; registered in `tests/run_all.sh`. The native `HarnessTest.kt`
   adds 4 Robolectric cases (invalid JSON, repeat guard, turn wall-clock,
-  settings clamping); the native suite is now 77/77 across M1.4 skills, M1.5 permissions and M1.7 workspace coverage.
+  settings clamping); the native suite is now 83/83 across M1.4 skills, M1.5 permissions, M1.7 workspace REST and M1.8 workspace undo.
+- **M1.8 native workspace change log**: every native write/delete/mkdir now records a `workspace_changes.json` entry with a private backup, returns `change_id`, and exposes `GET /api/workspace/changes` + `POST /api/workspace/changes/{id}/undo`. Undo refuses when the file changed after the record (mtime ms + size), so a second edit is never silently overwritten; directory creates/deletes are handled too. Workspace UI re-enables the change panel on the native runtime. `WorkspaceChangesTest` (6) + engine contract coverage.
 - **M1.7 native workspace REST**: `NativeWorkspace` serves `info/tree/file/preview/search/mkdir/rename/delete/exec` over the app-private `filesDir`; config/db/checkpoint/audit paths are denied from tree/read/write, writes are atomic with `expected_mtime`, and `git/status` returns `available:false`. Workspace UI adapts: native runtime hides Git/changes/tasks, uses the command console instead of PTY. `NativeWorkspaceTest` (6) + engine contract case.
 - **M1.6 merge checkpoint**: `merge_preview` pins a `refs/pocketmind/premerge/*`
 ref before touching the worktree; `merge_commit` keeps it, `merge_abort` clears it,

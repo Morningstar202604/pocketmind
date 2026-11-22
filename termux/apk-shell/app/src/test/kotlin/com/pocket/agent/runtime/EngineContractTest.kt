@@ -899,6 +899,18 @@ class EngineContractTest {
 
         val git = JSONObject(get("/api/workspace/git/status?cwd=ws-api").body)
         assertEquals(false, git.getBoolean("available"))
+
+        val undoPut = send("PUT", "/api/workspace/file", JSONObject()
+            .put("path", "ws-api/undo.txt").put("content", "undo me\n").toString())
+        val undoId = JSONObject(undoPut.body).getString("change_id")
+        val changes = JSONObject(get("/api/workspace/changes?limit=10").body)
+        assertTrue("写入后应出现在变更列表：$changes", (0 until changes.getJSONArray("items").length()).any {
+            changes.getJSONArray("items").getJSONObject(it).getString("id") == undoId
+        })
+        val undone = send("POST", "/api/workspace/changes/$undoId/undo", null)
+        assertEquals(200, undone.code)
+        assertEquals(true, JSONObject(undone.body).getBoolean("ok"))
+        assertFalse(File(context.filesDir, "ws-api/undo.txt").exists())
     }
 
     @Test

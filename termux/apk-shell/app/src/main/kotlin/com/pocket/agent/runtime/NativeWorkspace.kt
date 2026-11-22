@@ -25,8 +25,9 @@ class NativeWorkspace(private val context: Context) {
     class WorkspaceException(val status: Int, message: String) : RuntimeException(message)
 
     private val root: File = context.filesDir.canonicalFile
-    private val deniedFiles = setOf("config.json", "rules.json", "rules.json.bak", "pocketmind.db")
-    private val deniedDirs = setOf("checkpoints", "audit")
+    private val changes = WorkspaceChanges(context, root)
+    private val deniedFiles = setOf("config.json", "rules.json", "rules.json.bak", "pocketmind.db", "workspace_changes.json")
+    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups")
 
     init {
         root.mkdirs()
@@ -40,7 +41,7 @@ class NativeWorkspace(private val context: Context) {
         .put("features", JSONObject()
             .put("tree", true).put("read", true).put("write", true)
             .put("preview", true).put("search", true).put("exec", true)
-            .put("git", false).put("changes", false).put("tasks", false)
+            .put("git", false).put("changes", true).put("tasks", false)
             .put("locks", false).put("git_merge", false))
 
     fun tree(path: String?): JSONObject {
@@ -77,6 +78,8 @@ class NativeWorkspace(private val context: Context) {
         if (expectedMtime != null && expectedMtime > 0 && oldMtime != null && oldMtime != expectedMtime) {
             throw WorkspaceException(409, "文件已被其他人修改（mtime $oldMtime != $expectedMtime）")
         }
+        val existed = f.isFile
+        val backup = changes.backupForWrite(f)
         f.parentFile?.mkdirs()
         val tmp = File(f.parentFile, ".${f.name}.tmp-${UUID.randomUUID().toString().take(8)}")
         try {
@@ -89,9 +92,19 @@ class NativeWorkspace(private val context: Context) {
         } finally {
             tmp.delete()
         }
+        val bytes = content.toByteArray(StandardCharsets.UTF_8).size
+        val change = changes.record(
+            path = f.absolutePath,
+            kind = if (existed) "overwrite" else "create",
+            backup = backup,
+            afterMtimeMs = f.lastModified(),
+            afterSize = f.length().toLong(),
+            bytes = bytes,
+        )
         return JSONObject().put("ok", true).put("path", f.absolutePath)
-            .put("bytes", content.toByteArray(StandardCharsets.UTF_8).size)
+            .put("bytes", bytes)
             .put("mtime", f.lastModified() / 1000)
+            .put("change_id", change.optString("id"))
     }
 
     fun preview(path: String?, content: String): JSONObject {
@@ -139,7 +152,11 @@ class NativeWorkspace(private val context: Context) {
         val f = resolve(path, mustExist = false)
         if (f.exists()) throw WorkspaceException(409, "路径已存在")
         if (!f.mkdirs()) throw WorkspaceException(500, "创建目录失败")
+        val change = changes.record(
+            path = f.absolutePath, kind = "create", afterMtimeMs = f.lastModified(), dir = true,
+        )
         return JSONObject().put("ok", true).put("path", f.absolutePath)
+            .put("change_id", change.optString("id"))
     }
 
     fun rename(from: String?, to: String?): JSONObject {
@@ -159,9 +176,14 @@ class NativeWorkspace(private val context: Context) {
         if (isDir && f.listFiles()?.isNotEmpty() == true) {
             throw WorkspaceException(409, "目录非空，先清空再删除")
         }
+        val backup = if (isDir) null else changes.backupForWrite(f)
+        val oldSize = if (isDir) 0 else f.length()
         if (!f.delete()) throw WorkspaceException(500, if (isDir) "删除目录失败" else "删除文件失败")
+        val change = changes.record(
+            path = f.absolutePath, kind = "delete", backup = backup, bytes = oldSize.toInt(), dir = isDir,
+        )
         return JSONObject().put("ok", true).put("deleted", f.absolutePath)
-            .put("type", if (isDir) "dir" else "file")
+            .put("type", if (isDir) "dir" else "file").put("change_id", change.optString("id"))
     }
 
     fun exec(command: String?, cwd: String?, timeoutSec: Int): JSONObject {
@@ -210,6 +232,11 @@ class NativeWorkspace(private val context: Context) {
             .put("timed_out", !finished)
             .put("truncated", out.length >= MAX_EXEC_OUTPUT || err.length >= MAX_EXEC_OUTPUT)
     }
+
+    fun listChanges(limit: Int, includeUndone: Boolean): JSONObject =
+        changes.list(limit, includeUndone)
+
+    fun undoChange(id: String): JSONObject = changes.undo(id)
 
     fun gitStatus(cwd: String?): JSONObject {
         val dir = resolve(cwd ?: ".", mustExist = true)

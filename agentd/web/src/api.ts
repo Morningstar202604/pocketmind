@@ -455,6 +455,7 @@ export interface WorkspaceChange {
   id: string;
   path: string;
   kind: "overwrite" | "create" | "delete";
+  dir?: boolean;
   backup?: string | null;
   after_mtime?: number | null;
   after_size?: number | null;
@@ -559,7 +560,7 @@ export const getWorkspaceChanges = (limit = 50, includeUndone = false) =>
     `/api/workspace/changes?limit=${limit}&include_undone=${includeUndone ? "true" : "false"}`
   );
 export const undoWorkspaceChange = (changeId: string) =>
-  api.post<{ ok: boolean; restored: string; kind: string }>(
+  api.post<{ ok?: boolean; restored?: string; kind?: string; error?: string }>(
     `/api/workspace/changes/${encodeURIComponent(changeId)}/undo`
   );
 export const startWorkspaceTask = (command: string, cwd: string, timeout = 300) =>

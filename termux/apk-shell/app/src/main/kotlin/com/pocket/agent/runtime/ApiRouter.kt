@@ -170,7 +170,20 @@ class ApiRouter(
             path == "/api/workspace/git/status" && ex.method == "GET" ->
                 workspace(ex) { ws -> ws.gitStatus(ex.query["cwd"]) }
             path == "/api/workspace/changes" && ex.method == "GET" ->
-                ex.respond(200, JSON, "{\"items\":[]}")
+                workspace(ex) { ws ->
+                    ws.listChanges(
+                        ex.query["limit"]?.toIntOrNull() ?: 50,
+                        ex.query["include_undone"] == "true",
+                    )
+                }
+            path.startsWith("/api/workspace/changes/") && path.endsWith("/undo") && ex.method == "POST" -> {
+                val id = path.removePrefix("/api/workspace/changes/").removeSuffix("/undo")
+                if (id.isEmpty() || id.contains('/')) {
+                    ex.respond(400, JSON, "{\"error\":\"变更 id 不合法\"}")
+                } else {
+                    workspace(ex) { ws -> ws.undoChange(id) }
+                }
+            }
             path == "/api/workspace/tasks" && ex.method == "GET" ->
                 ex.respond(200, JSON, "{\"items\":[]}")
             path == "/api/providers" && ex.method == "GET" ->
