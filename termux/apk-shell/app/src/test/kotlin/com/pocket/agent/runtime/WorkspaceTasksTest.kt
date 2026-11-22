@@ -49,6 +49,18 @@ class WorkspaceTasksTest {
     }
 
     @Test
+    fun `任务未结束就能看到增量输出`() {
+        val t = ws.startTask("printf 'early\\n'; sleep 1; printf 'late\\n'", "ws-tasks", 10)
+        val id = t.getString("id")
+        Thread.sleep(250)
+        var mid = ws.getTask(id)
+        val sawEarly = mid.getString("stdout").contains("early")
+        assertTrue("运行中应看到 early，实际：$mid", sawEarly)
+        assertEquals("running", mid.getString("status"))
+        assertEquals("done", waitFor(id).getString("status"))
+    }
+
+    @Test
     fun `取消运行中的任务`() {
         val t = ws.startTask("sleep 30", "ws-tasks", 5)
         val id = t.getString("id")

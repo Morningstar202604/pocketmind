@@ -435,6 +435,12 @@ export interface WorkspaceConflict {
   theirs: string;
   work: string;
 }
+export interface WorkspaceConflictBlock {
+  index: number;
+  ours: string;
+  base: string;
+  theirs: string;
+}
 export interface WorkspaceCheckpoint {
   ref: string;
   sha: string;
@@ -550,6 +556,16 @@ export const resolveWorkspaceConflict = (
 ) =>
   api.post<{ ok: boolean; path: string; remaining: string[]; state: WorkspaceGitStatus }>(
     "/api/workspace/git/conflicts/resolve", { cwd, path, strategy, content }
+  );
+export const getWorkspaceConflictBlocks = (cwd: string, path: string) =>
+  api.get<{ path: string; binary: boolean; blocks: WorkspaceConflictBlock[]; count: number }>(
+    `/api/workspace/git/conflicts/blocks?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`
+  );
+export const resolveWorkspaceConflictBlocks = (
+  cwd: string, path: string, choices: Array<{ index: number; side: "ours" | "theirs" | "base" | "manual"; content?: string }>
+) =>
+  api.post<{ ok: boolean; path: string; remaining: string[]; state: WorkspaceGitStatus }>(
+    "/api/workspace/git/conflicts/blocks/resolve", { cwd, path, choices }
   );
 export const applyWorkspacePatch = (cwd: string, patch: string, dryRun = true) =>
   api.post<{ ok: boolean; dry_run: boolean; state?: WorkspaceGitStatus }>("/api/workspace/patch", {

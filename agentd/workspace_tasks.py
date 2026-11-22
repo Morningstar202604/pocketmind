@@ -12,11 +12,12 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
 import time
 import uuid
 
 from .paths import home_dir
-from .tools.shell import run_shell
+from .tools.shell import MAX_OUTPUT, _kill_group, _rlimit_preexec
 
 _MAX_TASKS = 100
 _MAX_SERIALIZED = 50
@@ -79,39 +80,82 @@ class WorkspaceTaskManager:
         return _public(rec)
 
     async def _run(self, rec: dict, full_command: str) -> None:
+        """边跑边把 stdout/stderr 写进记录：任务面板 1.5s 轮询即可看到增量。
+
+        这里不复用 run_shell，因为 run_shell 只在结束时返回；但仍保留同样的
+        独立进程组、rlimit 和超时整组回收，避免 npm run dev 留下孤儿进程。
+        """
+        shell = shutil.which("bash") or "/bin/sh"
+        spawn: dict = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "start_new_session": True,
+        }
+        if os.name == "posix":
+            spawn["preexec_fn"] = _rlimit_preexec
+        proc = await asyncio.create_subprocess_exec(shell, "-c", full_command, **spawn)
+        assert proc.stdout is not None and proc.stderr is not None
+        timed_out = False
+
+        async def pump(stream, key: str) -> None:
+            while True:
+                chunk = await stream.read(1024)
+                if not chunk:
+                    return
+                text = chunk.decode("utf-8", errors="replace")
+                current = rec.get(key, "")
+                room = MAX_OUTPUT - len(current)
+                if room > 0:
+                    rec[key] = current + text[:room]
+                if len(current) + len(text) > MAX_OUTPUT:
+                    rec["truncated"] = True
+                rec["updated_at"] = _now()
+
+        pumps = [
+            asyncio.create_task(pump(proc.stdout, "stdout")),
+            asyncio.create_task(pump(proc.stderr, "stderr")),
+        ]
         try:
-            result = await run_shell(full_command, int(rec["timeout"]))
-            if rec.get("status") == "cancelling":
-                rec["status"] = "cancelled"
-            elif result.get("error") or result.get("timed_out"):
-                rec["status"] = "failed"
-            elif result.get("exit_code") in (0, None):
-                rec["status"] = "done"
-            else:
-                rec["status"] = "failed"
-            rec.update({
-                "ended_at": _now(),
-                "exit_code": result.get("exit_code"),
-                "stdout": result.get("stdout", ""),
-                "stderr": result.get("stderr", ""),
-                "error": result.get("error", ""),
-                "timed_out": bool(result.get("timed_out")),
-                "truncated": bool(result.get("truncated")),
-            })
+            await asyncio.wait_for(proc.wait(), timeout=int(rec["timeout"]))
+        except TimeoutError:
+            timed_out = True
+            _kill_group(proc)
+            await proc.wait()
         except asyncio.CancelledError:
-            rec.update({
-                "status": "cancelled",
-                "ended_at": _now(),
-                "error": "任务已取消",
-                "_task": None,
-            })
+            rec.update({"status": "cancelled", "error": "任务已取消", "ended_at": _now()})
+            _kill_group(proc)
+            await proc.wait()
+            for p in pumps:
+                p.cancel()
+            rec["_task"] = None
             rec["log_path"] = _persist(rec)
             raise
         finally:
-            rec["_task"] = None
-            if rec.get("status") != "cancelled":
-                rec["ended_at"] = rec.get("ended_at") or _now()
-            rec["log_path"] = _persist(rec)
+            for p in pumps:
+                if not p.done():
+                    p.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
+
+        cancelled = rec.get("status") == "cancelling"
+        if cancelled:
+            rec["status"] = "cancelled"
+            rec["error"] = "任务已取消"
+        elif timed_out:
+            rec["status"] = "failed"
+            rec["error"] = f"任务超时（{rec['timeout']}s）"
+        elif proc.returncode == 0:
+            rec["status"] = "done"
+        else:
+            rec["status"] = "failed"
+            tail = rec.get("stderr", "")[:200] or rec.get("stdout", "")[:120]
+            rec["error"] = f"命令以非零状态退出（exit {proc.returncode}）：{tail}"
+        rec.update({
+            "ended_at": _now(),
+            "exit_code": proc.returncode,
+            "timed_out": bool(timed_out),
+        })
+        rec["_task"] = None
+        rec["log_path"] = _persist(rec)
 
     def list(self, limit: int = 20) -> list[dict]:
         items = sorted(

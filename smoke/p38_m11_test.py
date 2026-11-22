@@ -89,10 +89,17 @@ def main() -> int:
         check("撤销覆盖恢复原文", c.get("/api/workspace/file", params={"path": "note.txt"}).json().get("content") == "one\n")
 
         task = c.post("/api/workspace/tasks", json={
-            "command": "python3 -c \"print('TASK_OK')\"", "cwd": ".", "timeout": 30,
+            "command": "python3 -u -c \"print('TASK_START', flush=True); import time; time.sleep(2); print('TASK_OK', flush=True)\"", "cwd": ".", "timeout": 30,
         })
         tid = task.json().get("id")
         check("后台任务创建", task.status_code == 200 and bool(tid), str(task.text[:120]))
+        early = {}
+        for _ in range(10):
+            early = c.get(f"/api/workspace/tasks/{tid}").json()
+            if "TASK_START" in (early.get("stdout") or ""):
+                break
+            time.sleep(0.1)
+        check("任务未结束就能看到增量输出", early.get("status") == "running" and "TASK_START" in early.get("stdout", ""), str(early)[:200])
         detail = {}
         for _ in range(30):
             detail = c.get(f"/api/workspace/tasks/{tid}").json()

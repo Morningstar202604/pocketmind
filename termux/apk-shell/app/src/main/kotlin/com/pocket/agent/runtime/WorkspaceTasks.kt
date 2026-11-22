@@ -57,12 +57,13 @@ class WorkspaceTasks(private val context: Context) {
     fun list(limit: Int): JSONObject {
         val items = tasks.values.sortedByDescending { it.optDouble("created_at", 0.0) }
         val arr = org.json.JSONArray()
-        items.take(limit.coerceIn(1, 50)).forEach { arr.put(public(it)) }
+        items.take(limit.coerceIn(1, 50)).forEach { rec -> arr.put(synchronized(rec) { public(rec) }) }
         return JSONObject().put("items", arr).put("count", arr.length())
     }
 
     fun get(id: String): JSONObject =
-        tasks[id]?.let { public(it) } ?: JSONObject().put("error", "任务不存在")
+        tasks[id]?.let { rec -> synchronized(rec) { public(rec) } }
+            ?: JSONObject().put("error", "任务不存在")
 
     private fun trim() {
         if (tasks.size <= MAX_TASKS) return
@@ -93,14 +94,30 @@ class WorkspaceTasks(private val context: Context) {
         val t1 = Thread {
             runCatching {
                 proc.inputStream.bufferedReader().use { r ->
-                    r.lineSequence().forEach { if (out.length < MAX_OUTPUT) out.append(it).append('\n') }
+                    r.lineSequence().forEach { line ->
+                        synchronized(rec) {
+                            if (out.length < MAX_OUTPUT) {
+                                out.append(line).append('\n')
+                                rec.put("stdout", out.toString().take(MAX_OUTPUT))
+                                rec.put("updated_at", System.currentTimeMillis() / 1000.0)
+                            }
+                        }
+                    }
                 }
             }
         }
         val t2 = Thread {
             runCatching {
                 proc.errorStream.bufferedReader().use { r ->
-                    r.lineSequence().forEach { if (err.length < MAX_OUTPUT) err.append(it).append('\n') }
+                    r.lineSequence().forEach { line ->
+                        synchronized(rec) {
+                            if (err.length < MAX_OUTPUT) {
+                                err.append(line).append('\n')
+                                rec.put("stderr", err.toString().take(MAX_OUTPUT))
+                                rec.put("updated_at", System.currentTimeMillis() / 1000.0)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -119,19 +136,21 @@ class WorkspaceTasks(private val context: Context) {
             proc.exitValue() == 0 -> "done"
             else -> "failed"
         }
-        rec.put("status", status)
-        rec.put("ended_at", System.currentTimeMillis() / 1000.0)
-        if (finished) runCatching { rec.put("exit_code", proc.exitValue()) }
-        rec.put("stdout", out.toString().take(MAX_OUTPUT))
-        rec.put("stderr", err.toString().take(MAX_OUTPUT))
-        rec.put("error", when {
-            cancelled -> "任务已取消"
-            !finished -> "任务超时"
-            else -> ""
-        })
-        rec.put("timed_out", !finished && !cancelled)
-        rec.put("truncated", out.length >= MAX_OUTPUT || err.length >= MAX_OUTPUT)
-        rec.put("log_path", persist(rec))
+        synchronized(rec) {
+            rec.put("status", status)
+            rec.put("ended_at", System.currentTimeMillis() / 1000.0)
+            if (finished) runCatching { rec.put("exit_code", proc.exitValue()) }
+            rec.put("stdout", out.toString().take(MAX_OUTPUT))
+            rec.put("stderr", err.toString().take(MAX_OUTPUT))
+            rec.put("error", when {
+                cancelled -> "任务已取消"
+                !finished -> "任务超时"
+                else -> ""
+            })
+            rec.put("timed_out", !finished && !cancelled)
+            rec.put("truncated", out.length >= MAX_OUTPUT || err.length >= MAX_OUTPUT)
+            rec.put("log_path", persist(rec))
+        }
         processes.remove(id)
     }
 

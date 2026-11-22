@@ -48,7 +48,7 @@
 
 前缀 `/api/workspace`，全部要求 token。Python 路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
 
-原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks`，写删会先备份并记一条变更，后台任务可查询和取消（输出仍是结束后的快照）；`git/term` 明确不可用（`features` 为 false，Git status 返回 `available:false`）。
+原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks`，写删会先备份并记一条变更，后台任务可查询和取消，stdout/stderr 在运行中增量写入记录（前端 1.5s 轮询显示尾部）；`git/term` 明确不可用（`features` 为 false，Git status 返回 `available:false`）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -77,6 +77,8 @@
 | POST | `/api/workspace/git/merge/undo` | 把已提交的双亲合并 reset 回检查点；脏工作区/非合并提交 409 |
 | GET | `/api/workspace/git/conflicts?cwd=` | 读取 base/ours/theirs/工作区文本 |
 | POST | `/api/workspace/git/conflicts/resolve` | 解决单个冲突：`ours` / `theirs` / `manual`，并 `git add` |
+| GET | `/api/workspace/git/conflicts/blocks?cwd=&path=` | 三路冲突块（ours/base/theirs，来自 `git merge-file --diff3`） |
+| POST | `/api/workspace/git/conflicts/blocks/resolve` | 按块解决：`choices:[{index,side,content?}]`，全部块都选完才写文件并 `git add` |
 | POST | `/api/workspace/patch` | 应用 unified diff；默认 `dry_run=true` 只预检 |
 | WS | `/api/workspace/term?cwd=&token=&session=` | PTY；30 秒内带 `session` 重连可接管原 shell |
 

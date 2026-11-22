@@ -32,11 +32,13 @@ from ..workspace_changes import get_store
 from ..workspace_git import GitOperationError, GitUnavailable, open_repo, read_merge_checkpoint
 from ..workspace_git import apply_patch as git_apply_patch
 from ..workspace_git import checkout as git_checkout
+from ..workspace_git import conflict_blocks as git_conflict_blocks
 from ..workspace_git import conflicts as git_conflicts
 from ..workspace_git import merge_abort as git_merge_abort
 from ..workspace_git import merge_commit as git_merge_commit
 from ..workspace_git import merge_preview as git_merge_preview
 from ..workspace_git import resolve_conflict as git_resolve_conflict
+from ..workspace_git import resolve_conflict_blocks as git_resolve_conflict_blocks
 from ..workspace_git import status as git_status
 from ..workspace_git import undo_merge as git_undo_merge
 from ..workspace_locks import WorkspaceLockBusy, hold
@@ -131,6 +133,18 @@ class GitResolveBody(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     strategy: str = "ours"
     content: str | None = Field(default=None, max_length=MAX_WRITE)
+
+
+class ConflictChoice(BaseModel):
+    index: int = Field(ge=0)
+    side: str = "ours"
+    content: str | None = Field(default=None, max_length=MAX_WRITE)
+
+
+class GitResolveBlocksBody(BaseModel):
+    cwd: str = "."
+    path: str = Field(min_length=1, max_length=4096)
+    choices: list[ConflictChoice] = Field(min_length=1, max_length=500)
 
 
 class GitPatchBody(BaseModel):
@@ -648,6 +662,33 @@ async def undo_merge(body: GitMergeCommitBody) -> dict:
 async def get_git_conflicts(cwd: str = Query(".")) -> dict:
     try:
         return await asyncio.to_thread(git_conflicts, cwd)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.get("/git/conflicts/blocks")
+async def get_git_conflict_blocks(cwd: str = Query("."), path: str = Query(..., min_length=1)) -> dict:
+    """三路冲突块：ours/base/theirs，供前端逐块选择。"""
+    try:
+        return await asyncio.to_thread(git_conflict_blocks, cwd, path)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/conflicts/blocks/resolve")
+async def resolve_git_conflict_blocks(body: GitResolveBlocksBody) -> dict:
+    try:
+        repo = await asyncio.to_thread(open_repo, body.cwd)
+        target = Path(repo) / body.path
+        async with hold(target, "human:conflict-blocks"):
+            return await asyncio.to_thread(
+                git_resolve_conflict_blocks,
+                body.cwd,
+                body.path,
+                [c.model_dump() for c in body.choices],
+            )
+    except WorkspaceLockBusy as exc:
+        raise HTTPException(409, str(exc)) from None
     except Exception as exc:  # noqa: BLE001
         raise _git_http_error(exc) from None
 

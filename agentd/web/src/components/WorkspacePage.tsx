@@ -7,6 +7,7 @@ import {
   checkoutWorkspaceBranch,
   commitWorkspaceMerge,
   getWorkspaceChanges,
+  getWorkspaceConflictBlocks,
   getWorkspaceConflicts,
   getWorkspaceFile,
   getWorkspaceGitStatus,
@@ -20,6 +21,7 @@ import {
   putWorkspaceFile,
   renameWorkspace,
   resolveWorkspaceConflict,
+  resolveWorkspaceConflictBlocks,
   searchWorkspace,
   startWorkspaceTask,
   undoWorkspaceChange,
@@ -27,6 +29,7 @@ import {
   type WorkspaceChange,
   type WorkspaceCheckpoint,
   type WorkspaceConflict,
+  type WorkspaceConflictBlock,
   type WorkspaceEntry,
   type WorkspaceFile,
   type WorkspaceGitStatus,
@@ -109,6 +112,9 @@ export function WorkspacePage() {
   const [conflicts, setConflicts] = useState<WorkspaceConflict[]>([]);
   const [conflictOpen, setConflictOpen] = useState<string | null>(null);
   const [manualDrafts, setManualDrafts] = useState<Record<string, string>>({});
+  const [blocks, setBlocks] = useState<Record<string, WorkspaceConflictBlock[]>>({});
+  const [blockChoices, setBlockChoices] = useState<Record<string, Record<number, "ours" | "theirs" | "base">>>({});
+  const [blockBusy, setBlockBusy] = useState("");
   const [jumpLine, setJumpLine] = useState<number | null>(null);
   const [consoleMode, setConsoleMode] = useState<"term" | "cmd">("term");
   const [panel, setPanel] = useState<"changes" | "tasks" | "git" | null>(null);
@@ -469,6 +475,64 @@ export function WorkspacePage() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setGitBusy("");
+    }
+  };
+
+  const loadBlocks = async (path: string) => {
+    if (!git) return;
+    setBlockBusy(`load:${path}`);
+    setError("");
+    try {
+      const r = await getWorkspaceConflictBlocks(git.repo_root || cwd, path);
+      const list = r.blocks ?? [];
+      setBlocks((prev) => ({ ...prev, [path]: list }));
+      setBlockChoices((prev) => ({
+        ...prev,
+        [path]: Object.fromEntries(list.map((b) => [b.index, "ours" as const])),
+      }));
+      if (!list.length) setStatus("这个文件没有可拆分的冲突块，请用手动解决");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBlockBusy("");
+    }
+  };
+
+  const chooseBlock = (path: string, index: number, side: "ours" | "theirs" | "base") => {
+    setBlockChoices((prev) => ({ ...prev, [path]: { ...(prev[path] || {}), [index]: side } }));
+  };
+
+  const resolveBlocks = async (path: string) => {
+    if (!git) return;
+    const list = blocks[path] || [];
+    const choices = blockChoices[path] || {};
+    setBlockBusy(`resolve:${path}`);
+    setError("");
+    try {
+      const r = await resolveWorkspaceConflictBlocks(
+        git.repo_root || cwd, path,
+        list.map((b) => ({ index: b.index, side: choices[b.index] || "ours" })),
+      );
+      if (r.state) setGit(r.state);
+      setBlocks((prev) => {
+        const next = { ...prev };
+        delete next[path];
+        return next;
+      });
+      setBlockChoices((prev) => {
+        const next = { ...prev };
+        delete next[path];
+        return next;
+      });
+      const c = await getWorkspaceConflicts(git.repo_root || cwd);
+      setConflicts(c.items ?? []);
+      setConflictOpen(c.items?.[0]?.path || null);
+      setStatus(r.remaining.length ? `已按块解决 ${path}，还剩 ${r.remaining.length} 个冲突` : "冲突已全部解决，可提交合并");
+      refreshCurrentTree();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBlockBusy("");
     }
   };
 
@@ -926,12 +990,23 @@ export function WorkspacePage() {
                               {c.binary ? "二进制冲突，需用命令行处理" : "选择保留我的或对方的版本"}
                             </span>
                           </div>
-                          <button
-                            className="ws-x"
-                            onClick={() => setConflictOpen(conflictOpen === c.path ? null : c.path)}
-                          >
-                            {conflictOpen === c.path ? "收起" : "查看"}
-                          </button>
+                          <div className="ws-conflict-head-actions">
+                            {!c.binary && (
+                              <button
+                                className="btn sm"
+                                disabled={blockBusy !== ""}
+                                onClick={() => void loadBlocks(c.path)}
+                              >
+                                {blockBusy === `load:${c.path}` ? "拆块中…" : "按块解决"}
+                              </button>
+                            )}
+                            <button
+                              className="ws-x"
+                              onClick={() => setConflictOpen(conflictOpen === c.path ? null : c.path)}
+                            >
+                              {conflictOpen === c.path ? "收起" : "查看"}
+                            </button>
+                          </div>
                         </div>
                         {conflictOpen === c.path && (
                           <div className="ws-conflict-cols">
@@ -942,6 +1017,43 @@ export function WorkspacePage() {
                             <div>
                               <span className="ws-conflict-label">对方的（theirs）</span>
                               <pre>{c.theirs || "（空）"}</pre>
+                            </div>
+                          </div>
+                        )}
+                        {conflictOpen === c.path && blocks[c.path] && (
+                          <div className="ws-block-panel">
+                            <span className="ws-conflict-label">
+                              按块合并（{blocks[c.path].length} 块，逐块选 ours / base / theirs）
+                            </span>
+                            <div className="ws-block-list">
+                              {blocks[c.path].map((b) => (
+                                <div className="ws-block" key={b.index}>
+                                  <div className="ws-block-grid">
+                                    {(["ours", "base", "theirs"] as const).map((side) => (
+                                      <button
+                                        key={side}
+                                        type="button"
+                                        className={`ws-block-choice ${(blockChoices[c.path]?.[b.index] || "ours") === side ? "on" : ""}`}
+                                        onClick={() => chooseBlock(c.path, b.index, side)}
+                                      >
+                                        <span>
+                                          {side === "ours" ? "我的（ours）" : side === "base" ? "基线（base）" : "对方（theirs）"}
+                                        </span>
+                                        <pre>{b[side] || "（空）"}</pre>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="ws-conflict-actions">
+                              <button
+                                className="btn primary sm"
+                                disabled={blockBusy !== ""}
+                                onClick={() => void resolveBlocks(c.path)}
+                              >
+                                {blockBusy === `resolve:${c.path}` ? "应用中…" : "应用按块选择"}
+                              </button>
                             </div>
                           </div>
                         )}

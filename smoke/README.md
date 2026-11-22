@@ -55,3 +55,5 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 - 定时任务面板：新建「每 60 秒」任务 → 列表显示下次运行时间 → 到点执行
 - 会话列表重命名按钮（✎）；P0 排队横幅；审批卡展开思考链
 - 截图存 `docs/history/screenshots-demo/`（历史快照）
+
+- `p42_conflict_blocks_test.py`：三路冲突按块解决（8 项，覆盖 ours/base/theirs、逐块选择与合并提交）。

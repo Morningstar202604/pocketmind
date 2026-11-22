@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -464,6 +465,159 @@ def conflicts(cwd: str) -> dict:
                 pass
         items.append({"path": rel, "binary": binary, "work": work_text, **stages})
     return {"items": items, "count": len(items)}
+
+
+_CONFLICT_START = re.compile(r"^<<<<<<< ")
+_CONFLICT_BASE = re.compile(r"^\|\|\|\|\|\|\| ")
+_CONFLICT_MID = re.compile(r"^=======$")
+_CONFLICT_END = re.compile(r"^>>>>>>> ")
+
+
+def _stage_text(repo: Path, rel: str, stage: int) -> str:
+    r = _git(repo, ["show", f":{stage}:{rel}"])
+    return r["stdout"] if r["ok"] else ""
+
+
+def _merge_file_blocks(repo: Path, rel: str) -> tuple[bool, list[dict], list[dict]]:
+    """用 Git 自己的 merge-file 生成 diff3 块，避免另写一套 diff 算法。"""
+    ours = _stage_text(repo, rel, 2)
+    base = _stage_text(repo, rel, 1)
+    theirs = _stage_text(repo, rel, 3)
+    if "\x00" in (ours + base + theirs)[:4096]:
+        return True, [], []
+    with tempfile.TemporaryDirectory(prefix="pm-merge-") as td:
+        paths = []
+        for name, text in (("ours", ours), ("base", base), ("theirs", theirs)):
+            p = Path(td) / name
+            p.write_text(text, encoding="utf-8")
+            paths.append(str(p))
+        try:
+            proc = subprocess.run(
+                ["git", "merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs", *paths],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            )
+        except FileNotFoundError:
+            raise GitUnavailable("当前环境没有 git，可在 Termux 里 pkg install git") from None
+        except subprocess.TimeoutExpired:
+            raise GitOperationError("生成冲突块超时", status=409) from None
+    merged = proc.stdout
+    if len(merged) > MAX_DIFF:
+        raise GitOperationError(f"冲突文件超过 {MAX_DIFF} 字符，请用命令行处理", status=413)
+
+    segments: list[dict] = []
+    blocks: list[dict] = []
+    buf: list[str] = []
+    i = 0
+    lines = merged.splitlines(keepends=True)
+    while i < len(lines):
+        line = lines[i]
+        if not _CONFLICT_START.match(line):
+            buf.append(line)
+            i += 1
+            continue
+        if buf:
+            segments.append({"kind": "text", "text": "".join(buf)})
+            buf = []
+        ours_lines: list[str] = []
+        base_lines: list[str] = []
+        theirs_lines: list[str] = []
+        i += 1
+        target = ours_lines
+        while i < len(lines):
+            line = lines[i]
+            if _CONFLICT_BASE.match(line):
+                target = base_lines
+                i += 1
+                continue
+            if _CONFLICT_MID.match(line):
+                target = theirs_lines
+                i += 1
+                continue
+            if _CONFLICT_END.match(line):
+                i += 1
+                break
+            target.append(line)
+            i += 1
+        idx = len(blocks)
+        blocks.append({
+            "index": idx,
+            "ours": "".join(ours_lines),
+            "base": "".join(base_lines),
+            "theirs": "".join(theirs_lines),
+        })
+        segments.append({"kind": "conflict", "index": idx})
+    if buf:
+        segments.append({"kind": "text", "text": "".join(buf)})
+    return False, blocks, segments
+
+
+def conflict_blocks(cwd: str, path: str) -> dict:
+    repo = open_repo(cwd)
+    rel = (path or "").replace("\\", "/")
+    _safe_repo_path(repo, rel)
+    if rel not in _unmerged_paths(repo):
+        raise GitOperationError("该文件当前不是冲突文件", status=409)
+    binary, blocks, _ = _merge_file_blocks(repo, rel)
+    return {
+        "path": rel,
+        "binary": binary,
+        "blocks": blocks,
+        "count": len(blocks),
+    }
+
+
+def resolve_conflict_blocks(cwd: str, path: str, choices: list[dict]) -> dict:
+    """按块选择 ours/theirs/base/manual 后拼成最终文件，再 git add。
+
+    所有块都必须有选择；缺一块就 400，避免“只解决一半”却把文件标成已解决。
+    """
+    repo = open_repo(cwd)
+    rel = (path or "").replace("\\", "/")
+    _safe_repo_path(repo, rel)
+    if rel not in _unmerged_paths(repo):
+        raise GitOperationError("该文件当前不是冲突文件", status=409)
+    binary, blocks, segments = _merge_file_blocks(repo, rel)
+    if binary:
+        raise GitOperationError("二进制冲突不能按块解决", status=409)
+    if not blocks:
+        raise GitOperationError("没有可解决的冲突块，请用手动解决或直接选版本", status=409)
+    by_index: dict[int, dict] = {}
+    for choice in choices:
+        idx = int(choice.get("index", -1)) if isinstance(choice, dict) else int(getattr(choice, "index", -1))
+        side = str(choice.get("side", "ours") if isinstance(choice, dict) else getattr(choice, "side", "ours"))
+        content = choice.get("content", None) if isinstance(choice, dict) else getattr(choice, "content", None)
+        if idx < 0 or idx >= len(blocks) or idx in by_index:
+            raise GitOperationError(f"冲突块序号不合法或重复：{idx}")
+        if side not in {"ours", "theirs", "base", "manual"}:
+            raise GitOperationError("side 只能是 ours / theirs / base / manual")
+        by_index[idx] = {"side": side, "content": content}
+    if len(by_index) != len(blocks):
+        missing = [b["index"] for b in blocks if b["index"] not in by_index]
+        raise GitOperationError(f"还有未选择的冲突块：{missing[:6]}", status=400)
+
+    parts: list[str] = []
+    for seg in segments:
+        if seg["kind"] == "text":
+            parts.append(seg["text"])
+            continue
+        pick = by_index[int(seg["index"])]
+        side = pick["side"]
+        if side == "manual":
+            parts.append(str(pick["content"] or ""))
+        else:
+            parts.append(blocks[int(seg["index"])][side])
+    final = "".join(parts)
+    if len(final) > MAX_FILE_PREVIEW * 4:
+        raise GitOperationError("解决后的文件过大", status=413)
+    target = _safe_repo_path(repo, rel)
+    if target.is_symlink():
+        raise GitOperationError("拒绝写入符号链接冲突文件", status=409)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(final, encoding="utf-8")
+    add = _git(repo, ["add", "--", rel])
+    if not add["ok"]:
+        raise GitOperationError("标记冲突已解决失败", detail=add.get("stderr", ""), status=409)
+    return {"ok": True, "path": rel, "remaining": _unmerged_paths(repo), "state": status(str(repo))}
 
 
 def resolve_conflict(cwd: str, path: str, strategy: str = "ours", content: str | None = None) -> dict:
