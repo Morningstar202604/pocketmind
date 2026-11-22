@@ -8,6 +8,8 @@ export interface ToolPart {
   result?: Record<string, unknown>;
   summary?: string;
   risk?: string;
+  /** 文件写/编辑/删除的 diff 预览：审批前让用户看见改动 */
+  preview?: string;
   undoable?: boolean; // 文件类危险操作已自动备份，可一键撤销
   /** 执行耗时（毫秒）：由前端在 tool_start → tool_update 之间计时，
    *  用户需要知道"等 30 秒"是正常还是卡住。 */

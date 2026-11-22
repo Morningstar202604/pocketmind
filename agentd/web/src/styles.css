@@ -638,6 +638,20 @@ body {
 .tool-input {
   color: var(--brand-2);
 }
+.approval-diff {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--text-2);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .tool-result {
   margin-top: 8px;
   color: var(--text-2);
@@ -3543,6 +3557,68 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.ws-panel-card {
+  width: min(720px, 100%);
+}
+.ws-panel-card ul {
+  flex: 1;
+  min-height: 0;
+  max-height: 58dvh;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2, var(--panel));
+}
+.ws-change-list li,
+.ws-task-list li {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+}
+.ws-change-list li:last-child,
+.ws-task-list li:last-child {
+  border-bottom: 0;
+}
+.ws-panel-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ws-panel-row code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+}
+.ws-panel-row .ws-muted {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+.ws-task-status.running { color: var(--warn); }
+.ws-task-status.done { color: var(--ok); }
+.ws-task-status.failed,
+.ws-task-status.cancelled { color: var(--err); }
+.ws-task-log {
+  max-height: 86px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--text-2);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ws-loading {

@@ -15,20 +15,20 @@ from __future__ import annotations
 
 import asyncio
 import difflib
-import json
 import os
 import re
 import shlex
 import shutil
-import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket
 from pydantic import BaseModel, Field
 
 from ..paths import workspace_dir
 from ..tools.files import _resolve
 from ..tools.shell import run_shell
+from ..workspace_changes import get_store
+from ..workspace_tasks import get_manager
 
 router = APIRouter(tags=["workspace"])
 
@@ -81,6 +81,12 @@ class ExecBody(BaseModel):
     command: str = Field(min_length=1, max_length=10_000)
     cwd: str = "."
     timeout: int = Field(default=60, ge=1, le=300)
+
+
+class TaskBody(BaseModel):
+    command: str = Field(min_length=1, max_length=10_000)
+    cwd: str = "."
+    timeout: int = Field(default=300, ge=1, le=300)
 
 
 class PathBody(BaseModel):
@@ -156,21 +162,38 @@ def _write_text(p: Path, content: str) -> dict:
         raise HTTPException(400, f"内容不是合法 UTF-8：{exc}") from None
     if len(encoded) > MAX_WRITE:
         raise HTTPException(413, f"内容过大（{len(encoded)} 字节，上限 {MAX_WRITE}）")
-    try:
+    existed = p.exists() and p.is_file()
+    backup = None
+    if existed:
         # 覆盖前先备份原文件；这里不走 files.py 的 _write_file_sync，因为它会
         # 再用 $HOME 白名单校验一次，AGENT_WORKSPACE 指到 /sdcard 之类的目录时
         # 会被误拒。
-        backup = None
-        if p.exists() and p.is_file():
-            from ..checkpoints import backup_file
+        from ..checkpoints import backup_file
 
-            backup = backup_file(p)
+        backup = backup_file(p)
+    try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(data, encoding="utf-8")
         mtime = p.stat().st_mtime
     except OSError as exc:
         raise HTTPException(400, f"写入失败：{exc}") from None
-    return {"path": str(p), "bytes": len(encoded), "mtime": mtime, "backup": backup}
+    change_id = None
+    try:
+        change = get_store().record(
+            path=str(p),
+            kind="overwrite" if existed else "create",
+            backup=backup,
+            after_mtime=mtime,
+            after_size=len(encoded),
+            bytes_changed=len(encoded),
+        )
+        change_id = change["id"]
+    except Exception:  # noqa: BLE001 —— 变更记录失败不阻塞保存
+        change_id = None
+    return {
+        "path": str(p), "bytes": len(encoded), "mtime": mtime,
+        "backup": backup, "change_id": change_id,
+    }
 
 
 def _tree(p: Path) -> dict:
@@ -272,6 +295,8 @@ async def get_info() -> dict:
             "search": True,
             "exec": True,
             "git": shutil.which("git") is not None,
+            "changes": True,
+            "tasks": True,
         },
     }
 
@@ -395,9 +420,68 @@ async def delete_file(path: str = Query(..., min_length=1)) -> dict:
 
         bak = backup_file(p)
         p.unlink()
-        return {"ok": True, "deleted": str(p), "type": "file", "backup": bak}
+        change_id = None
+        try:
+            change = get_store().record(path=str(p), kind="delete", backup=bak)
+            change_id = change["id"]
+        except Exception:  # noqa: BLE001 —— 变更记录失败不阻塞删除
+            change_id = None
+        return {"ok": True, "deleted": str(p), "type": "file", "backup": bak, "change_id": change_id}
     except OSError as exc:
         raise HTTPException(400, f"删除失败：{exc}") from None
+
+
+@router.post("/tasks")
+async def start_workspace_task(body: TaskBody) -> dict:
+    """把长命令放到后台跑；HTTP 立即返回 task_id，前端轮询状态/取消。"""
+    cwd = _resolve_any(body.cwd)
+    if not cwd.is_dir():
+        raise HTTPException(400, f"工作目录不存在：{cwd}")
+    _deny_command(body.command)
+    task = await get_manager().start(command=body.command, cwd=str(cwd), timeout_s=body.timeout)
+    return {"ok": True, **task}
+
+
+@router.get("/tasks")
+async def list_workspace_tasks(limit: int = Query(20, ge=1, le=50)) -> dict:
+    return {"items": get_manager().list(limit)}
+
+
+@router.get("/tasks/{task_id}")
+async def get_workspace_task(task_id: str) -> dict:
+    task = get_manager().get(task_id)
+    if not task:
+        raise HTTPException(404, "任务不存在")
+    return task
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_workspace_task(task_id: str) -> dict:
+    result = get_manager().cancel(task_id)
+    if "error" in result:
+        msg = str(result["error"])
+        raise HTTPException(404 if "不存在" in msg else 409, msg)
+    return result
+
+
+@router.get("/changes")
+async def list_changes(limit: int = Query(50, ge=1, le=200), include_undone: bool = Query(False)) -> dict:
+    """最近的工作区写/删/新建记录；默认只显示未撤销。"""
+    items = await asyncio.to_thread(get_store().list, limit, include_undone)
+    return {"items": items}
+
+
+@router.post("/changes/{change_id}/undo")
+async def undo_change(change_id: str) -> dict:
+    result = await asyncio.to_thread(get_store().undo, change_id)
+    if "error" in result:
+        msg = str(result["error"])
+        if "不存在" in msg:
+            raise HTTPException(404, msg)
+        if "已拒绝" in msg or "已被修改" in msg:
+            raise HTTPException(409, msg)
+        raise HTTPException(400, msg)
+    return result
 
 
 @router.get("/git")
@@ -422,69 +506,13 @@ async def git_status(cwd: str = Query(".")) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# PTY 终端：WebSocket + 真 shell
+# PTY 终端：会话池在 agentd/workspace_terms.py；这里只做路由兼容包装。
 # ---------------------------------------------------------------------------
 
 
-def _set_winsize(fd: int, cols: int, rows: int) -> None:
-    """把终端尺寸同步给 PTY；cols/rows 由 xterm.js 的 FitAddon 上报。"""
-    import fcntl
-    import struct
-    import termios
-
-    cols = max(20, min(int(cols or 80), 500))
-    rows = max(5, min(int(rows or 24), 200))
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
-
-def _kill_term(proc) -> None:
-    import signal
-
-    if proc.poll() is not None:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-
-
-def _spawn_shell(cwd: str):
-    """同步启动 PTY shell；放到线程里调用，避免阻塞事件循环。"""
-    import pty
-
-    shell = shutil.which("bash") or "/bin/sh"
-    env = os.environ.copy()
-    env["TERM"] = "xterm-256color"
-    env["PWD"] = cwd
-    master, slave = pty.openpty()
-    try:
-        _set_winsize(master, 80, 24)
-        proc = subprocess.Popen(
-            [shell, "-i"],
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            cwd=cwd,
-            env=env,
-            start_new_session=True,
-            close_fds=True,
-        )
-    except OSError:
-        os.close(master)
-        os.close(slave)
-        raise
-    os.close(slave)
-    return master, proc
-
-
 async def serve_terminal(websocket: WebSocket, cwd: str) -> None:
-    """在指定工作目录开一个 PTY shell，把字节流双向转发给 xterm.js。
+    from ..workspace_terms import get_hub
 
-    仅 POSIX（Termux/Linux）可用；Android 原生 APK 走的是 Kotlin 引擎，不经过这里。
-    """
     try:
         root = _resolve_any(cwd)
     except HTTPException as exc:
@@ -493,60 +521,6 @@ async def serve_terminal(websocket: WebSocket, cwd: str) -> None:
     if not root.is_dir():
         await websocket.close(code=1008, reason=f"工作目录不存在：{root}")
         return
-    if os.name != "posix":
-        await websocket.close(code=1008, reason="当前运行时没有 POSIX PTY；请用 Termux/Linux")
-        return
-
-    try:
-        master, proc = await asyncio.to_thread(_spawn_shell, str(root))
-    except OSError as exc:
-        await websocket.close(code=1008, reason=f"启动 shell 失败：{exc}")
-        return
-
-    await websocket.accept()
-
-    async def pump() -> None:
-        loop = asyncio.get_running_loop()
-        try:
-            while True:
-                data = await loop.run_in_executor(None, os.read, master, 4096)
-                if not data:
-                    break
-                await websocket.send_text(data.decode("utf-8", errors="replace"))
-        except (OSError, WebSocketDisconnect, RuntimeError):
-            pass
-
-    pump_task = asyncio.create_task(pump())
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            kind = msg.get("type")
-            if kind == "input":
-                data = msg.get("data")
-                if isinstance(data, str) and data:
-                    try:
-                        os.write(master, data.encode("utf-8", errors="replace"))
-                    except OSError:
-                        break
-            elif kind == "resize":
-                try:
-                    _set_winsize(master, int(msg.get("cols", 80)), int(msg.get("rows", 24)))
-                except (OSError, ValueError, TypeError):
-                    pass
-    except WebSocketDisconnect:
-        pass
-    finally:
-        pump_task.cancel()
-        _kill_term(proc)
-        try:
-            os.close(master)
-        except OSError:
-            pass
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    await get_hub().serve(
+        websocket, str(root), websocket.query_params.get("session") or None
+    )

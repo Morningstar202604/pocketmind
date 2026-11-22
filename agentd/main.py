@@ -476,6 +476,16 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
         scheduler_svc.shutdown()
+        try:
+            from .workspace_tasks import get_manager
+            await get_manager().shutdown()
+        except Exception:  # noqa: BLE001 —— 清理后台任务失败不阻塞关闭
+            pass
+        try:
+            from .workspace_terms import get_hub
+            await get_hub().shutdown()
+        except Exception:  # noqa: BLE001 —— 清理 PTY 失败不阻塞关闭
+            pass
         # MCP Client 关闭
         try:
             from .mcp_client import shutdown_mcp_client

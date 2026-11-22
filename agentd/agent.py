@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from . import metrics as _m
 from . import permissions
 from .config import Settings
+from .diff_preview import preview_tool_call
 from .mem0_memory import Mem0Memory
 from .memory import Store
 from .mock_llm import MockLLM
@@ -889,7 +890,8 @@ class Agent:
             args = {}
 
         tool = get_tool(name)
-        await emit({"type": "tool_start", "id": tid, "name": name, "input": args})
+        preview = preview_tool_call(name, args)
+        await emit({"type": "tool_start", "id": tid, "name": name, "input": args, "preview": preview})
 
         decision = await self._decide_tool(
             tid=tid, name=name, tool=tool, mode=mode, ask_approval=ask_approval

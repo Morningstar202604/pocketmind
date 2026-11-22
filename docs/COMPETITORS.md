@@ -72,7 +72,7 @@ PocketMind 侧证据：
   fail-closed 分支（`ask_approval is None` 时写/危险操作直接拒绝）。
 - 撤销：`agentd/checkpoints.py` + `/api/undo`（`agentd/main.py:758`）。
 - 定时：`agentd/scheduler.py`（APScheduler + SQLAlchemyJobStore，条件表达式 `battery < N`）。
-- MCP：`agentd/mcp_server.py`（暴露 41 工具）+ `agentd/mcp_client.py`（接入外部 Server）。
+- MCP：`agentd/mcp_server.py`（暴露 44 工具）+ `agentd/mcp_client.py`（接入外部 Server）。
 - 本地数据：`agentd/memory.py:_secure_files`（目录 700 / 库文件 600）。
 
 ## 四、该借什么（已落地 / 待落地）

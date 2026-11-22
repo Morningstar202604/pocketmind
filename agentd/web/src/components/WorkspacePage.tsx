@@ -1,22 +1,29 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  cancelWorkspaceTask,
   deleteWorkspaceFile,
   execWorkspace,
+  getWorkspaceChanges,
   getWorkspaceFile,
   getWorkspaceGit,
   getWorkspaceInfo,
+  getWorkspaceTasks,
   getWorkspaceTree,
   makeWorkspaceDir,
   previewWorkspaceFile,
   putWorkspaceFile,
   renameWorkspace,
   searchWorkspace,
+  startWorkspaceTask,
+  undoWorkspaceChange,
+  type WorkspaceChange,
   type WorkspaceEntry,
   type WorkspaceFile,
   type WorkspaceGit,
   type WorkspaceInfo,
   type WorkspacePreview,
   type WorkspaceSearchHit,
+  type WorkspaceTask,
   type WorkspaceTree,
 } from "../api";
 import { IconCode, IconFolder } from "./icons";
@@ -43,12 +50,30 @@ function formatSize(n?: number | null): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function changeKindLabel(kind: WorkspaceChange["kind"]): string {
+  return kind === "create" ? "新建" : kind === "delete" ? "删除" : "修改";
+}
+
+function taskStatusLabel(status: WorkspaceTask["status"]): string {
+  return {
+    running: "运行中",
+    cancelling: "取消中",
+    done: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  }[status];
+}
+
+function shortTime(ts?: number | null): string {
+  if (!ts) return "";
+  return new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
 /**
- * 开发工作区：文件树 + 文本编辑器 + 命令台。
+ * 开发工作区：文件树 + CodeMirror + PTY 终端 + 命令台 + 变更/任务面板。
  *
- * 这一版刻意不接 CodeMirror / xterm：先把「能看文件、能改、能保存前看 diff、
- * 能跑命令」的闭环跑通。编辑器语法高亮和真 PTY 终端是下一阶段，不应阻塞
- * 工作区 API 与审批链路的验证。
+ * 写操作会记录到 workspace_changes，支持逐文件撤销；长命令可以转到后台任务，
+ * 不占住 HTTP 请求，也能在任务面板里取消。
  */
 export function WorkspacePage() {
   const [info, setInfo] = useState<WorkspaceInfo | null>(null);
@@ -69,6 +94,10 @@ export function WorkspacePage() {
   const [git, setGit] = useState<WorkspaceGit | null>(null);
   const [jumpLine, setJumpLine] = useState<number | null>(null);
   const [consoleMode, setConsoleMode] = useState<"term" | "cmd">("term");
+  const [panel, setPanel] = useState<"changes" | "tasks" | null>(null);
+  const [changes, setChanges] = useState<WorkspaceChange[]>([]);
+  const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
+  const [panelBusy, setPanelBusy] = useState("");
   const theme = useAgentStore((s) => s.theme);
   const dark = theme === "dark" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: light)").matches);
 
@@ -87,6 +116,35 @@ export function WorkspacePage() {
       setTreeLoading(false);
     }
   }, []);
+
+  const refreshChanges = useCallback(async () => {
+    try {
+      const r = await getWorkspaceChanges();
+      setChanges(r.items ?? []);
+    } catch {
+      /* 变更面板失败不影响主流程 */
+    }
+  }, []);
+
+  const refreshTasks = useCallback(async () => {
+    try {
+      const r = await getWorkspaceTasks();
+      setTasks(r.items ?? []);
+    } catch {
+      /* 任务面板失败不影响主流程 */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshChanges();
+  }, [refreshChanges]);
+
+  useEffect(() => {
+    if (panel !== "tasks") return;
+    void refreshTasks();
+    const timer = window.setInterval(() => void refreshTasks(), 1500);
+    return () => window.clearInterval(timer);
+  }, [panel, refreshTasks]);
 
   useEffect(() => {
     let alive = true;
@@ -152,6 +210,7 @@ export function WorkspacePage() {
       setPreview(null);
       setStatus(`已保存 ${out.bytes} 字节${out.backup ? "（已备份原文件）" : ""}`);
       refreshCurrentTree();
+      void refreshChanges();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -188,6 +247,58 @@ export function WorkspacePage() {
       setError(msg);
     } finally {
       setRunning(false);
+    }
+  };
+
+  const runBackground = async () => {
+    const cmd = command.trim();
+    if (!cmd) return;
+    setError("");
+    try {
+      const t = await startWorkspaceTask(cmd, cwd, 300);
+      setPanel("tasks");
+      setStatus(`后台任务已启动：${t.id}`);
+      await refreshTasks();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const cancelTask = async (id: string) => {
+    setPanelBusy(id);
+    setError("");
+    try {
+      await cancelWorkspaceTask(id);
+      setStatus("已请求取消任务");
+      await refreshTasks();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPanelBusy("");
+    }
+  };
+
+  const undoChange = async (c: WorkspaceChange) => {
+    if (!window.confirm(`撤销 ${c.path} 的这次${c.kind === "delete" ? "删除" : "修改"}？`)) return;
+    setPanelBusy(c.id);
+    setError("");
+    try {
+      await undoWorkspaceChange(c.id);
+      if (current?.path === c.path) {
+        if (c.kind === "create") {
+          setCurrent(null);
+          setDraft("");
+        } else {
+          await openFile(c.path);
+        }
+      }
+      await refreshChanges();
+      refreshCurrentTree();
+      setStatus("已撤销");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPanelBusy("");
     }
   };
 
@@ -266,6 +377,7 @@ export function WorkspacePage() {
       setCurrent(null);
       setDraft("");
       refreshCurrentTree();
+      void refreshChanges();
       setStatus("已删除");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -305,6 +417,14 @@ export function WorkspacePage() {
           </button>
           <button className="btn sm" onClick={newFile}>
             新建文件
+          </button>
+          <button className="btn sm" onClick={() => setPanel("changes")}>
+            变更{changes.length ? ` ${changes.length}` : ""}
+          </button>
+          <button className="btn sm" onClick={() => setPanel("tasks")}>
+            后台任务{tasks.filter((t) => t.status === "running" || t.status === "cancelling").length
+              ? ` ${tasks.filter((t) => t.status === "running" || t.status === "cancelling").length}`
+              : ""}
           </button>
         </div>
       </div>
@@ -474,6 +594,9 @@ export function WorkspacePage() {
                   <button className="btn primary sm" onClick={() => void run()} disabled={running || !command.trim()}>
                     {running ? "运行中…" : "运行"}
                   </button>
+                  <button className="btn sm" onClick={() => void runBackground()} disabled={!command.trim()}>
+                    后台
+                  </button>
                 </div>
                 <div className="ws-git">
                   <button className="btn sm" onClick={() => void refreshGit()}>
@@ -511,6 +634,85 @@ export function WorkspacePage() {
               </button>
               <button className="btn primary sm" onClick={() => void confirmSave()} disabled={saving || !preview.changed}>
                 {saving ? "保存中…" : "确认保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {panel && (
+        <div className="ws-modal" role="dialog" aria-modal="true" aria-label={panel === "changes" ? "工作区变更" : "后台任务"}>
+          <div className="ws-modal-card ws-panel-card">
+            <div className="ws-modal-head">
+              <h3>{panel === "changes" ? "工作区变更" : "后台任务"}</h3>
+              <button className="ws-x" onClick={() => setPanel(null)} aria-label="关闭">
+                ×
+              </button>
+            </div>
+            {panel === "changes" ? (
+              changes.length === 0 ? (
+                <p className="ws-muted">还没有变更。保存文件、新建或删除后会出现在这里。</p>
+              ) : (
+                <ul className="ws-change-list">
+                  {changes.map((c) => (
+                    <li key={c.id}>
+                      <div className="ws-panel-row">
+                        <div>
+                          <code title={c.path}>{c.path}</code>
+                          <span className="ws-muted">
+                            {changeKindLabel(c.kind)} · {shortTime(c.created_at)}
+                            {c.bytes ? ` · ${formatSize(c.bytes)}` : ""}
+                          </span>
+                        </div>
+                        <button
+                          className="btn sm danger"
+                          disabled={panelBusy === c.id}
+                          onClick={() => void undoChange(c)}
+                        >
+                          {panelBusy === c.id ? "撤销中…" : "撤销"}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : tasks.length === 0 ? (
+              <p className="ws-muted">还没有后台任务。命令台里点「后台」即可启动，长任务不会卡住页面。</p>
+            ) : (
+              <ul className="ws-task-list">
+                {tasks.map((t) => (
+                  <li key={t.id}>
+                    <div className="ws-panel-row">
+                      <div>
+                        <code title={t.command}>{t.command}</code>
+                        <span className="ws-muted">
+                          <span className={`ws-task-status ${t.status}`}>{taskStatusLabel(t.status)}</span>
+                          {" · "}{t.cwd}{t.exit_code != null ? ` · exit ${t.exit_code}` : ""}
+                          {t.log_path ? " · 日志已落盘" : ""}
+                        </span>
+                      </div>
+                      {(t.status === "running" || t.status === "cancelling") && (
+                        <button
+                          className="btn sm danger"
+                          disabled={panelBusy === t.id || t.status === "cancelling"}
+                          onClick={() => void cancelTask(t.id)}
+                        >
+                          {panelBusy === t.id || t.status === "cancelling" ? "取消中…" : "取消"}
+                        </button>
+                      )}
+                    </div>
+                    {(t.error || t.stderr || t.stdout) && (
+                      <pre className="ws-task-log">
+                        {[t.error, t.stderr, t.stdout].filter(Boolean).join("\n").slice(-1200)}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="ws-modal-actions">
+              <button className="btn sm" onClick={() => setPanel(null)}>
+                关闭
               </button>
             </div>
           </div>

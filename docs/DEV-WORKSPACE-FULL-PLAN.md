@@ -2,7 +2,7 @@
 
 > 目标不是「把桌面 IDE 塞进手机」，而是把 **写代码、跑命令、看 diff、合并改动、中断恢复、检查修改** 这套动作，变成手机上一个常驻 Agent 能参与的工作流。
 >
-> 本文是总方案；当前已落地的 Phase 1 见 `docs/DEV-WORKSPACE.md`。
+> 本文是总方案；当前已落地 M1.0 + M1.1，见 `docs/DEV-WORKSPACE.md`。
 
 ---
 
@@ -142,8 +142,8 @@
 - **任务可恢复**：长任务（build/test/dev server）有 task id、日志文件、exit code；重启后标记「中断」，可一键重跑。
 - **终端可恢复**：PTY 断开不杀 shell（可配置 30 秒宽限）；重连接管同一 master fd；超时回收。
 
-**当前已做**：Agent `/api/stop`；终端「重连」重开 shell；命令超时杀进程组。
-**还缺**：任务面板与 cancel API；PTY 断线接管；Android 后台被杀后的任务恢复。
+**当前已做**：Agent `/api/stop`；终端 30 秒宽限与重连接管；命令超时杀进程组；工作区任务 cancel API。
+**还缺**：Android 后台被杀后的任务恢复；任务输出实时流式 tail。
 
 ### 3.4 查改（Inspect & Modify）
 
@@ -252,7 +252,12 @@ workspace_locks(
 | POST | `/api/workspace/rename` | 重命名 |
 | DELETE | `/api/workspace/file` | 删除（先备份；目录只删空） |
 | GET | `/api/workspace/git` | 分支/status/diffstat |
-| WS | `/api/workspace/term` | PTY 终端（xterm.js） |
+| POST/GET | `/api/workspace/tasks` | 后台任务创建/列表 |
+| GET | `/api/workspace/tasks/{id}` | 任务详情/输出 |
+| POST | `/api/workspace/tasks/{id}/cancel` | 取消任务 |
+| GET | `/api/workspace/changes` | 变更记录 |
+| POST | `/api/workspace/changes/{id}/undo` | 撤销变更 |
+| WS | `/api/workspace/term` | PTY 终端；`session` 断线重连 |
 
 ### 5.2 待实现（Phase 2+）
 
@@ -265,13 +270,9 @@ workspace_locks(
 | POST | `/api/workspace/git/merge/apply` | 执行合并 |
 | POST | `/api/workspace/git/conflict/resolve` | 逐块解冲突 |
 | POST | `/api/workspace/patch/apply` | 应用 patch |
-| GET/POST | `/api/workspace/tasks` | 任务列表/创建 |
-| POST | `/api/workspace/tasks/{id}/cancel` | 取消任务 |
-| GET | `/api/workspace/tasks/{id}/log` | 增量日志 |
+| GET | `/api/workspace/tasks/{id}/log` | 增量日志尾随（当前只有结束快照） |
 | POST | `/api/workspace/tests` | 跑测试并结构化输出 |
 | GET | `/api/workspace/diagnostics` | 语法/依赖/端口诊断 |
-| GET | `/api/workspace/changes` | 变更集 |
-| POST | `/api/workspace/changes/{id}/undo` | 撤销变更 |
 
 ---
 
@@ -340,7 +341,7 @@ workspace_locks(
 - PTY 终端（WebSocket + xterm.js）。
 - 路径 jail、mtime 冲突、命令拦截、备份。
 
-### M1.1（下一步，2–3 周）
+### M1.1（已完成）
 
 - `edit_file` patch、`grep`、`glob`、`git diff`、`run_tests` 工具。
 - 变更面板 + 撤销；Agent 写文件审批卡显示 diff。
@@ -423,13 +424,15 @@ workspace_locks(
 
 ## 十一、当前代码位置
 
-- 后端：`agentd/routes/workspace.py`（工作区 API + PTY）。
+- 后端：`agentd/routes/workspace.py`（工作区 API + 变更/任务路由）。
+- PTY：`agentd/workspace_terms.py`；任务：`agentd/workspace_tasks.py`；变更：`agentd/workspace_changes.py`。
+- 代码工具：`agentd/tools/code.py`；审批 diff：`agentd/diff_preview.py`。
 - 注册：`agentd/main.py`（`/api/workspace/*` + `/api/workspace/term`）。
 - 前端：`agentd/web/src/components/WorkspacePage.tsx`、`WorkspaceEditor.tsx`、`WorkspaceTerminal.tsx`。
 - API：`agentd/web/src/api.ts`。
 - 导航：`BottomTabs.tsx`、`App.tsx`。
 - 样式：`styles.css`。
-- 文档：`docs/DEV-WORKSPACE.md`（Phase 1）、本文（总方案）。
+- 文档：`docs/DEV-WORKSPACE.md`（M1.0 + M1.1）、本文（总方案）。
 
 ---
 

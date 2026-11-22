@@ -30,7 +30,7 @@ You ──▶ APK ──▶ Kotlin native engine ──▶ 37 native tools ─�
                         │
                         └──▶ your LLM endpoint (inference only)
 
-Full runtime (optional): Web UI / PWA ──▶ agentd (Python, Termux) ──▶ 41 tools
+Full runtime (optional): Web UI / PWA ──▶ agentd (Python, Termux) ──▶ 44 tools
 ```
 
 ## See it work
@@ -69,7 +69,7 @@ way past it, and a compromised page cannot either.
   permanent ones, and a live countdown. The model has no path around this card.</sub>
 </p>
 
-### 41 tools across the phone
+### 44 tools across the phone
 
 > The table below describes the Termux runtime (41 = 39 built-in plus the
 > `remember_fact` / `read_skill` tools registered at startup). The standalone APK
@@ -89,7 +89,7 @@ way past it, and a compromised page cannot either.
 | Network | 2 | `web_search` · `read_url` — SSRF-hardened, `write` tier because the query leaves the device |
 
 <p align="center">
-  <img src="assets/screenshots/05-capabilities.png" width="880" alt="Capability page listing all 41 tools by group with risk badges" />
+  <img src="assets/screenshots/05-capabilities.png" width="880" alt="Capability page listing all 44 tools by group with risk badges" />
   <br />
   <sub>Every tool is browsable in the app with its risk tier — 3 of the 41 are
   marked as destructive and always require confirmation.</sub>
@@ -153,7 +153,7 @@ at once, and a malformed file returns 400 without writing partial data.
 
 ### Remote control, both directions
 
-- **MCP server** — exposes all 41 tools over stdio to Claude Desktop, Cline or Codex.
+- **MCP server** — exposes all 44 tools over stdio to Claude Desktop, Cline or Codex.
   This is a separate interface from the Web approval center, so the desktop host
   must supply its own confirmation; every tool description carries its risk prefix.
 - **Telegram gateway** — drive the phone from a chat. Write and danger actions

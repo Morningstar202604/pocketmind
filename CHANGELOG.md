@@ -24,6 +24,15 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
   interrupt, and inspect/modify flows, plus a phased roadmap to PRoot.
 - **Workspace regression**: `smoke/p37_workspace_test.py` exercises the API,
   path jail, command denial, and PTY round-trip.
+- **M1.1 code tools**: `edit_file` (exact replacement with unique-match guard),
+  `grep`, `glob`, `git_diff`, and `run_tests`; file writes are backed up and
+  approval cards show a unified diff before the user allows the change.
+- **M1.1 change/task panels**: human saves/deletes/create are recorded with
+  `change_id` and can be undone per file (undo refuses to clobber later edits).
+  Long commands run as cancellable background tasks with a persisted log.
+- **M1.1 PTY takeover**: a disconnected terminal keeps its shell for 30 seconds
+  and `session_id` reconnect attaches to the same process instead of spawning a
+  new one.
 
 ## [1.6.2] - 2026-11-07
 

@@ -197,8 +197,8 @@ export type ChatEvent =
   | { type: "session"; session_id: string }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_start"; id: string; name: string; input: unknown }
-  | { type: "approval"; id: string; name: string; summary: string; risk: string }
+  | { type: "tool_start"; id: string; name: string; input: unknown; preview?: string }
+  | { type: "approval"; id: string; name: string; summary: string; risk: string; preview?: string }
   | {
       type: "tool_update";
       id: string;
@@ -341,6 +341,8 @@ export interface WorkspaceInfo {
     search: boolean;
     exec: boolean;
     git: boolean;
+    changes?: boolean;
+    tasks?: boolean;
   };
 }
 export interface WorkspaceEntry {
@@ -396,6 +398,35 @@ export interface WorkspaceGit {
   stderr?: string;
   message?: string;
 }
+export interface WorkspaceChange {
+  id: string;
+  path: string;
+  kind: "overwrite" | "create" | "delete";
+  backup?: string | null;
+  after_mtime?: number | null;
+  after_size?: number | null;
+  bytes?: number;
+  source?: string;
+  created_at: number;
+  undone?: boolean;
+}
+export interface WorkspaceTask {
+  id: string;
+  command: string;
+  cwd: string;
+  timeout: number;
+  status: "running" | "cancelling" | "done" | "failed" | "cancelled";
+  created_at: number;
+  started_at?: number;
+  ended_at?: number | null;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  timed_out?: boolean;
+  truncated?: boolean;
+  log_path?: string | null;
+}
 
 export const getWorkspaceInfo = () => api.get<WorkspaceInfo>("/api/workspace/info");
 export const getWorkspaceTree = (path: string) =>
@@ -405,10 +436,14 @@ export const getWorkspaceFile = (path: string) =>
 export const previewWorkspaceFile = (path: string, content: string) =>
   api.post<WorkspacePreview>("/api/workspace/preview", { path, content });
 export const putWorkspaceFile = (path: string, content: string, expectedMtime?: number | null) =>
-  api.put<{ ok: boolean; path: string; bytes: number; mtime: number; backup?: string | null }>(
-    "/api/workspace/file",
-    { path, content, expected_mtime: expectedMtime ?? null }
-  );
+  api.put<{
+    ok: boolean;
+    path: string;
+    bytes: number;
+    mtime: number;
+    backup?: string | null;
+    change_id?: string | null;
+  }>("/api/workspace/file", { path, content, expected_mtime: expectedMtime ?? null });
 export const searchWorkspace = (q: string, path: string, caseSensitive = false) =>
   api.get<WorkspaceSearch>(
     `/api/workspace/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(path)}&case_sensitive=${caseSensitive ? "true" : "false"}`
@@ -423,11 +458,33 @@ export const renameWorkspace = (fromPath: string, toPath: string) =>
     to_path: toPath,
   });
 export const deleteWorkspaceFile = (path: string) =>
-  api.del<{ ok: boolean; deleted: string; type: string; backup?: string | null }>(
-    `/api/workspace/file?path=${encodeURIComponent(path)}`
-  );
+  api.del<{
+    ok: boolean;
+    deleted: string;
+    type: string;
+    backup?: string | null;
+    change_id?: string | null;
+  }>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
 export const getWorkspaceGit = (cwd: string) =>
   api.get<WorkspaceGit>(`/api/workspace/git?cwd=${encodeURIComponent(cwd)}`);
+export const getWorkspaceChanges = (limit = 50, includeUndone = false) =>
+  api.get<{ items: WorkspaceChange[] }>(
+    `/api/workspace/changes?limit=${limit}&include_undone=${includeUndone ? "true" : "false"}`
+  );
+export const undoWorkspaceChange = (changeId: string) =>
+  api.post<{ ok: boolean; restored: string; kind: string }>(
+    `/api/workspace/changes/${encodeURIComponent(changeId)}/undo`
+  );
+export const startWorkspaceTask = (command: string, cwd: string, timeout = 300) =>
+  api.post<WorkspaceTask & { ok: boolean }>("/api/workspace/tasks", { command, cwd, timeout });
+export const getWorkspaceTasks = (limit = 20) =>
+  api.get<{ items: WorkspaceTask[] }>(`/api/workspace/tasks?limit=${limit}`);
+export const getWorkspaceTask = (taskId: string) =>
+  api.get<WorkspaceTask>(`/api/workspace/tasks/${encodeURIComponent(taskId)}`);
+export const cancelWorkspaceTask = (taskId: string) =>
+  api.post<{ ok: boolean; id: string; status: string }>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/cancel`
+  );
 
 /** 带 HTTP 状态码的错误：调用方要能区分「401 需要令牌」与一般失败。 */
 export class ApiError extends Error {

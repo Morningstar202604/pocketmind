@@ -44,6 +44,7 @@ const LIGHT_THEME = {
  */
 export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const sessionRef = useRef<string | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
   const [nonce, setNonce] = useState(0);
 
@@ -72,8 +73,17 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
     };
     requestAnimationFrame(fitSoon);
 
+    const sessionKey = `pm-ws-term:${cwd}`;
+    if (!sessionRef.current) {
+      try {
+        sessionRef.current = window.sessionStorage.getItem(sessionKey);
+      } catch {
+        /* 隐私模式 / 无 sessionStorage 时退回新 shell */
+      }
+    }
     const token = getToken();
     const params = new URLSearchParams({ cwd, token });
+    if (sessionRef.current) params.set("session", sessionRef.current);
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${window.location.host}/api/workspace/term?${params.toString()}`;
     const ws = new WebSocket(url);
@@ -81,19 +91,46 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
 
     ws.onopen = () => {
       setStatus("open");
-      term.write("\x1b[32m● 已连接工作区终端\x1b[0m\r\n");
       fitSoon();
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     };
     ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") term.write(ev.data);
+      if (typeof ev.data !== "string") return;
+      const data = ev.data;
+      if (data.startsWith("{")) {
+        try {
+          const ctrl = JSON.parse(data) as { type?: string; session_id?: string; reconnected?: boolean; message?: string };
+          if (ctrl.type === "ready") {
+            sessionRef.current = ctrl.session_id || null;
+            try {
+              if (sessionRef.current) window.sessionStorage.setItem(sessionKey, sessionRef.current);
+            } catch {
+              /* ignore */
+            }
+            term.reset();
+            term.write(
+              ctrl.reconnected
+                ? "\x1b[32m● 已接管原 shell\x1b[0m\r\n"
+                : "\x1b[32m● 已连接工作区终端\x1b[0m\r\n"
+            );
+            return;
+          }
+          if (ctrl.type === "error") {
+            term.write(`\r\n\x1b[31m● ${ctrl.message || "终端启动失败"}\x1b[0m\r\n`);
+            return;
+          }
+        } catch {
+          /* 不是控制帧，按普通输出处理 */
+        }
+      }
+      term.write(data);
     };
     ws.onerror = () => {
       setStatus("error");
     };
     ws.onclose = () => {
       setStatus("closed");
-      term.write("\r\n\x1b[33m● 连接已断开；点「重连」重开一个 shell\x1b[0m\r\n");
+      term.write("\r\n\x1b[33m● 连接已断开；30 秒内点「重连」可接管原 shell\x1b[0m\r\n");
     };
 
     const dataSub = term.onData((data) => {
@@ -145,7 +182,11 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
         <span className="ws-term-cwd" title={cwd}>
           {cwd}
         </span>
-        <button className="ws-x" onClick={() => setNonce((n) => n + 1)} title="重开一个 shell">
+        <button
+          className="ws-x"
+          onClick={() => setNonce((n) => n + 1)}
+          title="30 秒内重连会接管原 shell；超时后自动新建"
+        >
           重连
         </button>
       </div>
