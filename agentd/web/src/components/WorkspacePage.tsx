@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   deleteWorkspaceFile,
   execWorkspace,
@@ -20,6 +20,11 @@ import {
   type WorkspaceTree,
 } from "../api";
 import { IconCode, IconFolder } from "./icons";
+import { WorkspaceEditor } from "./WorkspaceEditor";
+const WorkspaceTerminal = lazy(() =>
+  import("./WorkspaceTerminal").then((m) => ({ default: m.WorkspaceTerminal })),
+);
+import { useAgentStore } from "../store/useAgentStore";
 
 function joinPath(base: string, name: string): string {
   return `${base.replace(/\/+$/, "")}/${name}`;
@@ -63,7 +68,9 @@ export function WorkspacePage() {
   const [hits, setHits] = useState<WorkspaceSearchHit[]>([]);
   const [git, setGit] = useState<WorkspaceGit | null>(null);
   const [jumpLine, setJumpLine] = useState<number | null>(null);
-  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const [consoleMode, setConsoleMode] = useState<"term" | "cmd">("term");
+  const theme = useAgentStore((s) => s.theme);
+  const dark = theme === "dark" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: light)").matches);
 
   const dirty = current != null && draft !== current.content;
 
@@ -97,19 +104,6 @@ export function WorkspacePage() {
       alive = false;
     };
   }, [loadTree]);
-
-  // 从搜索结果打开文件后，把光标落到命中行；textarea 没有行号，但至少能定位。
-  useEffect(() => {
-    const el = editorRef.current;
-    if (!el || jumpLine == null) return;
-    const lines = draft.split("\n");
-    const target = Math.max(0, Math.min(jumpLine - 1, lines.length - 1));
-    let pos = 0;
-    for (let i = 0; i < target; i++) pos += lines[i].length + 1;
-    el.focus();
-    el.setSelectionRange(pos, pos + lines[target].length);
-    setJumpLine(null);
-  }, [draft, jumpLine]);
 
   const openFile = useCallback(async (path: string, line?: number) => {
     setError("");
@@ -411,19 +405,13 @@ export function WorkspacePage() {
                   </button>
                 </div>
               </div>
-              <textarea
-                ref={editorRef}
-                className="ws-editor"
+              <WorkspaceEditor
+                path={current.path}
                 value={draft}
-                spellCheck={false}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-                    e.preventDefault();
-                    void save();
-                  }
-                }}
-                aria-label="文件内容"
+                dark={dark}
+                jumpLine={jumpLine}
+                onChange={(next) => setDraft(next)}
+                onSave={() => void save()}
               />
             </>
           ) : (
@@ -434,48 +422,71 @@ export function WorkspacePage() {
             </div>
           )}
 
-          <div className="ws-console">
+          <div className={`ws-console ${consoleMode}`}>
             <div className="ws-console-head">
-              <span>命令台</span>
+              <div className="ws-mode" role="group" aria-label="终端模式">
+                <button
+                  className={consoleMode === "term" ? "on" : ""}
+                  onClick={() => setConsoleMode("term")}
+                >
+                  终端
+                </button>
+                <button
+                  className={consoleMode === "cmd" ? "on" : ""}
+                  onClick={() => setConsoleMode("cmd")}
+                >
+                  命令台
+                </button>
+              </div>
               <span className="ws-cwd" title={cwd}>
                 {cwd}
               </span>
-              <button className="ws-x" onClick={() => setOutput("")} title="清空输出">
-                清空
-              </button>
-            </div>
-            <pre className="ws-output" aria-live="polite">
-              {output || "在这里运行 git / python / npm test；命令会在上方工作目录里执行。"}
-            </pre>
-            <div className="ws-command-row">
-              <span className="ws-prompt">$</span>
-              <input
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void run();
-                  }
-                }}
-                placeholder="例如：python3 hello.py"
-                aria-label="命令"
-                spellCheck={false}
-              />
-              <button className="btn primary sm" onClick={() => void run()} disabled={running || !command.trim()}>
-                {running ? "运行中…" : "运行"}
-              </button>
-            </div>
-            <div className="ws-git">
-              <button className="btn sm" onClick={() => void refreshGit()}>
-                刷新 Git 状态
-              </button>
-              {git && (
-                <pre className="ws-git-out">
-                  {git.available ? git.stdout || git.stderr || "（无输出）" : git.message}
-                </pre>
+              {consoleMode === "cmd" && (
+                <button className="ws-x" onClick={() => setOutput("")} title="清空输出">
+                  清空
+                </button>
               )}
             </div>
+            {consoleMode === "term" ? (
+              <Suspense fallback={<div className="ws-muted">终端加载中…</div>}>
+                <WorkspaceTerminal cwd={cwd} dark={dark} />
+              </Suspense>
+            ) : (
+              <>
+                <pre className="ws-output" aria-live="polite">
+                  {output || "在这里运行 git / python / npm test；命令会在上方工作目录里执行。"}
+                </pre>
+                <div className="ws-command-row">
+                  <span className="ws-prompt">$</span>
+                  <input
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void run();
+                      }
+                    }}
+                    placeholder="例如：python3 hello.py"
+                    aria-label="命令"
+                    spellCheck={false}
+                  />
+                  <button className="btn primary sm" onClick={() => void run()} disabled={running || !command.trim()}>
+                    {running ? "运行中…" : "运行"}
+                  </button>
+                </div>
+                <div className="ws-git">
+                  <button className="btn sm" onClick={() => void refreshGit()}>
+                    刷新 Git 状态
+                  </button>
+                  {git && (
+                    <pre className="ws-git-out">
+                      {git.available ? git.stdout || git.stderr || "（无输出）" : git.message}
+                    </pre>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </section>
       </div>

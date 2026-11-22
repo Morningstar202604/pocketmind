@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import json
 import os
 import re
 import shlex
 import shutil
+import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from ..paths import workspace_dir
@@ -417,3 +419,134 @@ async def git_status(cwd: str = Query(".")) -> dict:
         30,
     )
     return {"available": True, "cwd": str(p), **result}
+
+
+# ---------------------------------------------------------------------------
+# PTY 终端：WebSocket + 真 shell
+# ---------------------------------------------------------------------------
+
+
+def _set_winsize(fd: int, cols: int, rows: int) -> None:
+    """把终端尺寸同步给 PTY；cols/rows 由 xterm.js 的 FitAddon 上报。"""
+    import fcntl
+    import struct
+    import termios
+
+    cols = max(20, min(int(cols or 80), 500))
+    rows = max(5, min(int(rows or 24), 200))
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def _kill_term(proc) -> None:
+    import signal
+
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
+def _spawn_shell(cwd: str):
+    """同步启动 PTY shell；放到线程里调用，避免阻塞事件循环。"""
+    import pty
+
+    shell = shutil.which("bash") or "/bin/sh"
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["PWD"] = cwd
+    master, slave = pty.openpty()
+    try:
+        _set_winsize(master, 80, 24)
+        proc = subprocess.Popen(
+            [shell, "-i"],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            cwd=cwd,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError:
+        os.close(master)
+        os.close(slave)
+        raise
+    os.close(slave)
+    return master, proc
+
+
+async def serve_terminal(websocket: WebSocket, cwd: str) -> None:
+    """在指定工作目录开一个 PTY shell，把字节流双向转发给 xterm.js。
+
+    仅 POSIX（Termux/Linux）可用；Android 原生 APK 走的是 Kotlin 引擎，不经过这里。
+    """
+    try:
+        root = _resolve_any(cwd)
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason=str(exc.detail)[:120])
+        return
+    if not root.is_dir():
+        await websocket.close(code=1008, reason=f"工作目录不存在：{root}")
+        return
+    if os.name != "posix":
+        await websocket.close(code=1008, reason="当前运行时没有 POSIX PTY；请用 Termux/Linux")
+        return
+
+    try:
+        master, proc = await asyncio.to_thread(_spawn_shell, str(root))
+    except OSError as exc:
+        await websocket.close(code=1008, reason=f"启动 shell 失败：{exc}")
+        return
+
+    await websocket.accept()
+
+    async def pump() -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                data = await loop.run_in_executor(None, os.read, master, 4096)
+                if not data:
+                    break
+                await websocket.send_text(data.decode("utf-8", errors="replace"))
+        except (OSError, WebSocketDisconnect, RuntimeError):
+            pass
+
+    pump_task = asyncio.create_task(pump())
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            kind = msg.get("type")
+            if kind == "input":
+                data = msg.get("data")
+                if isinstance(data, str) and data:
+                    try:
+                        os.write(master, data.encode("utf-8", errors="replace"))
+                    except OSError:
+                        break
+            elif kind == "resize":
+                try:
+                    _set_winsize(master, int(msg.get("cols", 80)), int(msg.get("rows", 24)))
+                except (OSError, ValueError, TypeError):
+                    pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        pump_task.cancel()
+        _kill_term(proc)
+        try:
+            os.close(master)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()

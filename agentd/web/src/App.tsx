@@ -89,8 +89,9 @@ export default function App() {
 
   // 原生 APK 的 Kotlin 引擎还没有工作区 API；只有 Termux/Python 运行时有。
   // 这里探测一次 /api/workspace/info，避免在原生壳里露出一个点进去就 404 的页签。
+  // mock 模式也保留工作区：离线演示时文件树/编辑器/终端仍然可用。
   useEffect(() => {
-    if (connectionStatus !== "connected" || mock) {
+    if (connectionStatus !== "connected") {
       setWorkspaceAvailable(false);
       return;
     }

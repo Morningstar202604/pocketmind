@@ -3318,22 +3318,26 @@ body {
   min-height: 180px;
   width: 100%;
   box-sizing: border-box;
-  resize: none;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--code-bg);
-  color: var(--text);
-  padding: 10px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.55;
-  tab-size: 2;
-  outline: none;
-  -webkit-text-size-adjust: 100%;
+  overflow: hidden;
+  position: relative;
 }
-.ws-editor:focus {
+.ws-editor:focus-within {
   border-color: var(--brand);
   box-shadow: var(--ring);
+}
+.ws-editor .cm-editor {
+  height: 100%;
+  background: transparent;
+}
+.ws-editor .cm-scroller {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.ws-editor .cm-content {
+  padding: 8px 0;
 }
 .ws-empty {
   flex: 1;
@@ -3378,6 +3382,30 @@ body {
   gap: 8px;
   color: var(--text-3);
   font-size: 11px;
+}
+.ws-mode {
+  display: flex;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  flex: none;
+}
+.ws-mode button {
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ws-mode button.on {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+.ws-mode button:active {
+  opacity: 0.75;
 }
 .ws-cwd {
   flex: 1;
@@ -3554,4 +3582,57 @@ body {
   .ws-file-actions .btn {
     padding: 4px 7px;
   }
+}
+
+/* 真 PTY 终端：xterm 画布填满剩余空间，外层 ws-console 只负责边框与标题。 */
+.ws-term {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+.ws-term-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.ws-term-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--text-3);
+  flex: none;
+}
+.ws-term-dot.open { background: var(--ok); }
+.ws-term-dot.connecting { background: var(--warn); }
+.ws-term-dot.error,
+.ws-term-dot.closed { background: var(--err); }
+.ws-term-status { flex: none; }
+.ws-term-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.ws-term-host {
+  flex: 1;
+  min-height: 110px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--code-bg);
+  padding: 4px;
+}
+.ws-term-host .xterm {
+  height: 100%;
+}
+.ws-term-host .xterm-viewport {
+  background: transparent !important;
+  border-radius: 6px;
 }

@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -1536,8 +1536,31 @@ def create_app() -> FastAPI:
     # ---------- 开发工作区 ----------
     # 工作区接口只给已登录用户使用；路径 jail 与写权限在 routes/workspace.py 内。
     from .routes.workspace import router as workspace_router
+    from .routes.workspace import serve_terminal
 
     app.include_router(workspace_router, prefix="/api/workspace", dependencies=[Depends(check_token)])
+
+    @app.websocket("/api/workspace/term")
+    async def workspace_term(websocket: WebSocket):
+        """PTY 终端：WebSocket 鉴权 + 同源校验，然后交给 workspace.serve_terminal。"""
+        try:
+            check_same_origin(websocket)  # type: ignore[arg-type]  # WebSocket 也有 headers
+        except HTTPException:
+            await websocket.close(code=1008, reason="跨站请求被拒绝")
+            return
+        import hmac
+
+        token = str(settings_mgr.get().get("server", {}).get("token", ""))
+        if token:
+            given = str(websocket.query_params.get("token", ""))
+            try:
+                same = hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
+            except (UnicodeError, TypeError):
+                same = False
+            if not same:
+                await websocket.close(code=1008, reason="需要访问令牌")
+                return
+        await serve_terminal(websocket, str(websocket.query_params.get("cwd", ".")))
 
     # ---------- 静态前端 ----------
     if DIST.exists():
