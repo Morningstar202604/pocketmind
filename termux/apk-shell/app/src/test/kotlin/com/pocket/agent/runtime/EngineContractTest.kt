@@ -20,6 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
 
 /**
  * 原生引擎契约测试（v1.4 迁移核心）：
@@ -804,6 +805,43 @@ class EngineContractTest {
         assertFalse("审计不应包含工具参数内容：$rec",
             rec.toString().contains("敏感内容SECRET"))
         assertFalse("审计不应包含 API Key：$rec", rec.toString().contains("sk-test"))
+    }
+
+    @Test
+    fun `技能索引注入 system prompt`() {
+        bootstrap()
+        configureLlm("auto")
+        val dir = File(context.filesDir, "skills/demo")
+        dir.mkdirs()
+        File(dir, "SKILL.md").writeText(
+            "---\nname: demo-skill\ndescription: 系统提示技能\n---\nSECRET_BODY",
+            Charsets.UTF_8,
+        )
+        val sid = newSession()
+        fakeLlm.turns.addLast(FakeTurn(text = "好的"))
+        send("POST", "/api/chat", JSONObject().put("session_id", sid).put("message", "你好").toString())
+        val sent = fakeLlm.lastMessages.first { it.optString("role") == "system" }.optString("content")
+        assertTrue("system 应含技能索引：${sent.take(500)}", sent.contains("可用技能"))
+        assertTrue("应含技能名与描述：${sent.take(500)}", sent.contains("demo-skill") && sent.contains("系统提示技能"))
+        assertFalse("技能正文不应整段注入：${sent.take(500)}", sent.contains("SECRET_BODY"))
+    }
+
+    @Test
+    fun `技能接口 - 返回真实索引与目录`() {
+        bootstrap()
+        val dir = File(context.filesDir, "skills/demo")
+        dir.mkdirs()
+        File(dir, "SKILL.md").writeText(
+            "---\nname: demo-skill\ndescription: 接口测试技能\n---\n按步骤执行",
+            Charsets.UTF_8,
+        )
+        val payload = JSONObject(get("/api/skills").body)
+        assertEquals(1, payload.getJSONArray("skills").length())
+        val first = payload.getJSONArray("skills").getJSONObject(0)
+        assertEquals("demo-skill", first.getString("name"))
+        assertEquals("接口测试技能", first.getString("description"))
+        assertTrue("目录应指向 app-private skills：$payload",
+            payload.getString("dir").endsWith(File("skills").path))
     }
 
     @Test

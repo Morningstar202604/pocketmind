@@ -26,7 +26,7 @@ files — as structured tools, and it asks you before it does anything destructi
 Everything it remembers stays on the device. Only inference leaves it.
 
 ```
-You ──▶ APK ──▶ Kotlin native engine ──▶ 37 native tools ──▶ your phone
+You ──▶ APK ──▶ Kotlin native engine ──▶ 38 native tools ──▶ your phone
                         │
                         └──▶ your LLM endpoint (inference only)
 
@@ -45,9 +45,8 @@ Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s
 ## The parts that matter
 
 > Scope: approvals, structured results, backups, Plan/Act, usage stats, the
-> scheduler, shell and undo exist in both runtimes. The standalone APK ships 37
-> native tools. Only **MCP, the Telegram gateway, the skills directory and the
-> subagent** are Termux-only; unsupported capabilities are reported explicitly
+> scheduler, shell and undo exist in both runtimes. The standalone APK ships 38
+> native tools. Only **MCP, the Telegram gateway and the subagent** are Termux-only; unsupported capabilities are reported explicitly
 > instead of faking success.
 
 ### Approval is a security boundary, not a dialog
@@ -73,7 +72,7 @@ way past it, and a compromised page cannot either.
 
 > The table below describes the Termux runtime (51 = 49 built-in plus the
 > `remember_fact` / `read_skill` tools registered at startup). The standalone APK
-> covers most of them with 37 native tools; the difference is the "three things it
+> covers most of them with 38 native tools; the difference is the "three things it
 > cannot do" listed under honest boundaries.
 
 | Group | Count | Examples |
@@ -182,8 +181,7 @@ limits:
   work anywhere. Check [docs/capability-matrix.md](docs/capability-matrix.md) or
   `GET /api/diagnostics` on your device.
 - **The APK ships a native Kotlin engine (since 1.4.0; scheduler and shell since
-  1.5.0).** Core features run without Termux. MCP, the Telegram gateway and the
-  skills directory stay Termux-only — see [ROADMAP.md](ROADMAP.md).
+  1.5.0).** Core features run without Termux. MCP and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
 - **The native shell is not Termux.** `run_shell` runs `/system/bin/sh` as the
   app's own uid: no root, no `pkg`/`apt`, only the toybox command subset, no
   Python or Node. Diagnostics reports it as `restricted`, not `ok`.
@@ -201,12 +199,11 @@ bash scripts/build-apk.sh --release  # unsigned unless keystore.properties is pr
 ```
 
 What the native engine covers today: chat (SSE), all three permission modes,
-server-enforced approvals, 37 phone/file/knowledge/system tools via Android
-APIs, sessions, export/import, search, a real `/system/bin/sh`, and scheduled
+server-enforced approvals, 38 phone/file/knowledge/system/skill tools via Android
+APIs, a `SKILL.md` directory with on-demand `read_skill`, sessions, export/import, search, a real `/system/bin/sh`, and scheduled
 jobs (AlarmManager with cron/interval/one-shot triggers that survive screen
 lock and reboot), plus undoable file writes and deletes. What stays Termux-only
-(the app says so explicitly instead of faking it): MCP, the Telegram gateway,
-the skills directory and the subagent. For those, use Option B.
+(the app says so explicitly instead of faking it): MCP, the Telegram gateway and the subagent. For those, use Option B.
 
 ### Option B — on your phone with Termux (full 51-tool runtime)
 

@@ -25,7 +25,7 @@
 它记住的一切都留在设备上。离开设备的只有推理请求。
 
 ```
-你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 37 个原生工具 ──▶ 你的手机
+你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 38 个原生工具 ──▶ 你的手机
                      │
                      └──▶ 你配置的 LLM 端点（仅推理）
 
@@ -43,8 +43,8 @@
 ## 真正重要的部分
 
 > 范围说明：审批、结构化结果、备份、Plan/Act、用量统计、**定时任务、shell、撤销**
-> 在 APK 与 Termux 两个运行时都有。独立 APK 提供 **37 个原生工具**；
-> 只有 **MCP、Telegram 网关、技能目录、子代理** 属于 Termux 专属，
+> 在 APK 与 Termux 两个运行时都有。独立 APK 提供 **38 个原生工具**；
+> 只有 **MCP、Telegram 网关、子代理** 属于 Termux 专属，
 > 未覆盖的能力会明确返回"不可用"，不会假装成功。
 
 ### 审批是安全边界，不是弹窗
@@ -66,7 +66,7 @@
 ### 覆盖手机的 51 个工具
 
 > 下表是 Termux 完整运行时（51 = 49 内置 + `remember_fact`/`read_skill` 两个运行时注册）。
-> 独立 APK 的 37 个原生工具覆盖其中绝大多数；差额是上面「有三件事做不到」里的那几项。
+> 独立 APK 的 38 个原生工具覆盖其中绝大多数；差额是上面「有三件事做不到」里的那几项。
 
 | 分组 | 数量 | 例子 |
 |---|---|---|
@@ -165,7 +165,7 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
   离线 TTS 模型（数百 MB）、`subagent`（成本权衡）。见
   [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
 - **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell）。** 核心功能不装 Termux 即可用；
-  MCP、Telegram 与技能目录仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
+  MCP 与 Telegram 网关仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
 
 ## 安装
 
@@ -179,11 +179,12 @@ bash scripts/build-apk.sh            # debug APK，已校验、可直接安装
 bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签名件
 ```
 
-原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、37 个
-手机/文件/知识库/系统工具（Android API 直调）、会话、导出导入、搜索、
+原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、38 个
+手机/文件/知识库/系统/技能工具（Android API 直调）、技能目录（SKILL.md 扫描 +
+`read_skill` 渐进披露）、会话、导出导入、搜索、
 定时任务（AlarmManager + cron/间隔/一次性，锁屏与重启后仍生效）、
 文件写删的可撤销备份、开机自启。仍属 Termux 专属并会**明确告知**
-（不伪成功）：MCP、Telegram 网关、技能目录、子代理。需要这些请用方案 B。
+（不伪成功）：MCP、Telegram 网关、子代理。需要这些请用方案 B。
 
 > **原生 shell 的边界**：`run_shell` 跑的是系统的 `/system/bin/sh`，身份是
 > 应用自己的 uid——没有 root，没有 `pkg`/`apt`，只有 toybox 提供的命令子集，
@@ -259,7 +260,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（浏览器装一次）
 - **后端**：`ruff` + `mypy` + 51 个套件 + `compileall` + **依赖锁一致性** + **覆盖率红线**
 - **前端**：`tsc` + Vitest + 生产构建 + **`dist/` 新鲜度校验**
   （入库的产物必须与当前源码一致，因为手机端从不构建它）
-- **Android**：61 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
+- **Android**：67 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
 
 ```bash
 # Android 单独跑（需要 JDK 17+ 与 Android SDK）

@@ -56,7 +56,12 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
   covers budget, repeat guard, invalid JSON, atomic write, Git tools, and
   `todo_read`; registered in `tests/run_all.sh`. The native `HarnessTest.kt`
   adds 4 Robolectric cases (invalid JSON, repeat guard, turn wall-clock,
-  settings clamping); the full native suite is 61/61.
+  settings clamping); the native suite grew to 67/67 with M1.4 skills coverage.
+- **M1.4 native skills directory**: the Kotlin engine scans
+  `filesDir/skills/<name>/SKILL.md`, parses frontmatter, injects only
+  name + description into the system prompt, exposes `read_skill` for on-demand
+  body reads, and `/api/skills` returns the real index. `SkillRegistryTest` (4)
+  plus two engine contract cases cover it; native tools are now 38.
 - **M1.3 harness documentation**: `docs/AGENT-HARNESS.md` records the 25-item
   capability matrix and the boundaries of each new guard; `ARCHITECTURE.md`
   points the loop diagram at it.

@@ -33,6 +33,7 @@ import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import android.provider.Settings
+import com.pocket.agent.skills.SkillRegistry
 
 /**
  * 工具执行环境：Android Context + Store 句柄 + 当前会话。
@@ -846,6 +847,30 @@ object ToolRegistry {
                     JSONObject().put("ok", true).put("query", q).put("count", results.length()).put("results", results)
                 } finally {
                     c.disconnect()
+                }
+            }
+        )
+
+        // ═══════════════ 技能：渐进披露，正文按需读取 ═══════════════
+
+        register(
+            ToolDef(
+                "read_skill", "读取某个技能的完整说明（先看 system 里的技能索引，按需读取）。", "safe",
+                "读取技能说明", "skills",
+                schema("name" to ("string" to true))
+            ) { args, env ->
+                val name = optString(args, "name")
+                if (name.isBlank()) throw ToolAbort(err("name 不能为空"))
+                val registry = SkillRegistry.forContext(env.context)
+                val body = registry.read(name)
+                if (body == null) {
+                    val available = JSONArray()
+                    registry.list().forEach { available.put(it.name) }
+                    JSONObject().put("error", "没有名为 $name 的技能")
+                        .put("error_code", "skill_not_found")
+                        .put("available", available)
+                } else {
+                    JSONObject().put("name", name).put("content", body)
                 }
             }
         )

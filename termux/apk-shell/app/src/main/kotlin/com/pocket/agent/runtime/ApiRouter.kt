@@ -6,6 +6,7 @@ import com.pocket.agent.agent.ApprovalCenter
 import com.pocket.agent.data.SettingsStore
 import com.pocket.agent.data.Store
 import com.pocket.agent.llm.LlmClient
+import com.pocket.agent.skills.SkillRegistry
 import com.pocket.agent.tools.DeviceEnv
 import com.pocket.agent.tools.ToolRegistry
 import org.json.JSONArray
@@ -15,9 +16,9 @@ import org.json.JSONObject
  * 业务路由：把 Python agentd 的 REST/SSE 契约逐端点搬到原生引擎。
  *
  * 范围声明（写入 /api/diagnostics，不伪迁移）：
- *  - 已实现：健康/设置/会话/消息/聊天 SSE/审批/工具/知识库/导出导入/统计/诊断；
+ *  - 已实现：健康/设置/会话/消息/聊天 SSE/审批/工具/知识库/技能/导出导入/统计/诊断；
  *  - 显式降级：jobs/recipes（原生引擎 v1 无调度器，返回空集）、
- *    undo（原生文件工具不做 checkpoint）、skills（v1 无技能目录）。
+ *    undo（原生文件工具不做 checkpoint）。
  */
 class ApiRouter(
     private val context: Context,
@@ -153,8 +154,13 @@ class ApiRouter(
                     ?: return ex.respond(400, JSON, "{\"error\":\"id 必须是整数\"}")
                 ex.respond(200, JSON, JSONObject().put("ok", store.kbDelete(id)).put("id", id).toString())
             }
-            path == "/api/skills" && ex.method == "GET" ->
-                ex.respond(200, JSON, "{\"skills\":[],\"dir\":\"\"}")
+            path == "/api/skills" && ex.method == "GET" -> {
+                val registry = SkillRegistry.forContext(context)
+                ex.respond(200, JSON, JSONObject()
+                    .put("skills", registry.listJson())
+                    .put("dir", registry.root.absolutePath)
+                    .toString())
+            }
             path == "/api/stats" && ex.method == "GET" -> stats(ex)
             path == "/api/metrics" && ex.method == "GET" ->
                 ex.respond(200, "text/plain; charset=utf-8", metricsText())

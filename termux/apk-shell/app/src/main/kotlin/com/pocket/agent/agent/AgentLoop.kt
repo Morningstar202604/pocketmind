@@ -4,6 +4,7 @@ import com.pocket.agent.data.SettingsStore
 import com.pocket.agent.data.Store
 import com.pocket.agent.llm.LlmClient
 import com.pocket.agent.runtime.SseWriter
+import com.pocket.agent.skills.SkillRegistry
 import com.pocket.agent.tools.DeviceEnv
 import com.pocket.agent.tools.ToolRegistry
 import org.json.JSONArray
@@ -183,6 +184,12 @@ class AgentLoop(
             for (i in 0 until archives.length()) {
                 system.append("\n- ").append(archives.optString(i))
             }
+        }
+        // 技能索引只放 name + description；正文由 read_skill 按需读取，避免撑爆手机窗口。
+        val skillBlock = runCatching { SkillRegistry.forContext(appContext()).systemBlock() }
+            .getOrDefault("")
+        if (skillBlock.isNotEmpty()) {
+            system.append("\n\n").append(skillBlock)
         }
         messages.put(JSONObject().put("role", "system").put("content", system.toString()))
         for (i in 0 until history.length()) {
