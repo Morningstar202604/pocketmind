@@ -283,6 +283,7 @@ source, since phones never build it).
 Per-suite detail: [smoke/README.md](smoke/README.md).
 API reference: [docs/API.md](docs/API.md).
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Mobile dev workspace: [docs/DEV-WORKSPACE.md](docs/DEV-WORKSPACE.md) · [full plan](docs/DEV-WORKSPACE-FULL-PLAN.md).
 
 ## Project governance
 

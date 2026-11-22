@@ -11,6 +11,20 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Mobile Dev Workspace (Phase 1)**: a file tree, CodeMirror 6 editor with
+  syntax highlighting, save-time unified diff, full-text search, Git status,
+  a stateless command console, and an xterm.js PTY terminal over WebSocket.
+  Workspace writes are jailed to `AGENT_WORKSPACE`; reads reuse the existing
+  file allowlist; saves carry `expected_mtime` conflict detection and back up
+  before overwriting. The tab appears only when `/api/workspace/info` is
+  available, so the native Kotlin runtime stays unaffected.
+- **Workspace plan**: `docs/DEV-WORKSPACE-FULL-PLAN.md` covers merge, adjust,
+  interrupt, and inspect/modify flows, plus a phased roadmap to PRoot.
+- **Workspace regression**: `smoke/p37_workspace_test.py` exercises the API,
+  path jail, command denial, and PTY round-trip.
+
 ## [1.6.2] - 2026-11-07
 
 ### Fixed
