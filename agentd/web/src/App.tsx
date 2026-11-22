@@ -11,6 +11,7 @@ import { PendingApprovalBanner } from "./components/PendingApprovalBanner";
 import { PocketLogo } from "./components/PocketLogo";
 import { TokenGate } from "./components/TokenGate";
 import { TodoPanel } from "./components/TodoPanel";
+import { getWorkspaceInfo } from "./api";
 import { useAgentStore } from "./store/useAgentStore";
 import type { Msg } from "./types";
 import { applyTheme } from "./theme";
@@ -27,6 +28,9 @@ import { reloadPage } from "./native";
  */
 const CapabilityPage = lazy(() =>
   import("./components/CapabilityPage").then((m) => ({ default: m.CapabilityPage })),
+);
+const WorkspacePage = lazy(() =>
+  import("./components/WorkspacePage").then((m) => ({ default: m.WorkspacePage })),
 );
 const TasksPage = lazy(() =>
   import("./components/TasksPage").then((m) => ({ default: m.TasksPage })),
@@ -81,6 +85,33 @@ export default function App() {
   const pendingApprovals = useAgentStore((s) => s.pendingApprovals);
 
   const [tab, setTab] = useState<TabKey>("chat");
+  const [workspaceAvailable, setWorkspaceAvailable] = useState(false);
+
+  // 原生 APK 的 Kotlin 引擎还没有工作区 API；只有 Termux/Python 运行时有。
+  // 这里探测一次 /api/workspace/info，避免在原生壳里露出一个点进去就 404 的页签。
+  // mock 模式也保留工作区：离线演示时文件树/编辑器/终端仍然可用。
+  useEffect(() => {
+    if (connectionStatus !== "connected") {
+      setWorkspaceAvailable(false);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        await getWorkspaceInfo();
+        if (alive) setWorkspaceAvailable(true);
+      } catch {
+        if (alive) setWorkspaceAvailable(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [connectionStatus, mock]);
+
+  useEffect(() => {
+    if (!workspaceAvailable && tab === "workspace") setTab("chat");
+  }, [workspaceAvailable, tab]);
   const [draft, setDraft] = useState<string | undefined>(undefined);
   // 首次运行引导：后端已连通但模型未配置时弹一次（localStorage 记住「已完成/跳过」）。
   // 离线演示模式（mock）与令牌锁屏不弹；连接还没建立时不弹（等 health 的结论）。
@@ -326,6 +357,12 @@ export default function App() {
         </>
       )}
 
+      {tab === "workspace" && (
+        <Suspense fallback={<LazyFallback />}>
+          <WorkspacePage />
+        </Suspense>
+      )}
+
       {tab === "capability" && (
         <Suspense fallback={<LazyFallback />}>
           <CapabilityPage onRun={runFromCapability} />
@@ -346,6 +383,7 @@ export default function App() {
         active={tab}
         onChange={setTab}
         badge={{ tasks: pendingApprovals.length }}
+        hidden={workspaceAvailable ? [] : ["workspace"]}
       />
 
       {showOnboard && (
@@ -392,5 +430,11 @@ export default function App() {
 }
 
 function tabLabel(t: TabKey): string {
-  return t === "chat" ? "本地智能体 · 模型请求发往配置端点" : t === "capability" ? "它能替你做哪些事" : "常驻任务与运行状态";
+  return t === "chat"
+    ? "本地智能体 · 模型请求发往配置端点"
+    : t === "workspace"
+      ? "手机里的代码工作区"
+      : t === "capability"
+        ? "它能替你做哪些事"
+        : "常驻任务与运行状态";
 }

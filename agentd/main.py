@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -173,7 +173,10 @@ async def run_agent(session_id: str, message: str) -> None:
                 await store.touch_session(session_id, title or "新会话")
             except Exception:  # noqa: BLE001 —— 命名失败不阻塞
                 pass
-        agent = Agent(store, settings_mgr, mock=MOCK, mem0=mem0, profile=profile, skills=skills)
+        agent = Agent(
+            store, settings_mgr, mock=MOCK, mem0=mem0, profile=profile,
+            skills=skills, deny_check=approval.is_auto_denied,
+        )
 
         async def ask(tid: str, name: str, summary: str, risk: str) -> str:
             # 「始终拒绝」（全局黑名单）优先于一切：直接拒绝，不推审批卡、不注册 gate。
@@ -183,7 +186,7 @@ async def run_agent(session_id: str, message: str) -> None:
             # 已「始终允许」的工具：不再弹审批卡、不注册 gate，直接放行。
             # 必须在 emit 之前判断——否则前端会收到一张早已自动批准的幽灵审批卡，
             # 用户点同意时 gate 已不存在（404），体验上是「卡了一下又消失」。
-            if approval.is_auto_allowed(session_id, name):
+            if approval.is_auto_allowed(session_id, name) and risk != "danger":
                 return "allow"
             emit = emit_now(session_id)
             if emit:
@@ -476,6 +479,16 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
         scheduler_svc.shutdown()
+        try:
+            from .workspace_tasks import get_manager
+            await get_manager().shutdown()
+        except Exception:  # noqa: BLE001 —— 清理后台任务失败不阻塞关闭
+            pass
+        try:
+            from .workspace_terms import get_hub
+            await get_hub().shutdown()
+        except Exception:  # noqa: BLE001 —— 清理 PTY 失败不阻塞关闭
+            pass
         # MCP Client 关闭
         try:
             from .mcp_client import shutdown_mcp_client
@@ -1532,6 +1545,35 @@ def create_app() -> FastAPI:
         # 与 GET 同一份打码逻辑：保存响应不得回传明文 server.token / tg_token
         from .routes import masked_settings
         return {"ok": True, "settings": masked_settings(settings_mgr.get())}
+
+    # ---------- 开发工作区 ----------
+    # 工作区接口只给已登录用户使用；路径 jail 与写权限在 routes/workspace.py 内。
+    from .routes.workspace import router as workspace_router
+    from .routes.workspace import serve_terminal
+
+    app.include_router(workspace_router, prefix="/api/workspace", dependencies=[Depends(check_token)])
+
+    @app.websocket("/api/workspace/term")
+    async def workspace_term(websocket: WebSocket):
+        """PTY 终端：WebSocket 鉴权 + 同源校验，然后交给 workspace.serve_terminal。"""
+        try:
+            check_same_origin(websocket)  # type: ignore[arg-type]  # WebSocket 也有 headers
+        except HTTPException:
+            await websocket.close(code=1008, reason="跨站请求被拒绝")
+            return
+        import hmac
+
+        token = str(settings_mgr.get().get("server", {}).get("token", ""))
+        if token:
+            given = str(websocket.query_params.get("token", ""))
+            try:
+                same = hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
+            except (UnicodeError, TypeError):
+                same = False
+            if not same:
+                await websocket.close(code=1008, reason="需要访问令牌")
+                return
+        await serve_terminal(websocket, str(websocket.query_params.get("cwd", ".")))
 
     # ---------- 静态前端 ----------
     if DIST.exists():

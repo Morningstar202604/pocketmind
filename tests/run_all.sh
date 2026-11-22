@@ -180,6 +180,9 @@ if [ "$RUN_BACKEND" = 1 ]; then
   step "p34 用户旅程（真实 HTTP：会话→工具→审批→导出导入→定时任务→删除）" run_py smoke/p34_user_journey_test.py
   step "p35 CSS 层叠守卫（通用规则不得压掉组件布局）" run_py smoke/p35_css_cascade_test.py
   step "p36 检索与备份格式（工具输出搜索 / format_version 导入规则）" run_py smoke/p36_search_and_format_test.py
+  step "p37 开发工作区 API 与 PTY（文件树 / diff / 命令 / 路径 jail）" run_py smoke/p37_workspace_test.py
+  step "p38 M1.1 代码工具与工作区任务（编辑/Git/变更撤销/后台取消/PTY 复用）" run_py smoke/p38_m11_test.py
+  step "p39 M1.2 文件锁与 Git 合并（分支/冲突/patch）" run_py smoke/p39_m12_test.py
   step "版本一致性（main.py / package.json / gradle.properties）" run_py tests/check_version.py
   if [ "$WITH_DEP_AUDIT" = 1 ]; then
     step "p22 依赖漏洞扫描（OSV.dev，需外网）" run_py smoke/p22_dep_audit_test.py

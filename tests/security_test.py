@@ -229,12 +229,59 @@ async def test_memory_search_auth():
         check("memory/search 带 check_token 依赖", "check_token" in names, str(names))
 
 
+async def test_approval_scope():
+    print("== 安全-6: auto 模式黑名单与危险工具始终允许 ==")
+    from types import SimpleNamespace
+
+    from agentd.agent import Agent
+    from agentd.approval import ApprovalCenter
+
+    with tempfile.TemporaryDirectory() as td:
+        center = ApprovalCenter(timeout_cb=lambda: 1, persist_path=Path(td) / "approval.json")
+
+        gate = asyncio.create_task(center.ask("s1", "t1", "run_shell", "shell", "danger"))
+        await asyncio.sleep(0)
+        center.decide("s1", "t1", "deny_always")
+        decision = await gate
+        check("deny_always 写入全局黑名单", decision == "deny" and center.is_auto_denied("run_shell"))
+
+        gate2 = asyncio.create_task(center.ask("s1", "t2", "danger_tool", "shell", "danger"))
+        await asyncio.sleep(0)
+        center.decide("s1", "t2", "allow_always")
+        decision2 = await gate2
+        check("危险工具始终允许不落白名单", decision2 == "allow" and not center.is_auto_allowed("s1", "danger_tool"))
+
+        # 模拟旧版本留下的危险工具全局白名单：不能让 run_shell 静默放行
+        center._global.add("legacy_danger")
+        gate3 = asyncio.create_task(center.ask("s1", "t3", "legacy_danger", "shell", "danger"))
+        await asyncio.sleep(0.05)
+        pending = any(x["tool_call_id"] == "t3" for x in center.pending())
+        center.decide("s1", "t3", "allow_once")
+        await gate3
+        check("旧全局白名单中的危险工具仍需逐次确认", pending)
+
+        class AutoSettings:
+            def permission_mode(self):
+                return "auto"
+
+        agent = Agent(
+            None, AutoSettings(), mock=True, deny_check=lambda name: name == "run_shell"
+        )  # type: ignore[arg-type]
+        got = await agent._decide_tool(
+            tid="t3", name="run_shell", tool=SimpleNamespace(risk="danger", summary="shell"),
+            mode="auto", ask_approval=None,
+        )
+        check("auto 模式仍拒绝全局黑名单工具", got == "deny", got)
+
+
+
 async def main():
     await test_path_traversal()
     await test_memory_search_auth()
     await test_fts_injection()
     await test_ssrf_scheme()
     await test_chat_mode_no_tool_exec()
+    await test_approval_scope()
     await test_token_masking()
     print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
     sys.exit(1 if failed else 0)

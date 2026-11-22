@@ -26,9 +26,9 @@ import inspect
 try:  # pragma: no cover - 取决于环境装的大版本
     # mcp SDK 1.x/2.x 的导出路径不同（fastmcp / mcpserver），mypy 存根只认其一；
     # 运行时由 try/except 兜底兼容两种大版本
-    from mcp.server.fastmcp import FastMCP  # type: ignore[attr-defined]  # 三方 SDK 泛型/导出缺陷
+    from mcp.server.fastmcp import FastMCP  # type: ignore[attr-defined,no-redef]  # 三方 SDK 泛型/导出缺陷
 except ModuleNotFoundError:  # pragma: no cover
-    from mcp.server.mcpserver import MCPServer as FastMCP  # type: ignore[attr-defined]  # 三方 SDK 泛型/导出缺陷
+    from mcp.server.mcpserver import MCPServer as FastMCP  # type: ignore[attr-defined,no-redef]  # 三方 SDK 泛型/导出缺陷
 
 from .tools import all_tools, call_tool
 

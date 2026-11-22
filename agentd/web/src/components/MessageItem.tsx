@@ -89,7 +89,12 @@ const TOOL_LABEL: Record<string, string> = {
   list_dir: "列出目录",
   read_file: "读取文件",
   write_file: "写入文件",
+  edit_file: "编辑文件",
   delete_file: "删除文件",
+  grep: "全文搜索",
+  glob: "查找文件",
+  git_diff: "查看 Git",
+  run_tests: "运行测试",
   // 知识库 / 记忆
   kb_add: "存入知识库",
   kb_search: "检索知识库",
@@ -220,7 +225,11 @@ function ToolCard({
       </button>
       {open && (
         <div className="tool-body" id={bodyId}>
-          <pre className="tool-input">$ {inputText}</pre>
+          {waiting && tool.preview ? (
+            <pre className="approval-diff" aria-label="改动预览">{tool.preview}</pre>
+          ) : (
+            <pre className="tool-input">$ {inputText}</pre>
+          )}
           {waiting && (
             <div className="approval">
               <p className="approval-summary">

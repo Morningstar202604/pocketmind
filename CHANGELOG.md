@@ -11,6 +11,38 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Mobile Dev Workspace (Phase 1)**: a file tree, CodeMirror 6 editor with
+  syntax highlighting, save-time unified diff, full-text search, Git status,
+  a stateless command console, and an xterm.js PTY terminal over WebSocket.
+  Workspace writes are jailed to `AGENT_WORKSPACE`; reads reuse the existing
+  file allowlist; saves carry `expected_mtime` conflict detection and back up
+  before overwriting. The tab appears only when `/api/workspace/info` is
+  available, so the native Kotlin runtime stays unaffected.
+- **Workspace plan**: `docs/DEV-WORKSPACE-FULL-PLAN.md` covers merge, adjust,
+  interrupt, and inspect/modify flows, plus a phased roadmap to PRoot.
+- **Workspace regression**: `smoke/p37_workspace_test.py` exercises the API,
+  path jail, command denial, and PTY round-trip.
+- **M1.1 code tools**: `edit_file` (exact replacement with unique-match guard),
+  `grep`, `glob`, `git_diff`, and `run_tests`; file writes are backed up and
+  approval cards show a unified diff before the user allows the change.
+- **M1.1 change/task panels**: human saves/deletes/create are recorded with
+  `change_id` and can be undone per file (undo refuses to clobber later edits).
+  Long commands run as cancellable background tasks with a persisted log.
+- **M1.1 PTY takeover**: a disconnected terminal keeps its shell for 30 seconds
+  and `session_id` reconnect attaches to the same process instead of spawning a
+  new one.
+- **M1.2 Git merge**: structured branch/status, checkout with dirty-worktree
+  protection, two-phase merge preview, ours/theirs/manual conflict resolution,
+  commit/abort, and patch check/apply. Repo roots are jailed to `AGENT_WORKSPACE`.
+- **M1.2 file locks**: per-path in-process locks serialize human saves, Agent
+  writes/deletes, undo, and conflict resolution; lock wait timeout returns 409,
+  with `expected_mtime` still covering cross-process changes.
+- **Approval hardening**: `auto` mode now still honors the global deny list, and
+  dangerous tools (`run_shell`, etc.) downgrade "always allow" to a single call
+  instead of persisting a tool-name-wide allow rule.
+
 ## [1.6.2] - 2026-11-07
 
 ### Fixed

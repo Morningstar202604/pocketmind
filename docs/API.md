@@ -35,14 +35,51 @@
 | `session` | `session_id` | 首帧，新建会话时前端据此绑定 |
 | `text` | `text` | 增量正文 |
 | `thinking` | `text` | 思考模型/推理模型的思维链增量 |
-| `tool_start` | `id`,`name`,`input` | 工具调用开始 |
+| `tool_start` | `id`,`name`,`input`,`preview`? | 工具调用开始；文件写/编辑/删除带 diff 预览 |
 | `tool_update` | `id`,`name`,`status`,`result`,`undoable` | 工具结果（status: completed/failed/denied） |
-| `approval` | `id`,`name`,`summary`,`risk` | 等待用户审批 |
+| `approval` | `id`,`name`,`summary`,`risk`,`preview`? | 等待用户审批 |
 | `plan` | `plan`,`tool_calls` | Plan 模式的计划（不执行工具） |
 | `todo` | `todos` | 任务清单变更 |
 | `queued` | `message` | 上一轮未结束，本条已排队 |
 | `error` | `message` | 错误 |
 | `done` | `stop_reason`,`usage`? | 结束（end_turn / plan / queued / unconfigured）。`usage` 为本轮累计 `{prompt_tokens, completion_tokens, total_tokens, estimated?}` |
+
+## 开发工作区
+
+前缀 `/api/workspace`，全部要求 token。路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/workspace/info` | 根目录、运行时、能力位 |
+| GET | `/api/workspace/tree?path=` | 单层目录（最多 500） |
+| GET | `/api/workspace/file?path=` | 读文本（≤1MB） |
+| PUT | `/api/workspace/file` | 写文本（≤2MB，`expected_mtime` 冲突 409，返回 `change_id`） |
+| POST | `/api/workspace/preview` | unified diff，不落盘 |
+| GET | `/api/workspace/search?q=&path=&case_sensitive=` | 逐行搜索（≤200 条） |
+| POST | `/api/workspace/exec` | 同步命令（cwd + timeout≤300s） |
+| POST | `/api/workspace/tasks` | 后台任务 `{command,cwd,timeout}`，返回 `id` |
+| GET | `/api/workspace/tasks?limit=` | 最近任务 |
+| GET | `/api/workspace/tasks/{id}` | 任务状态、输出、日志路径 |
+| POST | `/api/workspace/tasks/{id}/cancel` | 取消任务并回收进程组 |
+| GET | `/api/workspace/changes?limit=&include_undone=` | 文件变更记录 |
+| POST | `/api/workspace/changes/{id}/undo` | 撤销写入/删除/新建；后续修改冲突 409 |
+| POST | `/api/workspace/mkdir` / `/rename` | 新建目录 / 重命名 |
+| DELETE | `/api/workspace/file?path=` | 删除文件（先备份）或空目录 |
+| GET | `/api/workspace/git?cwd=` | 兼容旧接口：原始分支/status/diffstat 文本 |
+| GET | `/api/workspace/git/status?cwd=` | 结构化 Git 状态：branch、clean、ahead/behind、merging、files、branches、conflicts |
+| POST | `/api/workspace/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
+| POST | `/api/workspace/git/merge/preview` | 进入两阶段合并 `{cwd,branch}`，返回冲突列表与状态 |
+| POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态 |
+| POST | `/api/workspace/git/merge/commit` | 提交合并 `{cwd,message}`；还有未解决冲突则 409 |
+| GET | `/api/workspace/git/conflicts?cwd=` | 读取 base/ours/theirs/工作区文本 |
+| POST | `/api/workspace/git/conflicts/resolve` | 解决单个冲突：`ours` / `theirs` / `manual`，并 `git add` |
+| POST | `/api/workspace/patch` | 应用 unified diff；默认 `dry_run=true` 只预检 |
+| WS | `/api/workspace/term?cwd=&token=&session=` | PTY；30 秒内带 `session` 重连可接管原 shell |
+
+写文件、删除、重命名、撤销、冲突 resolve 都经过进程内路径锁；默认等待 8 秒，
+超时返回 409。保存仍带 `expected_mtime`，跨进程/命令台改动由 mtime 兜底。
+
+WS 首帧为 `{"type":"ready","session_id":...,"reconnected":bool}`，其余为原始终端输出；客户端输入 `{"type":"input","data":...}`、`{"type":"resize","cols":..,"rows":..}`。
 
 ## 审批
 

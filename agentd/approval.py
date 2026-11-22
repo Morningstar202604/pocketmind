@@ -140,7 +140,9 @@ class ApprovalCenter:
         # 黑名单最优先：直接拒绝，不建门、不等待（调用方也不会推审批卡）
         if tool_name in self._never:
             return "deny"
-        if self.is_auto_allowed(session_id, tool_name):
+        # 旧的全局白名单可能含 run_shell 这类危险工具；危险等级必须逐次确认，
+        # 不能被旧数据静默放行。
+        if self.is_auto_allowed(session_id, tool_name) and risk != "danger":
             return "allow"
         timeout = self._timeout_cb()
         gate = {
@@ -166,6 +168,10 @@ class ApprovalCenter:
         finally:
             self._gates.pop((session_id, tool_call_id), None)
         d = gate["decision"]
+        if d in ("allow_always", "allow_global") and risk == "danger":
+            # 危险工具只允许「这一次」：run_shell 的参数由模型决定，按工具名
+            # 永久放行等于把任意命令都交出去。降级为单次 allow，不落白名单。
+            return "allow"
         if d == "allow_always":
             self._always.setdefault(session_id, set()).add(tool_name)
             self._persist()

@@ -197,8 +197,8 @@ export type ChatEvent =
   | { type: "session"; session_id: string }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_start"; id: string; name: string; input: unknown }
-  | { type: "approval"; id: string; name: string; summary: string; risk: string }
+  | { type: "tool_start"; id: string; name: string; input: unknown; preview?: string }
+  | { type: "approval"; id: string; name: string; summary: string; risk: string; preview?: string }
   | {
       type: "tool_update";
       id: string;
@@ -322,6 +322,238 @@ export interface StatsPayload {
   };
 }
 export const getStats = () => api.get<StatsPayload>("/api/stats");
+
+/** 开发工作区：文件树 / 读写 / 预览 / 搜索 / 命令台。 */
+export interface WorkspaceRoot {
+  path: string;
+  label: string;
+}
+export interface WorkspaceInfo {
+  ok: boolean;
+  root: string;
+  roots: WorkspaceRoot[];
+  runtime: "termux" | "python" | string;
+  features: {
+    tree: boolean;
+    read: boolean;
+    write: boolean;
+    preview: boolean;
+    search: boolean;
+    exec: boolean;
+    git: boolean;
+    changes?: boolean;
+    tasks?: boolean;
+    locks?: boolean;
+    git_merge?: boolean;
+  };
+}
+export interface WorkspaceEntry {
+  name: string;
+  type: "dir" | "file" | "unknown";
+  size?: number | null;
+}
+export interface WorkspaceTree {
+  path: string;
+  entries: WorkspaceEntry[];
+  truncated?: boolean;
+}
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  size: number;
+  mtime: number;
+}
+export interface WorkspacePreview {
+  path: string;
+  changed: boolean;
+  diff: string;
+  truncated?: boolean;
+}
+export interface WorkspaceExec {
+  cwd: string;
+  command: string;
+  ok?: boolean;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  timed_out?: boolean;
+  truncated?: boolean;
+  error?: string;
+}
+export interface WorkspaceSearchHit {
+  path: string;
+  line: number;
+  text: string;
+}
+export interface WorkspaceSearch {
+  query: string;
+  root: string;
+  results: WorkspaceSearchHit[];
+  truncated?: boolean;
+}
+export interface WorkspaceGitFile {
+  path: string;
+  original_path?: string | null;
+  index: string;
+  worktree: string;
+  staged: boolean;
+  untracked: boolean;
+  unmerged: boolean;
+}
+export interface WorkspaceGitBranch {
+  name: string;
+  sha: string;
+  upstream: string;
+  current: boolean;
+}
+export interface WorkspaceGitStatus {
+  available: boolean;
+  cwd: string;
+  repo_root?: string;
+  branch?: string;
+  detached?: boolean;
+  commit?: string;
+  upstream?: string;
+  ahead?: number | null;
+  behind?: number | null;
+  clean?: boolean;
+  merging?: boolean;
+  merge_head?: string;
+  files?: WorkspaceGitFile[];
+  branches?: WorkspaceGitBranch[];
+  conflicts?: string[];
+  diffstat?: string;
+  message?: string;
+}
+export interface WorkspaceConflict {
+  path: string;
+  binary: boolean;
+  base: string;
+  ours: string;
+  theirs: string;
+  work: string;
+}
+export interface WorkspaceMergeResult {
+  ok: boolean;
+  branch?: string;
+  clean?: boolean;
+  conflicts?: string[];
+  stdout?: string;
+  stderr?: string;
+  state?: WorkspaceGitStatus;
+  output?: string;
+}
+export interface WorkspaceChange {
+  id: string;
+  path: string;
+  kind: "overwrite" | "create" | "delete";
+  backup?: string | null;
+  after_mtime?: number | null;
+  after_size?: number | null;
+  bytes?: number;
+  source?: string;
+  created_at: number;
+  undone?: boolean;
+}
+export interface WorkspaceTask {
+  id: string;
+  command: string;
+  cwd: string;
+  timeout: number;
+  status: "running" | "cancelling" | "done" | "failed" | "cancelled";
+  created_at: number;
+  started_at?: number;
+  ended_at?: number | null;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  timed_out?: boolean;
+  truncated?: boolean;
+  log_path?: string | null;
+}
+
+export const getWorkspaceInfo = () => api.get<WorkspaceInfo>("/api/workspace/info");
+export const getWorkspaceTree = (path: string) =>
+  api.get<WorkspaceTree>(`/api/workspace/tree?path=${encodeURIComponent(path)}`);
+export const getWorkspaceFile = (path: string) =>
+  api.get<WorkspaceFile>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+export const previewWorkspaceFile = (path: string, content: string) =>
+  api.post<WorkspacePreview>("/api/workspace/preview", { path, content });
+export const putWorkspaceFile = (path: string, content: string, expectedMtime?: number | null) =>
+  api.put<{
+    ok: boolean;
+    path: string;
+    bytes: number;
+    mtime: number;
+    backup?: string | null;
+    change_id?: string | null;
+  }>("/api/workspace/file", { path, content, expected_mtime: expectedMtime ?? null });
+export const searchWorkspace = (q: string, path: string, caseSensitive = false) =>
+  api.get<WorkspaceSearch>(
+    `/api/workspace/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(path)}&case_sensitive=${caseSensitive ? "true" : "false"}`
+  );
+export const execWorkspace = (command: string, cwd: string, timeout = 60) =>
+  api.post<WorkspaceExec>("/api/workspace/exec", { command, cwd, timeout });
+export const makeWorkspaceDir = (path: string) =>
+  api.post<{ ok: boolean; path: string }>("/api/workspace/mkdir", { path });
+export const renameWorkspace = (fromPath: string, toPath: string) =>
+  api.post<{ ok: boolean; from: string; to: string }>("/api/workspace/rename", {
+    from_path: fromPath,
+    to_path: toPath,
+  });
+export const deleteWorkspaceFile = (path: string) =>
+  api.del<{
+    ok: boolean;
+    deleted: string;
+    type: string;
+    backup?: string | null;
+    change_id?: string | null;
+  }>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+export const getWorkspaceGitStatus = (cwd: string) =>
+  api.get<WorkspaceGitStatus>(`/api/workspace/git/status?cwd=${encodeURIComponent(cwd)}`);
+export const checkoutWorkspaceBranch = (cwd: string, branch: string, create = false) =>
+  api.post<{ ok: boolean; branch: string; changed: boolean }>("/api/workspace/git/checkout", {
+    cwd, branch, create,
+  });
+export const previewWorkspaceMerge = (cwd: string, branch: string) =>
+  api.post<WorkspaceMergeResult>("/api/workspace/git/merge/preview", { cwd, branch });
+export const abortWorkspaceMerge = (cwd: string) =>
+  api.post<{ ok: boolean; state: WorkspaceGitStatus }>("/api/workspace/git/merge/abort", { cwd });
+export const commitWorkspaceMerge = (cwd: string, message: string) =>
+  api.post<WorkspaceMergeResult>("/api/workspace/git/merge/commit", { cwd, message });
+export const getWorkspaceConflicts = (cwd: string) =>
+  api.get<{ items: WorkspaceConflict[]; count: number }>(
+    `/api/workspace/git/conflicts?cwd=${encodeURIComponent(cwd)}`
+  );
+export const resolveWorkspaceConflict = (
+  cwd: string, path: string, strategy: "ours" | "theirs" | "manual", content?: string
+) =>
+  api.post<{ ok: boolean; path: string; remaining: string[]; state: WorkspaceGitStatus }>(
+    "/api/workspace/git/conflicts/resolve", { cwd, path, strategy, content }
+  );
+export const applyWorkspacePatch = (cwd: string, patch: string, dryRun = true) =>
+  api.post<{ ok: boolean; dry_run: boolean; state?: WorkspaceGitStatus }>("/api/workspace/patch", {
+    cwd, patch, dry_run: dryRun,
+  });
+export const getWorkspaceChanges = (limit = 50, includeUndone = false) =>
+  api.get<{ items: WorkspaceChange[] }>(
+    `/api/workspace/changes?limit=${limit}&include_undone=${includeUndone ? "true" : "false"}`
+  );
+export const undoWorkspaceChange = (changeId: string) =>
+  api.post<{ ok: boolean; restored: string; kind: string }>(
+    `/api/workspace/changes/${encodeURIComponent(changeId)}/undo`
+  );
+export const startWorkspaceTask = (command: string, cwd: string, timeout = 300) =>
+  api.post<WorkspaceTask & { ok: boolean }>("/api/workspace/tasks", { command, cwd, timeout });
+export const getWorkspaceTasks = (limit = 20) =>
+  api.get<{ items: WorkspaceTask[] }>(`/api/workspace/tasks?limit=${limit}`);
+export const getWorkspaceTask = (taskId: string) =>
+  api.get<WorkspaceTask>(`/api/workspace/tasks/${encodeURIComponent(taskId)}`);
+export const cancelWorkspaceTask = (taskId: string) =>
+  api.post<{ ok: boolean; id: string; status: string }>(
+    `/api/workspace/tasks/${encodeURIComponent(taskId)}/cancel`
+  );
 
 /** 带 HTTP 状态码的错误：调用方要能区分「401 需要令牌」与一般失败。 */
 export class ApiError extends Error {

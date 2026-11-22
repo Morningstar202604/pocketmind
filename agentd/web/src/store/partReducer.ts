@@ -24,6 +24,7 @@ export function applyEvent(msg: Msg, ev: ChatEvent): Msg {
         id: ev.id,
         name: ev.name,
         input: ev.input,
+        preview: ev.preview,
         status: "running",
         // 记下本地开始时刻：后端不发耗时字段，前端自算即可（同机、精度足够）
         startedAt: Date.now(),
@@ -39,7 +40,17 @@ export function applyEvent(msg: Msg, ev: ChatEvent): Msg {
         ...msg,
         parts: msg.parts.map((p) =>
           p.type === "tool" && p.tool.id === ev.id
-            ? { ...p, tool: { ...p.tool, status: "waiting", summary: ev.summary, risk: ev.risk, startedAt: undefined } }
+            ? {
+                ...p,
+                tool: {
+                  ...p.tool,
+                  status: "waiting",
+                  summary: ev.summary,
+                  risk: ev.risk,
+                  preview: ev.preview ?? p.tool.preview,
+                  startedAt: undefined,
+                },
+              }
             : p
         ),
       };

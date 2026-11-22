@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from . import metrics as _m
 from . import permissions
 from .config import Settings
+from .diff_preview import preview_tool_call
 from .mem0_memory import Mem0Memory
 from .memory import Store
 from .mock_llm import MockLLM
@@ -180,6 +181,7 @@ class Agent:
         mem0: Mem0Memory | None = None,
         profile=None,      # profile_memory.ProfileMemory：USER/FACT 文件记忆（可选）
         skills=None,       # skills.SkillRegistry：SKILL.md 渐进披露（可选）
+        deny_check: Callable[[str], bool] | None = None,  # 全局黑名单检查（可选）
     ):
         self.store = store
         self.settings = settings
@@ -187,6 +189,7 @@ class Agent:
         self.mem0 = mem0  # 本地 Mem0 记忆（可选）
         self.profile = profile  # 结构化长期记忆（可选）
         self.skills = skills    # 技能索引（可选）
+        self._deny_check = deny_check
         self._client = None  # AsyncOpenAI 懒加载缓存（httpx 连接池复用，避免每次新建泄漏）
         self._litellm = None  # LiteLLM 懒加载缓存（use_litellm=true 时生效）
         self._summarizer_obj = None  # 摘要器懒加载（直连端点，见 summarizer.py）
@@ -820,6 +823,11 @@ class Agent:
         3. 未知工具 → approve 模式下问用户（模型幻觉出来的名字不能直接执行）
         4. 已知工具 → 按 risk × mode 决定要不要问
         """
+        if tool is not None and self._deny_check is not None and self._deny_check(name):
+            # 全局黑名单必须压过 auto：auto 只代表「不逐条弹审批」，不代表
+            # 用户已经撤销「始终拒绝」。旧实现 auto 直接绕过 ask_approval，
+            # 导致黑名单只写在文件里、运行时完全不生效。
+            return "deny"
         if mode == "chat":
             return "deny"
         if ask_approval is None:
@@ -889,7 +897,8 @@ class Agent:
             args = {}
 
         tool = get_tool(name)
-        await emit({"type": "tool_start", "id": tid, "name": name, "input": args})
+        preview = preview_tool_call(name, args)
+        await emit({"type": "tool_start", "id": tid, "name": name, "input": args, "preview": preview})
 
         decision = await self._decide_tool(
             tid=tid, name=name, tool=tool, mode=mode, ask_approval=ask_approval
