@@ -34,7 +34,6 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 
 | Item | Status | Notes |
 |---|---|---|
-| Runtime permission flow for SMS/call/location/camera tools | planned | Tools currently return `permission_required` with a hint; wire guided grant requests. |
 | MCP client/server over the native engine | exploring | stdio is Termux-bound; evaluate in-app socket transport. |
 
 
