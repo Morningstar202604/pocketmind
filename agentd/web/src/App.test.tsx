@@ -30,6 +30,8 @@ vi.mock("./api", () => {
     exportAll: vi.fn(() => Promise.resolve({})),
     renameSession: vi.fn(() => Promise.resolve({})),
     undoToolCall: vi.fn(() => Promise.resolve({})),
+    // 原生/测试环境没有工作区 API：App 会探测失败并隐藏「工作区」页签。
+    getWorkspaceInfo: vi.fn(() => Promise.reject(new Error("workspace unavailable"))),
   };
 });
 

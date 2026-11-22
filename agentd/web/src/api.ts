@@ -323,6 +323,112 @@ export interface StatsPayload {
 }
 export const getStats = () => api.get<StatsPayload>("/api/stats");
 
+/** 开发工作区：文件树 / 读写 / 预览 / 搜索 / 命令台。 */
+export interface WorkspaceRoot {
+  path: string;
+  label: string;
+}
+export interface WorkspaceInfo {
+  ok: boolean;
+  root: string;
+  roots: WorkspaceRoot[];
+  runtime: "termux" | "python" | string;
+  features: {
+    tree: boolean;
+    read: boolean;
+    write: boolean;
+    preview: boolean;
+    search: boolean;
+    exec: boolean;
+    git: boolean;
+  };
+}
+export interface WorkspaceEntry {
+  name: string;
+  type: "dir" | "file" | "unknown";
+  size?: number | null;
+}
+export interface WorkspaceTree {
+  path: string;
+  entries: WorkspaceEntry[];
+  truncated?: boolean;
+}
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  size: number;
+  mtime: number;
+}
+export interface WorkspacePreview {
+  path: string;
+  changed: boolean;
+  diff: string;
+  truncated?: boolean;
+}
+export interface WorkspaceExec {
+  cwd: string;
+  command: string;
+  ok?: boolean;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  timed_out?: boolean;
+  truncated?: boolean;
+  error?: string;
+}
+export interface WorkspaceSearchHit {
+  path: string;
+  line: number;
+  text: string;
+}
+export interface WorkspaceSearch {
+  query: string;
+  root: string;
+  results: WorkspaceSearchHit[];
+  truncated?: boolean;
+}
+export interface WorkspaceGit {
+  available: boolean;
+  cwd: string;
+  ok?: boolean;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  message?: string;
+}
+
+export const getWorkspaceInfo = () => api.get<WorkspaceInfo>("/api/workspace/info");
+export const getWorkspaceTree = (path: string) =>
+  api.get<WorkspaceTree>(`/api/workspace/tree?path=${encodeURIComponent(path)}`);
+export const getWorkspaceFile = (path: string) =>
+  api.get<WorkspaceFile>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+export const previewWorkspaceFile = (path: string, content: string) =>
+  api.post<WorkspacePreview>("/api/workspace/preview", { path, content });
+export const putWorkspaceFile = (path: string, content: string, expectedMtime?: number | null) =>
+  api.put<{ ok: boolean; path: string; bytes: number; mtime: number; backup?: string | null }>(
+    "/api/workspace/file",
+    { path, content, expected_mtime: expectedMtime ?? null }
+  );
+export const searchWorkspace = (q: string, path: string, caseSensitive = false) =>
+  api.get<WorkspaceSearch>(
+    `/api/workspace/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(path)}&case_sensitive=${caseSensitive ? "true" : "false"}`
+  );
+export const execWorkspace = (command: string, cwd: string, timeout = 60) =>
+  api.post<WorkspaceExec>("/api/workspace/exec", { command, cwd, timeout });
+export const makeWorkspaceDir = (path: string) =>
+  api.post<{ ok: boolean; path: string }>("/api/workspace/mkdir", { path });
+export const renameWorkspace = (fromPath: string, toPath: string) =>
+  api.post<{ ok: boolean; from: string; to: string }>("/api/workspace/rename", {
+    from_path: fromPath,
+    to_path: toPath,
+  });
+export const deleteWorkspaceFile = (path: string) =>
+  api.del<{ ok: boolean; deleted: string; type: string; backup?: string | null }>(
+    `/api/workspace/file?path=${encodeURIComponent(path)}`
+  );
+export const getWorkspaceGit = (cwd: string) =>
+  api.get<WorkspaceGit>(`/api/workspace/git?cwd=${encodeURIComponent(cwd)}`);
+
 /** 带 HTTP 状态码的错误：调用方要能区分「401 需要令牌」与一般失败。 */
 export class ApiError extends Error {
   readonly status: number;

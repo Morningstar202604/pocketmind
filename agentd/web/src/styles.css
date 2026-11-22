@@ -3045,3 +3045,513 @@ body {
   font-size: 10px;
   vertical-align: 1px;
 }
+
+/* ============================================================
+   开发工作区（Dev Workspace）
+   ------------------------------------------------------------
+   第一版是「文件树 + 纯文本编辑器 + 命令台」，不是完整 IDE。
+   先把闭环跑通：看文件 → 改 → 保存前看 diff → 跑命令 → 看输出。
+   语法高亮（CodeMirror）与真 PTY（xterm）放到下一阶段，避免包体和工作区
+   后端验证被前端依赖拖住。
+   ============================================================ */
+.tabs {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.ws-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 0;
+  overflow: hidden;
+}
+
+.ws-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ws-head h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+}
+.ws-sub {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.ws-head-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ws-error,
+.ws-status {
+  flex: none;
+  padding: 7px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ws-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--err);
+  border: 1px solid color-mix(in srgb, var(--err) 36%, transparent);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+  word-break: break-word;
+}
+.ws-status {
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ws-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 30%) minmax(0, 1fr);
+  gap: 8px;
+  overflow: hidden;
+}
+
+.ws-tree {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.ws-tree-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.ws-tree-head > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-up {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.ws-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ws-entry {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ws-entry:hover,
+.ws-entry:active {
+  background: var(--panel-2);
+}
+.ws-entry-icon {
+  flex: none;
+  display: flex;
+  color: var(--text-3);
+}
+.ws-entry-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-entry-size {
+  flex: none;
+  color: var(--text-3);
+  font-size: 10px;
+}
+.ws-muted {
+  margin: 8px 10px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ws-search {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+}
+.ws-search input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--inset);
+  color: var(--text);
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.ws-search input:focus {
+  border-color: var(--brand);
+  box-shadow: var(--ring);
+}
+.ws-hits {
+  flex: none;
+  max-height: 34%;
+  border-top: 1px solid var(--border);
+}
+.ws-hits button {
+  width: 100%;
+  display: block;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-hits button:hover {
+  background: var(--panel-2);
+}
+.ws-hit-path {
+  color: var(--brand-text);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.ws-hit-line {
+  color: var(--text-3);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.ws-hit-text {
+  display: block;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-main {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+.ws-filebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.ws-filepath {
+  flex: 1;
+  min-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.ws-dirty {
+  flex: none;
+  color: var(--warn);
+  font-size: 10px;
+}
+.ws-file-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.ws-editor {
+  flex: 1;
+  min-height: 180px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--code-bg);
+  color: var(--text);
+  padding: 10px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  outline: none;
+  -webkit-text-size-adjust: 100%;
+}
+.ws-editor:focus {
+  border-color: var(--brand);
+  box-shadow: var(--ring);
+}
+.ws-empty {
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 20px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+.ws-empty h3 {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 15px;
+}
+.ws-empty p {
+  margin: 0;
+  max-width: 360px;
+  font-size: 12px;
+}
+
+.ws-console {
+  flex: none;
+  max-height: 40%;
+  min-height: 138px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.ws-console-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.ws-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.ws-output {
+  flex: 1;
+  min-height: 52px;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--text-2);
+  padding: 7px 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ws-command-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ws-prompt {
+  flex: none;
+  color: var(--brand-text);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.ws-command-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--inset);
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  outline: none;
+}
+.ws-command-row input:focus {
+  border-color: var(--brand);
+  box-shadow: var(--ring);
+}
+.ws-git {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.ws-git-out {
+  flex: 1;
+  min-width: 0;
+  max-height: 78px;
+  margin: 0;
+  overflow: auto;
+  color: var(--text-3);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ws-x {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ws-x:hover {
+  color: var(--text);
+}
+
+.ws-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.58);
+}
+.ws-modal-card {
+  width: min(760px, 100%);
+  max-height: 82dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.ws-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ws-modal-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.ws-diff {
+  flex: 1;
+  min-height: 120px;
+  max-height: 58dvh;
+  margin: 0;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--text-2);
+  padding: 8px 10px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ws-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ws-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .ws-page {
+    padding: 8px 10px 0;
+  }
+  .ws-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(132px, 28%) minmax(0, 1fr);
+  }
+  .ws-tree {
+    max-height: 30dvh;
+  }
+  .ws-main {
+    min-height: 0;
+  }
+  .ws-editor {
+    min-height: 150px;
+  }
+  .ws-console {
+    max-height: 46%;
+  }
+  .ws-filebar {
+    gap: 4px;
+  }
+  .ws-file-actions .btn {
+    padding: 4px 7px;
+  }
+}

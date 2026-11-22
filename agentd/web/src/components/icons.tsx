@@ -38,6 +38,15 @@ export const IconFolder = (p: P) => (
   </Svg>
 );
 
+/** 代码/工作区：尖括号 + 斜杠，与「写代码」直接对应。 */
+export const IconCode = (p: P) => (
+  <Svg {...p}>
+    <path d="m8 8-4 4 4 4" />
+    <path d="m16 8 4 4-4 4" />
+    <path d="M13 6 11 18" />
+  </Svg>
+);
+
 /** 记忆/事实：书签形（与"存一条长期事实"对应）。 */
 export const IconBookmark = (p: P) => (
   <Svg {...p}>

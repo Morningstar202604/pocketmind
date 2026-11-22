@@ -1533,6 +1533,12 @@ def create_app() -> FastAPI:
         from .routes import masked_settings
         return {"ok": True, "settings": masked_settings(settings_mgr.get())}
 
+    # ---------- 开发工作区 ----------
+    # 工作区接口只给已登录用户使用；路径 jail 与写权限在 routes/workspace.py 内。
+    from .routes.workspace import router as workspace_router
+
+    app.include_router(workspace_router, prefix="/api/workspace", dependencies=[Depends(check_token)])
+
     # ---------- 静态前端 ----------
     if DIST.exists():
         app.mount("/", StaticFiles(directory=str(DIST), html=True), name="static")
