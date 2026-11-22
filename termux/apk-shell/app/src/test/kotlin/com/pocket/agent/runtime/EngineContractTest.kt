@@ -858,6 +858,50 @@ class EngineContractTest {
     }
 
     @Test
+    fun `工作区接口 - 文件树读写搜索预览执行`() {
+        bootstrap()
+        File(context.filesDir, "ws-api").deleteRecursively()
+        File(context.filesDir, "config.json").writeText("{\"api_key\":\"sk-secret\"}")
+        val info = JSONObject(get("/api/workspace/info").body)
+        assertEquals(true, info.getBoolean("ok"))
+        assertEquals("kotlin", info.getString("runtime"))
+        val root = info.getString("root")
+        val put = send("PUT", "/api/workspace/file", JSONObject()
+            .put("path", "ws-api/hello.txt").put("content", "alpha\nneedle here\n").toString())
+        assertEquals(200, put.code)
+        val saved = JSONObject(put.body)
+        val mtime = saved.getLong("mtime")
+
+        val tree = JSONObject(get("/api/workspace/tree?path=${java.net.URLEncoder.encode(root, "UTF-8")}").body)
+        assertTrue("树里应出现 ws-api：$tree", (0 until tree.getJSONArray("entries").length()).any {
+            tree.getJSONArray("entries").getJSONObject(it).getString("name") == "ws-api"
+        })
+        assertFalse("config.json 不应出现在树里：$tree", (0 until tree.getJSONArray("entries").length()).any {
+            tree.getJSONArray("entries").getJSONObject(it).getString("name") == "config.json"
+        })
+
+        val read = JSONObject(get("/api/workspace/file?path=ws-api/hello.txt").body)
+        assertEquals("alpha\nneedle here\n", read.getString("content"))
+        assertEquals(200, get("/api/workspace/search?q=needle&path=ws-api").code)
+        assertEquals(200, send("POST", "/api/workspace/preview", JSONObject()
+            .put("path", "ws-api/hello.txt").put("content", "alpha\nchanged\n").toString()).code)
+        assertEquals(200, send("POST", "/api/workspace/exec", JSONObject()
+            .put("command", "printf ok").put("cwd", "ws-api").toString()).code)
+
+        val outside = File(context.filesDir, "ws-api/hello.txt")
+        outside.writeText("other\n")
+        outside.setLastModified((mtime + 5) * 1000)
+        val stale = send("PUT", "/api/workspace/file", JSONObject()
+            .put("path", "ws-api/hello.txt").put("content", "two\n").put("expected_mtime", mtime).toString())
+        assertEquals(409, stale.code)
+        assertEquals(403, get("/api/workspace/file?path=${java.net.URLEncoder.encode("../../etc/passwd", "UTF-8")}").code)
+        assertEquals(200, send("DELETE", "/api/workspace/file?path=ws-api/hello.txt", null).code)
+
+        val git = JSONObject(get("/api/workspace/git/status?cwd=ws-api").body)
+        assertEquals(false, git.getBoolean("available"))
+    }
+
+    @Test
     fun `超时未决也记审计 且审计接口受鉴权保护`() {
         bootstrap()
         // 直接构造一次超时：approval.awaitDecision 用最短 10 秒太久，改用 0 → 被收敛到 10

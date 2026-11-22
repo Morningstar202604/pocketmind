@@ -129,6 +129,50 @@ class ApiRouter(
                     ex.respond(400, JSON, JSONObject().put("error", e.message).toString())
                 }
             }
+            path == "/api/workspace/info" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.info() }
+            path == "/api/workspace/tree" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.tree(ex.query["path"]) }
+            path == "/api/workspace/file" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.read(ex.query["path"]) }
+            path == "/api/workspace/file" && ex.method == "PUT" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.write(
+                        body.optString("path", ""),
+                        body.optString("content", ""),
+                        if (body.has("expected_mtime") && !body.isNull("expected_mtime")) body.optLong("expected_mtime") else null,
+                    )
+                }
+            }
+            path == "/api/workspace/file" && ex.method == "DELETE" ->
+                workspace(ex) { ws -> ws.delete(ex.query["path"]) }
+            path == "/api/workspace/preview" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws -> ws.preview(body.optString("path", ""), body.optString("content", "")) }
+            }
+            path == "/api/workspace/search" && ex.method == "GET" ->
+                workspace(ex) { ws ->
+                    ws.search(ex.query["q"], ex.query["path"], ex.query["case_sensitive"] == "true")
+                }
+            path == "/api/workspace/mkdir" && ex.method == "POST" ->
+                workspace(ex) { ws -> ws.mkdir(bodyJson(ex).optString("path", "")) }
+            path == "/api/workspace/rename" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws -> ws.rename(body.optString("from_path", ""), body.optString("to_path", "")) }
+            }
+            path == "/api/workspace/exec" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.exec(body.optString("command", ""), body.optString("cwd", "."), body.optInt("timeout", 60))
+                }
+            }
+            path == "/api/workspace/git/status" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.gitStatus(ex.query["cwd"]) }
+            path == "/api/workspace/changes" && ex.method == "GET" ->
+                ex.respond(200, JSON, "{\"items\":[]}")
+            path == "/api/workspace/tasks" && ex.method == "GET" ->
+                ex.respond(200, JSON, "{\"items\":[]}")
             path == "/api/providers" && ex.method == "GET" ->
                 ex.respond(200, JSON, "{\"providers\":${SettingsStore.PROVIDERS.trimIndent()}}")
             path == "/api/llm/test" && ex.method == "POST" -> llmTest(ex)
@@ -211,6 +255,27 @@ class ApiRouter(
             path.startsWith("/api/jobs/") -> jobDetail(ex, path)
             else -> // fail-closed：契约里登记过但没实现的 /api 路径，绝不 200
                 ex.respond(503, JSON, "{\"error\":\"unavailable\",\"migration\":\"not_implemented\"}")
+        }
+    }
+
+    private fun workspace(ex: Exchange, body: (NativeWorkspace) -> Any) {
+        try {
+            val ws = NativeWorkspace(context)
+            val value = body(ws)
+            val json = when (value) {
+                is JSONObject -> value
+                is JSONArray -> JSONObject().put("items", value)
+                else -> JSONObject().put("value", value)
+            }
+            ex.respond(200, JSON, json.toString())
+        } catch (e: NativeWorkspace.WorkspaceException) {
+            ex.respond(e.status, JSON, JSONObject()
+                .put("error", e.message ?: "workspace error")
+                .put("error_code", "workspace_error").toString())
+        } catch (e: Exception) {
+            ex.respond(500, JSON, JSONObject()
+                .put("error", e.message ?: "workspace error")
+                .put("error_code", "internal_error").toString())
         }
     }
 

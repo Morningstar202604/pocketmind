@@ -22,6 +22,7 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Agent harness baseline (1.6.x) | shipped | Wall-clock budget, repeated-tool guard, malformed-argument rejection, hard context fit, atomic writes, agent-facing Git/patch tools; Python p40 + native HarnessTest. |
 | Native skills directory (1.6.x) | shipped | `filesDir/skills/<name>/SKILL.md` scanning, system-prompt index, on-demand `read_skill`, `/api/skills`; progressive disclosure on both runtimes. |
 | Merge checkpoint (1.6.x) | shipped | `refs/pocketmind/premerge/*` pinned before `git merge`; committed merge can be reset, abort clears it; `/api/workspace/git/merge/checkpoint` + `/undo`. |
+| Native workspace REST (1.6.x) | shipped | `info/tree/file/preview/search/mkdir/rename/delete/exec` on app-private `filesDir`; config/db/checkpoint/audit paths stay hidden; git/PTY/changes/tasks are explicitly unavailable. |
 | Runtime permission flow (1.6.x) | shipped | Tool errors carry exact permission names; foreground Activity shows the system dialog; tool card has one-tap grant; background calls fail with `no_activity`. |
 | Backup export / import | shipped | `format_version` stamped on both runtimes; bundles are cross-compatible. |
 | MCP stdio server / Telegram gateway | Python only | Native engine degrades explicitly. |
@@ -29,14 +30,13 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Session search across tool output | shipped | `matched` kinds on both runtimes (native: LIKE over tool rows). |
 | Structured tool result viewer | shipped | List-shaped results render as tables/cards. |
 | `mypy` gate | shipped | Zero errors, enforced by `tests/run_all.sh`. |
-| Full local gate in one command | shipped | `bash tests/run_all.sh` + `gradle testDebugUnitTest lintDebug assembleDebug` (70 Robolectric tests). |
+| Full local gate in one command | shipped | `bash tests/run_all.sh` + `gradle testDebugUnitTest lintDebug assembleDebug` (77 Robolectric tests). |
 
 ## Next — 1.6.x
 
 | Item | Status | Notes |
 |---|---|---|
 | MCP client/server over the native engine | exploring | stdio is Termux-bound; evaluate in-app socket transport. |
-| Native workspace API (tree/edit/search/terminal) | planned | APK has file tools but no `/api/workspace` surface yet; WorkspacePage stays Python-only. |
 | Three-way block conflict resolution + changeset aggregation | planned | Current conflict resolve is whole-file; multi-tool results are not grouped into one changeset. |
 | Background-task output streaming | planned | `/api/workspace/tasks/{id}` returns a snapshot; long tasks do not stream incrementally. |
 
@@ -70,7 +70,7 @@ mistakes a green local gate for full coverage.
 | Gap | Why it exists | What would close it |
 |---|---|---|
 | **The native scheduler has not fired a real alarm on a physical device.** The cron parser, job CRUD, run-now delivery and undo round-trip are covered by Robolectric tests, but `AlarmManager` callbacks, Doze behaviour and `BOOT_COMPLETED` replay are only exercised on real hardware. | The development host is Windows; no Linux runner or working Docker daemon was available. | One green CI run on `ubuntu-latest`, or `bash tests/run_all.sh` inside a Linux container. |
-| **No real-device APK test — still the top gap.** The native engine passes 70 Robolectric tests (engine auth, routing, storage, agent loop, approvals, jobs, undo, shell) and the APK builds with lint clean, but no physical device has run the full bootstrap → LLM → tool → approval flow. | The host is a KVM guest without nested virtualisation, so AVDs never come up. | Install v1.4.0 on a physical Android device; exercise onboarding, chat with tool calls, and approval cards. |
+| **No real-device APK test — still the top gap.** The native engine passes 77 Robolectric tests (engine auth, routing, storage, agent loop, approvals, jobs, undo, shell) and the APK builds with lint clean, but no physical device has run the full bootstrap → LLM → tool → approval flow. | The host is a KVM guest without nested virtualisation, so AVDs never come up. | Install v1.4.0 on a physical Android device; exercise onboarding, chat with tool calls, and approval cards. |
 | **Playwright E2E is opt-in.** | Browsers are a large download; the gate must stay runnable on a phone. | Run `--with-e2e` on CI as a separate job. |
 
 ## Explicitly not planned

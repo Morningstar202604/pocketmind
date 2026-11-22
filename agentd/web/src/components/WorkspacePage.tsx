@@ -119,6 +119,7 @@ export function WorkspacePage() {
   const dark = theme === "dark" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: light)").matches);
 
   const dirty = current != null && draft !== current.content;
+  const nativeRuntime = info?.runtime === "kotlin";
 
   const loadTree = useCallback(async (path: string) => {
     setTreeLoading(true);
@@ -162,6 +163,10 @@ export function WorkspacePage() {
     const timer = window.setInterval(() => void refreshTasks(), 1500);
     return () => window.clearInterval(timer);
   }, [panel, refreshTasks]);
+
+  useEffect(() => {
+    if (info?.runtime === "kotlin") setConsoleMode("cmd");
+  }, [info?.runtime]);
 
   useEffect(() => {
     let alive = true;
@@ -536,7 +541,7 @@ export function WorkspacePage() {
 
   const remove = async () => {
     if (!current) return;
-    if (!window.confirm(`删除 ${current.path}？文件会先备份，目录只允许删空目录。`)) return;
+    if (!window.confirm(`删除 ${current.path}？${info?.features.changes !== false ? "文件会先备份，" : "原生运行时删除不可撤销，"}目录只允许删空目录。`)) return;
     try {
       await deleteWorkspaceFile(current.path);
       setCurrent(null);
@@ -574,7 +579,7 @@ export function WorkspacePage() {
         <div>
           <h2>开发工作区</h2>
           <p className="ws-sub">
-            {rootLabel} · {info.runtime === "termux" ? "Termux 运行时" : "Python 运行时"} · 写操作只允许在工作区内
+            {rootLabel} · {info.runtime === "termux" ? "Termux 运行时" : nativeRuntime ? "原生运行时" : "Python 运行时"} · 写操作只允许在工作区内
           </p>
         </div>
         <div className="ws-head-actions">
@@ -584,17 +589,23 @@ export function WorkspacePage() {
           <button className="btn sm" onClick={newFile}>
             新建文件
           </button>
-          <button className="btn sm" onClick={() => void openGit()}>
-            Git{git?.branch ? ` ${git.branch}` : ""}{git && !git.clean ? " •" : ""}
-          </button>
-          <button className="btn sm" onClick={() => setPanel("changes")}>
-            变更{changes.length ? ` ${changes.length}` : ""}
-          </button>
-          <button className="btn sm" onClick={() => setPanel("tasks")}>
-            后台任务{tasks.filter((t) => t.status === "running" || t.status === "cancelling").length
-              ? ` ${tasks.filter((t) => t.status === "running" || t.status === "cancelling").length}`
-              : ""}
-          </button>
+          {info.features.git !== false && (
+            <button className="btn sm" onClick={() => void openGit()}>
+              Git{git?.branch ? ` ${git.branch}` : ""}{git && !git.clean ? " •" : ""}
+            </button>
+          )}
+          {info.features.changes !== false && (
+            <button className="btn sm" onClick={() => setPanel("changes")}>
+              变更{changes.length ? ` ${changes.length}` : ""}
+            </button>
+          )}
+          {info.features.tasks !== false && (
+            <button className="btn sm" onClick={() => setPanel("tasks")}>
+              后台任务{tasks.filter((t) => t.status === "running" || t.status === "cancelling").length
+                ? ` ${tasks.filter((t) => t.status === "running" || t.status === "cancelling").length}`
+                : ""}
+            </button>
+          )}
         </div>
       </div>
 
@@ -611,7 +622,8 @@ export function WorkspacePage() {
       <div className="ws-body">
         <aside className="ws-tree">
           <div className="ws-tree-head">
-            <button className="ws-up" onClick={() => void loadTree(parentPath(tree?.path || info.root))} title="上一级">
+            <button className="ws-up" onClick={() => void loadTree(parentPath(tree?.path || info.root))}
+              disabled={tree?.path === info.root} title="上一级">
               ↑
             </button>
             <span title={tree?.path}>{tree?.path || info.root}</span>
@@ -714,12 +726,14 @@ export function WorkspacePage() {
           <div className={`ws-console ${consoleMode}`}>
             <div className="ws-console-head">
               <div className="ws-mode" role="group" aria-label="终端模式">
-                <button
-                  className={consoleMode === "term" ? "on" : ""}
-                  onClick={() => setConsoleMode("term")}
-                >
-                  终端
-                </button>
+                {!nativeRuntime && (
+                  <button
+                    className={consoleMode === "term" ? "on" : ""}
+                    onClick={() => setConsoleMode("term")}
+                  >
+                    终端
+                  </button>
+                )}
                 <button
                   className={consoleMode === "cmd" ? "on" : ""}
                   onClick={() => setConsoleMode("cmd")}
@@ -736,14 +750,16 @@ export function WorkspacePage() {
                 </button>
               )}
             </div>
-            {consoleMode === "term" ? (
+            {consoleMode === "term" && !nativeRuntime ? (
               <Suspense fallback={<div className="ws-muted">终端加载中…</div>}>
                 <WorkspaceTerminal cwd={cwd} dark={dark} />
               </Suspense>
             ) : (
               <>
                 <pre className="ws-output" aria-live="polite">
-                  {output || "在这里运行 git / python / npm test；命令会在上方工作目录里执行。"}
+                  {output || (nativeRuntime
+                  ? "原生运行时只有 app uid 的 /system/bin/sh：没有 python、node、git、apt；命令会在上方工作目录里执行。"
+                  : "在这里运行 git / python / npm test；命令会在上方工作目录里执行。")}
                 </pre>
                 <div className="ws-command-row">
                   <span className="ws-prompt">$</span>
@@ -756,7 +772,7 @@ export function WorkspacePage() {
                         void run();
                       }
                     }}
-                    placeholder="例如：python3 hello.py"
+                    placeholder={nativeRuntime ? "例如：ls -la / cat hello.txt" : "例如：python3 hello.py"}
                     aria-label="命令"
                     spellCheck={false}
                   />
