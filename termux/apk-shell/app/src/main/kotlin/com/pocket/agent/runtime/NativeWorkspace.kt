@@ -26,8 +26,9 @@ class NativeWorkspace(private val context: Context) {
 
     private val root: File = context.filesDir.canonicalFile
     private val changes = WorkspaceChanges(context, root)
+    private val tasks = WorkspaceTasks.get(context)
     private val deniedFiles = setOf("config.json", "rules.json", "rules.json.bak", "pocketmind.db", "workspace_changes.json")
-    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups")
+    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups", "workspace_tasks")
 
     init {
         root.mkdirs()
@@ -41,7 +42,7 @@ class NativeWorkspace(private val context: Context) {
         .put("features", JSONObject()
             .put("tree", true).put("read", true).put("write", true)
             .put("preview", true).put("search", true).put("exec", true)
-            .put("git", false).put("changes", true).put("tasks", false)
+            .put("git", false).put("changes", true).put("tasks", true)
             .put("locks", false).put("git_merge", false))
 
     fun tree(path: String?): JSONObject {
@@ -237,6 +238,19 @@ class NativeWorkspace(private val context: Context) {
         changes.list(limit, includeUndone)
 
     fun undoChange(id: String): JSONObject = changes.undo(id)
+
+    fun startTask(command: String?, cwd: String?, timeoutSec: Int): JSONObject {
+        val dir = resolve(cwd ?: ".", mustExist = true)
+        if (!dir.isDirectory) throw WorkspaceException(400, "cwd 不是目录")
+        return tasks.start(command.orEmpty(), dir, timeoutSec)
+            .put("path", dir.absolutePath)
+    }
+
+    fun listTasks(limit: Int): JSONObject = tasks.list(limit)
+
+    fun getTask(id: String): JSONObject = tasks.get(id)
+
+    fun cancelTask(id: String): JSONObject = tasks.cancel(id)
 
     fun gitStatus(cwd: String?): JSONObject {
         val dir = resolve(cwd ?: ".", mustExist = true)

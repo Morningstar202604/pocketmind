@@ -185,7 +185,33 @@ class ApiRouter(
                 }
             }
             path == "/api/workspace/tasks" && ex.method == "GET" ->
-                ex.respond(200, JSON, "{\"items\":[]}")
+                workspace(ex) { ws -> ws.listTasks(ex.query["limit"]?.toIntOrNull() ?: 20) }
+            path == "/api/workspace/tasks" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.startTask(
+                        body.optString("command"),
+                        body.optString("cwd", "."),
+                        body.optInt("timeout", 300),
+                    )
+                }
+            }
+            path.startsWith("/api/workspace/tasks/") && ex.method == "GET" -> {
+                val id = path.removePrefix("/api/workspace/tasks/")
+                if (id.isEmpty() || id.contains('/')) {
+                    ex.respond(400, JSON, "{\"error\":\"任务 id 不合法\"}")
+                } else {
+                    workspace(ex) { ws -> ws.getTask(id) }
+                }
+            }
+            path.startsWith("/api/workspace/tasks/") && path.endsWith("/cancel") && ex.method == "POST" -> {
+                val id = path.removePrefix("/api/workspace/tasks/").removeSuffix("/cancel")
+                if (id.isEmpty() || id.contains('/')) {
+                    ex.respond(400, JSON, "{\"error\":\"任务 id 不合法\"}")
+                } else {
+                    workspace(ex) { ws -> ws.cancelTask(id) }
+                }
+            }
             path == "/api/providers" && ex.method == "GET" ->
                 ex.respond(200, JSON, "{\"providers\":${SettingsStore.PROVIDERS.trimIndent()}}")
             path == "/api/llm/test" && ex.method == "POST" -> llmTest(ex)

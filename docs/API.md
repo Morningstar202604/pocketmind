@@ -48,7 +48,7 @@
 
 前缀 `/api/workspace`，全部要求 token。Python 路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
 
-原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo`，写删会先备份并记一条变更；`tasks/git/term` 明确不可用（`features` 为 false，Git status 返回 `available:false`）。
+原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks`，写删会先备份并记一条变更，后台任务可查询和取消（输出仍是结束后的快照）；`git/term` 明确不可用（`features` 为 false，Git status 返回 `available:false`）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

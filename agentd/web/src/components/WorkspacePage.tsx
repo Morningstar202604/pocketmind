@@ -290,7 +290,8 @@ export function WorkspacePage() {
     setPanelBusy(id);
     setError("");
     try {
-      await cancelWorkspaceTask(id);
+      const r = await cancelWorkspaceTask(id);
+      if (r.error) throw new Error(r.error);
       setStatus("已请求取消任务");
       await refreshTasks();
     } catch (e) {

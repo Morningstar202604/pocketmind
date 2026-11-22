@@ -570,7 +570,7 @@ export const getWorkspaceTasks = (limit = 20) =>
 export const getWorkspaceTask = (taskId: string) =>
   api.get<WorkspaceTask>(`/api/workspace/tasks/${encodeURIComponent(taskId)}`);
 export const cancelWorkspaceTask = (taskId: string) =>
-  api.post<{ ok: boolean; id: string; status: string }>(
+  api.post<{ ok?: boolean; id?: string; status?: string; error?: string }>(
     `/api/workspace/tasks/${encodeURIComponent(taskId)}/cancel`
   );
 

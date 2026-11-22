@@ -911,6 +911,19 @@ class EngineContractTest {
         assertEquals(200, undone.code)
         assertEquals(true, JSONObject(undone.body).getBoolean("ok"))
         assertFalse(File(context.filesDir, "ws-api/undo.txt").exists())
+
+        val started = send("POST", "/api/workspace/tasks", JSONObject()
+            .put("command", "printf task-ok").put("cwd", "ws-api").put("timeout", 10).toString())
+        assertEquals(200, started.code)
+        val taskId = JSONObject(started.body).getString("id")
+        var task = JSONObject()
+        for (i in 0 until 50) {
+            task = JSONObject(get("/api/workspace/tasks/$taskId").body)
+            if (task.optString("status") !in setOf("running", "cancelling")) break
+            Thread.sleep(100)
+        }
+        assertEquals("done", task.getString("status"))
+        assertTrue(task.getString("stdout").contains("task-ok"))
     }
 
     @Test
