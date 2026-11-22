@@ -42,6 +42,24 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 - **Approval hardening**: `auto` mode now still honors the global deny list, and
   dangerous tools (`run_shell`, etc.) downgrade "always allow" to a single call
   instead of persisting a tool-name-wide allow rule.
+- **M1.3 Agent Harness baseline**: per-turn wall-clock (`max_turn_seconds`),
+  consecutive duplicate-tool-call guard (`repeat_tool_limit`), malformed
+  tool-argument rejection (never fall back to `{}`), and a hard context-budget
+  fit that preserves assistant/tool pairs. Settings expose both new knobs.
+- **M1.3 atomic workspace writes**: `write_file` now writes to a same-directory
+  temp file, fsyncs, and `os.replace`s while preserving mode; it also accepts
+  `expected_mtime` so a stale read cannot overwrite a newer change.
+- **M1.3 coding tools**: Agent-facing `git_status`, `git_log`, `git_commit`,
+  `apply_patch` (dry-run by default), and `todo_read`. `git_commit` never runs
+  `git add -A`; it only commits staged content or one explicit path.
+- **M1.3 harness regression**: `smoke/p40_harness_test.py` (26 assertions)
+  covers budget, repeat guard, invalid JSON, atomic write, Git tools, and
+  `todo_read`; registered in `tests/run_all.sh`. The native `HarnessTest.kt`
+  adds 4 Robolectric cases (invalid JSON, repeat guard, turn wall-clock,
+  settings clamping); the full native suite is 61/61.
+- **M1.3 harness documentation**: `docs/AGENT-HARNESS.md` records the 25-item
+  capability matrix and the boundaries of each new guard; `ARCHITECTURE.md`
+  points the loop diagram at it.
 
 ## [1.6.2] - 2026-11-07
 

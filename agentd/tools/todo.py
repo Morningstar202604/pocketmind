@@ -104,6 +104,26 @@ register(Tool(
     group="agent",
 ))
 
+async def todo_read() -> dict:
+    """读取当前会话的任务清单（上下文被裁剪后也能恢复进度）。"""
+    store = ctx.current_store.get()
+    sid = ctx.current_session.get()
+    if store is None or not sid:
+        return {"error": "当前不在会话上下文中"}
+    todos = await store.get_todos(sid)
+    return {"count": len(todos), "todos": todos}
+
+
+register(Tool(
+    name="todo_read",
+    description="读取当前会话的任务清单，长任务上下文被裁剪后用它恢复进度。",
+    parameters={"type": "object", "properties": {}},
+    risk="safe",
+    handler=todo_read,
+    summary="读取任务清单",
+    group="agent",
+))
+
 register(Tool(
     name="todo_clear",
     description="清空任务清单（全部完成或任务被取消时调用）。",

@@ -17,6 +17,7 @@ from . import metrics as _m
 from . import permissions
 from .config import Settings
 from .diff_preview import preview_tool_call
+from .harness import TurnGuard, fit_context
 from .mem0_memory import Mem0Memory
 from .memory import Store
 from .mock_llm import MockLLM
@@ -330,6 +331,8 @@ class Agent:
             "mem_cfg": mem_cfg,
             "max_iters": _int(agent_cfg, "max_tool_chain_depth", MAX_ITERATIONS, 1, 100),
             "retries": _int(agent_cfg, "max_tool_retries", 0, 0, 10),
+            "max_turn_seconds": _int(agent_cfg, "max_turn_seconds", 900, 0, 3600),
+            "repeat_tool_limit": _int(agent_cfg, "repeat_tool_limit", 3, 0, 10),
             "search_limit": _int(mem_cfg, "search_limit", 5, 1, 20),
             "budget_tokens": _int(ctx_cfg, "budget_tokens", 0, 0, 200_000),
             "auto_compress": bool(ctx_cfg.get("auto_compress", True)),
@@ -637,8 +640,30 @@ class Agent:
         _finish_plan / _finish_turn / _run_one_tool / _decide_tool），
         这里只保留"这一轮该走哪条路"的判断。
         """
+        # 单轮运行时护栏：墙钟 + 连续重复调用。max_tool_chain_depth 只能限制
+        # 轮数，不能限制一轮里某个工具反复失败重试；手机端必须有墙钟。
+        limits = self._runtime_limits()
+        guard = TurnGuard(
+            max_seconds=float(limits["max_turn_seconds"]),
+            repeat_tool_limit=int(limits["repeat_tool_limit"]),
+        )
+        budget_tokens = int(limits["budget_tokens"])
         for _ in range(max_iters):
+            if guard.timed_out():
+                await emit({"type": "error", "message": "本轮对话超过时间上限，已自动停止"})
+                return
             messages = _trim(messages)
+            fitted, estimated = fit_context(messages, budget_tokens)
+            if fitted is None:
+                await emit({
+                    "type": "error",
+                    "message": (
+                        f"上下文超过预算（约 {estimated} tokens，预算 {budget_tokens}）："
+                        "请缩短问题、减少工具输出，或调大 context.budget_tokens"
+                    ),
+                })
+                return
+            messages = fitted
             try:
                 content_acc, tool_calls = await self._stream_round(messages, tools, emit)
             except asyncio.CancelledError:
@@ -681,7 +706,7 @@ class Agent:
             for call in calls_list:
                 await self._run_one_tool(
                     session_id=session_id, call=call, messages=messages, emit=emit,
-                    ask_approval=ask_approval, mode=mode, retries=retries,
+                    ask_approval=ask_approval, mode=mode, retries=retries, guard=guard,
                 )
 
         await emit({"type": "error", "message": "工具调用次数过多，已自动停止"})
@@ -882,6 +907,7 @@ class Agent:
         ask_approval: AskApproval | None,
         mode: str,
         retries: int,
+        guard: TurnGuard | None = None,
     ) -> None:
         """执行单个工具调用：审批 → 执行 → 备份 → 状态 → 落库。
 
@@ -889,16 +915,55 @@ class Agent:
         """
         tid = call["id"]
         name = call["function"]["name"]
-        try:
-            args = json.loads(call["function"]["arguments"] or "{}")
-        except json.JSONDecodeError:
-            args = {}
-        if not isinstance(args, dict):
-            args = {}
+        raw_args = call["function"].get("arguments") or "{}"
+        args_error = ""
+        args: dict = {}
+        if isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed = json.loads(raw_args)
+            except json.JSONDecodeError as exc:
+                args_error = f"工具参数不是合法 JSON：{exc.msg}（位置 {exc.pos}）"
+                parsed = {}
+            if not args_error and not isinstance(parsed, dict):
+                args_error = "工具参数必须是 JSON 对象"
+            if not args_error:
+                args = parsed
+        elif not isinstance(raw_args, str):
+            args_error = "工具参数必须是 JSON 字符串"
 
         tool = get_tool(name)
         preview = preview_tool_call(name, args)
         await emit({"type": "tool_start", "id": tid, "name": name, "input": args, "preview": preview})
+
+        # 参数坏了就**不能执行**。旧实现 json.JSONDecodeError 时回退 {}，然后
+        # 继续调工具——对 write_file 是覆盖成空内容，对 run_shell 可能执行空命令。
+        if args_error:
+            fail_result = {"error": args_error, "error_code": "invalid_arguments"}
+            await emit({"type": "tool_update", "id": tid, "name": name,
+                        "status": "failed", "result": fail_result})
+            limited = _tool_result_limited(json.dumps(fail_result, ensure_ascii=False), self.settings)
+            messages.append({"role": "tool", "tool_call_id": tid, "content": limited})
+            await self.store.add_message(
+                session_id, "tool", limited,
+                {"tool_call_id": tid, "name": name, "status": "failed"},
+            )
+            return
+
+        # 连续相同调用（同工具 + 同参数）超过阈值：不再执行，给模型一条明确的
+        # 可恢复错误，让它换路径或收尾；这是防死循环的第二道闸（第一道是墙钟）。
+        if guard is not None:
+            blocked = guard.note_tool(name, args)
+            if blocked:
+                fail_result = {"error": blocked, "error_code": "repeat_tool_call"}
+                await emit({"type": "tool_update", "id": tid, "name": name,
+                            "status": "failed", "result": fail_result})
+                limited = _tool_result_limited(json.dumps(fail_result, ensure_ascii=False), self.settings)
+                messages.append({"role": "tool", "tool_call_id": tid, "content": limited})
+                await self.store.add_message(
+                    session_id, "tool", limited,
+                    {"tool_call_id": tid, "name": name, "status": "failed"},
+                )
+                return
 
         decision = await self._decide_tool(
             tid=tid, name=name, tool=tool, mode=mode, ask_approval=ask_approval

@@ -286,6 +286,65 @@ def merge_commit(cwd: str, message: str = "") -> dict:
     return {"ok": True, "output": r.get("stdout", ""), "state": status(str(repo))}
 
 
+def log(cwd: str = ".", limit: int = 10, path: str = "") -> dict:
+    """最近的提交记录。Agent 需要知道「之前改过什么」时用这个，不要解析 git diff。"""
+    repo = open_repo(cwd)
+    try:
+        n = max(1, min(int(limit or 10), 50))
+    except (TypeError, ValueError):
+        n = 10
+    args = ["log", f"-{n}", "--date=short", "--format=%h%x00%an%x00%ad%x00%s"]
+    if path:
+        _safe_repo_path(repo, path)
+        args.extend(["--", path])
+    r = _git(repo, args)
+    if not r["ok"]:
+        # 空仓库/尚无提交不是错误，返回空列表让 UI/模型自己判断
+        return {"ok": True, "cwd": str(repo), "commits": [], "message": r.get("stderr", "").strip()}
+    commits: list[dict] = []
+    for line in r["stdout"].splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 4:
+            continue
+        commits.append({"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]})
+    return {"ok": True, "cwd": str(repo), "commits": commits}
+
+
+def commit(cwd: str, message: str, path: str = "") -> dict:
+    """提交已暂存改动；path 非空时只把该路径加入暂存区。
+
+    故意不做 ``git add -A``：一键把所有文件（包括 .env、密钥、构建产物）提交
+    是事故制造器。需要提交哪些文件，由调用方明确指定；不指定就要求已有暂存。
+    """
+    repo = open_repo(cwd)
+    if _merging(repo):
+        raise GitOperationError("正在合并中，请用 merge/commit 提交合并", status=409)
+    msg = (message or "").strip()
+    if not msg:
+        raise GitOperationError("提交说明不能为空")
+    if len(msg) > 500:
+        raise GitOperationError("提交说明过长")
+    if path:
+        rel = path.replace("\\", "/").lstrip("/")
+        _safe_repo_path(repo, rel)
+        add = _git(repo, ["add", "--", rel])
+        if not add["ok"]:
+            raise GitOperationError("暂存文件失败", detail=add.get("stderr", ""), status=409)
+    staged = _git(repo, ["diff", "--cached", "--name-only", "-z"])
+    if not staged["ok"]:
+        raise GitOperationError("读取暂存区失败", detail=staged.get("stderr", ""), status=409)
+    if not [p for p in staged["stdout"].split("\x00") if p]:
+        raise GitOperationError("没有已暂存的改动；请先指定 path 或先 git add", status=409)
+    r = _git(repo, ["commit", "-m", msg])
+    if not r["ok"]:
+        raise GitOperationError("提交失败", detail=r.get("stderr") or r.get("stdout", ""), status=409)
+    return {
+        "ok": True,
+        "commit": _git(repo, ["log", "-1", "--format=%h %s"]).get("stdout", "").strip(),
+        "state": status(str(repo)),
+    }
+
+
 def _safe_repo_path(repo: Path, rel: str) -> Path:
     rel = (rel or "").replace("\\", "/").lstrip("/")
     if not rel or ".." in Path(rel).parts:

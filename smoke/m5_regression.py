@@ -136,7 +136,7 @@ required = {
     "web_search", "read_url",                                  # 联网能力已注册
     "subagent",                                                # 子代理已注册
 }
-check("工具数量不少于 41 项", tools.get("count", 0) >= 41, str(tools.get("count")))
+check("工具数量不少于 49 项", tools.get("count", 0) >= 49, str(tools.get("count")))
 check("工具清单含核心与新增能力", required <= names, str(sorted(required - names)))
 
 print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败" + (f" / {len(skipped)} 跳过" if skipped else ""))

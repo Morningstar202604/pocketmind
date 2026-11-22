@@ -47,7 +47,7 @@ export function EmptyState({
             ))}
           </div>
           <button className="empty-browse" onClick={onBrowseCapabilities}>
-            查看全部 41 项能力 →
+            查看全部能力 →
           </button>
           <p className="empty-foot">写文件、发短信、跑命令这类动作，我会先弹卡片让你点头才执行。</p>
         </>

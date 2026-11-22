@@ -29,7 +29,7 @@ PocketMind 的定位不是「又一个手机 GUI Agent」，而是：
 
 | 项目 | 定位 | 运行位置 | 手机控制方式 | LLM | 许可 | 规模（GitHub stars，2026-10-24） |
 |---|---|---|---|---|---|---|
-| **PocketMind** | 手机常驻 Agent 服务（本地优先） | **手机内**（Termux） | termux-api 系统调用（41 个工具） | 任意 OpenAI 兼容端点 | Apache-2.0 | 新项目 |
+| **PocketMind** | 手机常驻 Agent 服务（本地优先） | **手机内**（Termux） | termux-api 系统调用（51 个工具） | 任意 OpenAI 兼容端点 | Apache-2.0 | 新项目 |
 | [Mobilerun](https://github.com/droidrun/mobilerun)（原 DroidRun） | 手机 GUI 自动化框架 | PC / Docker / 云手机 | ADB 或 Portal App（无障碍 + 截图） | OpenAI / Anthropic / Gemini / Ollama / DeepSeek 等 | MIT | 9.7k |
 | [Mobile-Agent](https://github.com/X-PLUG/MobileAgent)（通义实验室） | GUI Agent 模型 + 框架 | PC / 云手机 | 视觉 + ADB | GUI-Owl 系列（自研 VLM） | MIT | 9.3k |
 | [Cline](https://github.com/cline/cline) | 编码 Agent（IDE/CLI/桌面） | PC | 无（不控手机） | 多厂商 | Apache-2.0 | 70.8k |
@@ -67,12 +67,12 @@ PocketMind 的定位不是「又一个手机 GUI Agent」，而是：
 | 手机端零 Node 运行时 | ● 构建产物入库，纯 pip | ○（需 PC Python） | ○ | ○ | ○ | ○ |
 
 PocketMind 侧证据：
-- 工具清单：`curl /api/tools` 实测 41 项，其中 `phone` 组 25 项（`agentd/tools/phone/*`）。
+- 工具清单：`curl /api/tools` 实测 51 项，其中 `phone` 组 25 项（`agentd/tools/phone/*`）。
 - 审批：`agentd/permissions.py:1`、`agentd/approval.py`，以及 `agentd/agent.py:_decide_tool` 的
   fail-closed 分支（`ask_approval is None` 时写/危险操作直接拒绝）。
 - 撤销：`agentd/checkpoints.py` + `/api/undo`（`agentd/main.py:758`）。
 - 定时：`agentd/scheduler.py`（APScheduler + SQLAlchemyJobStore，条件表达式 `battery < N`）。
-- MCP：`agentd/mcp_server.py`（暴露 44 工具）+ `agentd/mcp_client.py`（接入外部 Server）。
+- MCP：`agentd/mcp_server.py`（暴露 51 工具）+ `agentd/mcp_client.py`（接入外部 Server）。
 - 本地数据：`agentd/memory.py:_secure_files`（目录 700 / 库文件 600）。
 
 ## 四、该借什么（已落地 / 待落地）

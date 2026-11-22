@@ -135,6 +135,8 @@ DEFAULTS: dict[str, Any] = {
     "agent": {
         "max_tool_retries": 2,          # 只读(safe)工具瞬时失败后的最大重试次数；写/危险工具绝不重试
         "max_tool_chain_depth": 20,     # 单次请求最大工具调用链长度（防死循环）
+        "max_turn_seconds": 900,        # 单轮墙钟上限（15 分钟；0 = 不限制，手机端不建议）
+        "repeat_tool_limit": 3,         # 连续相同工具调用允许次数；超过即拦截，0 = 关闭
     },
     # 【可配置】context：LLM 上下文 Token 预算控制
     "context": {
@@ -191,6 +193,24 @@ class AgentSettings(BaseModel):
     """Agent 执行配置"""
     max_tool_retries: int = 2
     max_tool_chain_depth: int = 20
+    max_turn_seconds: int = 900
+    repeat_tool_limit: int = 3
+
+    @field_validator("max_turn_seconds", mode="before")
+    @classmethod
+    def _clamp_turn_seconds(cls, v):
+        try:
+            return max(0, min(3600, int(v)))
+        except (TypeError, ValueError):
+            return 900
+
+    @field_validator("repeat_tool_limit", mode="before")
+    @classmethod
+    def _clamp_repeat_limit(cls, v):
+        try:
+            return max(0, min(10, int(v)))
+        except (TypeError, ValueError):
+            return 3
 
     @field_validator("max_tool_retries", mode="before")
     @classmethod

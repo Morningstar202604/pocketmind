@@ -47,6 +47,14 @@ const RISK_LABEL: Record<string, string> = {
   danger: "危险",
 };
 
+/** agent 配置块的默认值（与后端 DEFAULTS.agent 对齐）：局部编辑时保持其余字段不丢。 */
+const AGENT_DEFAULTS = {
+  max_tool_retries: 2,
+  max_tool_chain_depth: 20,
+  max_turn_seconds: 900,
+  repeat_tool_limit: 3,
+};
+
 /** memory 配置块的默认值（与后端 DEFAULTS.memory 对齐）：局部编辑时保持其余字段不丢。 */
 const MEMORY_DEFAULTS = {
   auto_summarize: true,
@@ -628,7 +636,7 @@ export function SettingsPanel({
         </CollapsibleGroup>
 
         {/* 运行参数（此前只能在 config.json 里改） */}
-        <CollapsibleGroup title="运行参数" summary={`工具链 ${form.agent?.max_tool_chain_depth ?? 20} · 重试 ${form.agent?.max_tool_retries ?? 2}`}>
+        <CollapsibleGroup title="运行参数" summary={`工具链 ${form.agent?.max_tool_chain_depth ?? 20} · 重试 ${form.agent?.max_tool_retries ?? 2} · 单轮 ${form.agent?.max_turn_seconds ?? 900}s`}>
           <div className="field">
             <label htmlFor="cfg-chain-depth">工具调用链上限</label>
             <input
@@ -639,7 +647,7 @@ export function SettingsPanel({
               value={form.agent?.max_tool_chain_depth ?? 20}
               onChange={(e) =>
                 setForm((f) =>
-                  f ? { ...f, agent: { ...(f.agent ?? { max_tool_retries: 2, max_tool_chain_depth: 20 }), max_tool_chain_depth: Number(e.target.value) || 20 } } : f
+                  f ? { ...f, agent: { ...(f.agent ?? AGENT_DEFAULTS), max_tool_chain_depth: Number(e.target.value) || 20 } } : f
                 )
               }
             />
@@ -655,13 +663,45 @@ export function SettingsPanel({
               value={form.agent?.max_tool_retries ?? 2}
               onChange={(e) =>
                 setForm((f) =>
-                  f ? { ...f, agent: { ...(f.agent ?? { max_tool_retries: 2, max_tool_chain_depth: 20 }), max_tool_retries: Number(e.target.value) || 0 } } : f
+                  f ? { ...f, agent: { ...(f.agent ?? AGENT_DEFAULTS), max_tool_retries: Number(e.target.value) || 0 } } : f
                 )
               }
             />
             <p className="hint">
               仅对只读（safe）工具的瞬时失败生效；发短信/写文件/shell 等写操作绝不重试，避免重复副作用。
             </p>
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-turn-seconds">单轮墙钟上限（秒）</label>
+            <input
+              id="cfg-turn-seconds"
+              type="number"
+              min={0}
+              max={3600}
+              value={form.agent?.max_turn_seconds ?? 900}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, agent: { ...(f.agent ?? AGENT_DEFAULTS), max_turn_seconds: Number(e.target.value) || 0 } } : f
+                )
+              }
+            />
+            <p className="hint">一次请求最多跑多久；0 = 不限制，手机端建议 900 秒。超时会自动停止并保留已有消息。</p>
+          </div>
+          <div className="field">
+            <label htmlFor="cfg-repeat-limit">连续重复工具调用上限</label>
+            <input
+              id="cfg-repeat-limit"
+              type="number"
+              min={0}
+              max={10}
+              value={form.agent?.repeat_tool_limit ?? 3}
+              onChange={(e) =>
+                setForm((f) =>
+                  f ? { ...f, agent: { ...(f.agent ?? AGENT_DEFAULTS), repeat_tool_limit: Number(e.target.value) || 0 } } : f
+                )
+              }
+            />
+            <p className="hint">同一工具、同一参数连续超过多少次就拦截；0 = 关闭，默认 3。</p>
           </div>
         </CollapsibleGroup>
 

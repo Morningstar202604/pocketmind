@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import stat
+import tempfile
 from pathlib import Path
 
 from . import Tool, register
@@ -125,39 +128,66 @@ async def read_file(path: str) -> dict:
     return await asyncio.to_thread(_read_file_sync, path)
 
 
-def _write_file_sync(path: str, content: str) -> dict:
+def _write_file_sync(path: str, content: str, expected_mtime: float | None = None) -> dict:
     try:
         p = _resolve(path)
     except ValueError as e:
         return {"error": str(e)}
     data = str(content or "")
-    if len(data.encode("utf-8", errors="replace")) > 1_000_000:
+    encoded = data.encode("utf-8", errors="replace")
+    if len(encoded) > 1_000_000:
         return {"error": "内容过大（>1MB），请分段写入"}
+    if expected_mtime is not None and p.exists():
+        try:
+            if abs(p.stat().st_mtime - float(expected_mtime)) > 0.001:
+                return {"error": "文件已被其他程序修改，请先重新读取再写入"}
+        except (OSError, TypeError, ValueError):
+            return {"error": "无法读取文件修改时间，拒绝写入"}
+    tmp_path: str | None = None
     try:
         # 覆盖已有文件前自动备份，支持前端一键撤销
         _ckpt = None
+        mode = None
         if p.exists() and p.is_file():
             from ..checkpoints import backup_file
 
             bak = backup_file(p)
             if bak:
                 _ckpt = {"path": str(p), "backup": bak, "kind": "overwrite"}
+            mode = p.stat().st_mode
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(data, encoding="utf-8")
-        out = {"ok": True, "path": str(p), "bytes": len(data)}
+        # 原子写：同目录临时文件 + os.replace。直接 p.write_text 在写入中被杀
+        # 会留下截断文件；配置/源码写到一半比写失败更糟。
+        fd, tmp_path = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(encoded)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if mode is not None:
+            os.chmod(tmp_path, stat.S_IMODE(mode))
+        os.replace(tmp_path, p)
+        tmp_path = None
+        # bytes 保留历史契约（字符数，p15 锁定）；size_bytes 是真实 UTF-8 字节数。
+        out = {"ok": True, "path": str(p), "bytes": len(data), "size_bytes": len(encoded)}
         if _ckpt:
             out["_ckpt"] = _ckpt
         return out
     except OSError as e:
         return {"error": f"写入失败：{e}"}
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
-async def write_file(path: str, content: str) -> dict:
+async def write_file(path: str, content: str, expected_mtime: float | None = None) -> dict:
     from ..workspace_locks import WorkspaceLockBusy, hold
 
     try:
         async with hold(path, "agent:write_file"):
-            return await asyncio.to_thread(_write_file_sync, path, content)
+            return await asyncio.to_thread(_write_file_sync, path, content, expected_mtime)
     except WorkspaceLockBusy as exc:
         return {"error": str(exc)}
 
@@ -229,12 +259,13 @@ register(Tool(
 
 register(Tool(
     name="write_file",
-    description="写入或覆盖一个文本文件（自动创建父目录）。",
+    description="写入或覆盖一个文本文件（自动创建父目录；同目录原子替换）。",
     parameters={
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "文件绝对路径"},
             "content": {"type": "string", "description": "要写入的内容"},
+            "expected_mtime": {"type": "number", "description": "可选：读取时的 mtime，用于并发写冲突检测"},
         },
         "required": ["path", "content"],
     },

@@ -110,7 +110,8 @@ mock 服务、挑空闲端口、跑完回收，不依赖外部环境。审批会
 用户输入 → POST /api/chat → 中断恢复（孤立 tool_calls 补占位）
         → add_message → 组装上下文（固定前缀 → 偏好 → 档案记忆 → 技能索引
                                     → RRF 检索 → 分页摘要 → 历史）
-        → Agent.chat() → OpenAI stream → tool_call →
+        → Agent.chat() → TurnGuard（单轮墙钟/重复调用）→ fit_context（硬预算）
+        → OpenAI stream → tool_call →（非法参数直接 failed，不执行）
           ├─ safe → 直接执行（瞬时失败按 max_tool_retries 重试）
           └─ write/danger → ApprovalCenter.ask() → SSE emit approval → 等用户
         → 工具结果回写 SSE + add_message → 循环下一轮（max_tool_chain_depth 封顶）
@@ -121,6 +122,10 @@ SSE 事件里与「运行质量」相关的两条：
 
 - `done.usage`：本轮所有 LLM 调用的 token 累计（端点如实回报；mock 标注 estimated）；
 - `/api/metrics`（Prometheus）+ `/api/stats`（JSON）：请求、工具、LLM 的真实计数器。
+
+运行时护栏独立在 `agentd/harness.py`：`TurnGuard` 负责墙钟与连续重复调用，
+`fit_context` 负责发送前的预算硬裁剪；完整能力矩阵见
+[docs/AGENT-HARNESS.md](AGENT-HARNESS.md)。
 
 MCP 两个方向的 schema 转换统一走 `agentd/mcp.py:tool_schema()`：mcp SDK 的 `Tool` 在 1.x
 不同小版本里字段名不同（`inputSchema` vs `input_schema`），直接取属性会在升级后崩溃。
@@ -147,7 +152,7 @@ agentd/
 └── tools/
     ├── __init__.py  Tool 注册表 + pydantic 动态校验 + safe 工具重试
     ├── ctx.py       工具执行上下文（会话/存储/推流回调，contextvars）
-    ├── todo.py      任务清单工具（todo_write / todo_clear）
+    ├── todo.py      任务清单工具（todo_write / todo_read / todo_clear）
     ├── knowledge.py 知识库工具（kb_add / kb_search / kb_list，显式检索）
     ├── phone/       手机能力（5 子包 + _termux.py）
     ├── files.py     文件系统 CRUD

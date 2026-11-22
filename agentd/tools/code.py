@@ -293,6 +293,46 @@ async def git_diff(
     return await asyncio.to_thread(_git_diff_sync, root, staged, path, max(1, min(int(timeout or 30), 120)))
 
 
+async def git_status(cwd: str = ".") -> dict:
+    """结构化 Git 状态；非仓库目录返回 available=false 而不是异常。"""
+    from ..workspace_git import GitOperationError, GitUnavailable, status
+
+    try:
+        return await asyncio.to_thread(status, cwd)
+    except (GitUnavailable, GitOperationError) as exc:
+        return {"available": False, "cwd": cwd, "message": str(exc), "files": [], "branches": []}
+
+
+async def git_log(cwd: str = ".", limit: int = 10, path: str = "") -> dict:
+    from ..workspace_git import GitOperationError, GitUnavailable, log
+
+    try:
+        return await asyncio.to_thread(log, cwd, limit, path)
+    except (GitUnavailable, GitOperationError) as exc:
+        return {"error": str(exc), "error_code": "git_error"}
+
+
+async def git_commit(cwd: str, message: str, path: str = "") -> dict:
+    """提交已暂存改动；path 非空时只暂存该路径。不做 git add -A。"""
+    from ..workspace_git import GitOperationError, GitUnavailable, commit
+
+    try:
+        return await asyncio.to_thread(commit, cwd, message, path)
+    except (GitUnavailable, GitOperationError) as exc:
+        return {"error": str(exc), "error_code": "git_error"}
+
+
+async def apply_patch(cwd: str = ".", patch: str = "", dry_run: bool = False) -> dict:
+    """应用 unified diff；默认 dry_run，真正应用前必须显式传 dry_run=false。"""
+    from ..workspace_git import GitOperationError, GitUnavailable
+    from ..workspace_git import apply_patch as _apply
+
+    try:
+        return await asyncio.to_thread(_apply, cwd, patch, dry_run)
+    except (GitUnavailable, GitOperationError) as exc:
+        return {"error": str(exc), "error_code": "git_error"}
+
+
 def _detect_test_command(root: Path) -> tuple[str, str] | None:
     if (root / "package.json").is_file():
         try:
@@ -417,6 +457,84 @@ register(Tool(
     risk="safe",
     handler=git_diff,
     summary="查看 Git 状态与 diff",
+    group="files",
+    timeout=120,
+))
+
+register(Tool(
+    name="git_status",
+    description="查看结构化 Git 状态：当前分支、提交、ahead/behind、未提交文件、分支列表、冲突。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "cwd": {"type": "string", "description": "Git 仓库目录，默认当前目录"},
+        },
+    },
+    risk="safe",
+    handler=git_status,
+    summary="查看 Git 分支与工作区状态",
+    group="files",
+    timeout=30,
+))
+
+register(Tool(
+    name="git_log",
+    description="查看最近的 Git 提交历史（sha、作者、日期、标题），可只看某个路径。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "cwd": {"type": "string", "description": "Git 仓库目录，默认当前目录"},
+            "limit": {"type": "integer", "description": "最多返回几条，1-50，默认 10"},
+            "path": {"type": "string", "description": "可选：只看某个路径的历史"},
+        },
+    },
+    risk="safe",
+    handler=git_log,
+    summary="查看 Git 提交历史",
+    group="files",
+    timeout=30,
+))
+
+register(Tool(
+    name="git_commit",
+    description=(
+        "提交已暂存的 Git 改动；path 非空时只把该路径加入暂存区。"
+        "不会执行 git add -A，不会提交未明确指定的文件。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "cwd": {"type": "string", "description": "Git 仓库目录"},
+            "message": {"type": "string", "description": "提交说明，不能为空"},
+            "path": {"type": "string", "description": "可选：只暂存并提交这个路径"},
+        },
+        "required": ["cwd", "message"],
+    },
+    risk="danger",
+    handler=git_commit,
+    summary="提交 Git 改动（需审批）",
+    group="files",
+    timeout=60,
+))
+
+register(Tool(
+    name="apply_patch",
+    description=(
+        "应用 unified diff 补丁。先做 git apply --check 预检；默认 dry_run=true，"
+        "确认无误后再传 dry_run=false 真正写入。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "cwd": {"type": "string", "description": "Git 仓库目录，默认当前目录"},
+            "patch": {"type": "string", "description": "unified diff 原文，最大 200KB"},
+            "dry_run": {"type": "boolean", "description": "是否只预检不应用，默认 true"},
+        },
+        "required": ["patch"],
+    },
+    risk="write",
+    handler=apply_patch,
+    summary="应用代码补丁（先预检）",
     group="files",
     timeout=120,
 ))

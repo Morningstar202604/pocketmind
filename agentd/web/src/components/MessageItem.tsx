@@ -78,12 +78,13 @@ function formatTime(ts?: number): string {
 }
 
 // 少数工具的内部名对用户毫无意义，给中文标签；其余保持原名（技术用户认这个）
-// 工具内部名 → 中文标签。覆盖全部 39 个工具：审批卡与工具卡都会显示它，
+// 工具内部名 → 中文标签。覆盖全部内置工具：审批卡与工具卡都会显示它，
 // 留英文名会让非技术用户看不懂自己正在批准什么（截图巡检发现 run_shell 裸露）。
 const TOOL_LABEL: Record<string, string> = {
   // agent / 编排
   subagent: "子代理",
   todo_write: "任务清单",
+  todo_read: "读取任务清单",
   todo_clear: "清空任务清单",
   // 文件
   list_dir: "列出目录",
@@ -93,7 +94,11 @@ const TOOL_LABEL: Record<string, string> = {
   delete_file: "删除文件",
   grep: "全文搜索",
   glob: "查找文件",
-  git_diff: "查看 Git",
+  git_diff: "查看 Git 差异",
+  git_status: "Git 状态",
+  git_log: "Git 历史",
+  git_commit: "提交 Git",
+  apply_patch: "应用补丁",
   run_tests: "运行测试",
   // 知识库 / 记忆
   kb_add: "存入知识库",

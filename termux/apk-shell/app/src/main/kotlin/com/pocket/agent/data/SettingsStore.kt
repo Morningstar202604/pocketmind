@@ -102,6 +102,27 @@ class SettingsStore(context: Context) {
         val compressThreshold: Double,
     )
 
+    /**
+     * Agent 运行参数：原生循环过去把链长写死 8、没有墙钟与重复检测。
+     * 这些是 harness 的底层旋钮，必须和前端 Settings 的 agent 块同一口径。
+     */
+    @Synchronized fun agentCfg(): AgentCfg {
+        val a = data.optJSONObject("agent") ?: JSONObject()
+        return AgentCfg(
+            maxToolChainDepth = a.optInt("max_tool_chain_depth", 20).coerceIn(3, 50),
+            maxToolRetries = a.optInt("max_tool_retries", 2).coerceIn(0, 5),
+            maxTurnSeconds = a.optInt("max_turn_seconds", 900).coerceIn(0, 3600),
+            repeatToolLimit = a.optInt("repeat_tool_limit", 3).coerceIn(0, 10),
+        )
+    }
+
+    class AgentCfg(
+        val maxToolChainDepth: Int,
+        val maxToolRetries: Int,
+        val maxTurnSeconds: Int,
+        val repeatToolLimit: Int,
+    )
+
     /** 合并保存；返回保存后的打码快照。api_key 占位符不覆盖已存值。 */
     @Synchronized fun save(patch: JSONObject): JSONObject {
         mergeInto(data, patch)
@@ -115,6 +136,12 @@ class SettingsStore(context: Context) {
         if (mode !in setOf("auto", "approve", "chat")) data.put("permission_mode", "approve")
         val amode = data.optString("agent_mode", "act")
         if (amode !in setOf("plan", "act")) data.put("agent_mode", "act")
+        val agent = data.optJSONObject("agent") ?: JSONObject()
+        agent.put("max_tool_chain_depth", agent.optInt("max_tool_chain_depth", 20).coerceIn(3, 50))
+        agent.put("max_tool_retries", agent.optInt("max_tool_retries", 2).coerceIn(0, 5))
+        agent.put("max_turn_seconds", agent.optInt("max_turn_seconds", 900).coerceIn(0, 3600))
+        agent.put("repeat_tool_limit", agent.optInt("repeat_tool_limit", 3).coerceIn(0, 10))
+        data.put("agent", agent)
         persist()
         return snapshot()
     }
@@ -186,6 +213,8 @@ class SettingsStore(context: Context) {
               "permission_mode": "approve",
               "agent_mode": "act",
               "server": {"approval_timeout": 120},
+              "agent": {"max_tool_chain_depth": 20, "max_tool_retries": 2,
+                        "max_turn_seconds": 900, "repeat_tool_limit": 3},
               "context": {"budget_tokens": 0, "auto_compress": false, "compress_threshold": 0.8}
             }
         """.trimIndent()

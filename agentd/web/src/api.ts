@@ -114,6 +114,8 @@ export interface AppSettings {
   agent?: {
     max_tool_retries: number;
     max_tool_chain_depth: number;
+    max_turn_seconds?: number;
+    repeat_tool_limit?: number;
   };
   // 上下文预算与压缩
   context?: {

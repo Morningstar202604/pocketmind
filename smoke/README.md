@@ -20,7 +20,7 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 
 | 脚本 | 覆盖 | 项数 |
 |---|---|---|
-| `m5_regression.py` | 安全加固回归：合成 key 打码、DB/目录权限 600/700、电池链路（auto）、danger 审批+拒绝+收尾、未知工具审批、会话命名、工具清单 41 项（39 内置 + 2 运行时） | 11 |
+| `m5_regression.py` | 安全加固回归：合成 key 打码、DB/目录权限 600/700、电池链路（auto）、danger 审批+拒绝+收尾、未知工具审批、会话命名、工具清单 51 项（49 内置 + 2 运行时） | 11 |
 | `p9_a11y_contrast_test.py` | 主题对比度（WCAG AA 4.5:1）：正文/次要/提示文字、状态色（warn/err/ok）、**brand-text（正文品牌色）**、**白字压 brand-fill/fill-2（气泡/主按钮/发送键）**，双主题 × 全部承载背景 | 20 |
 | `p11_termux_install_test.py` | Termux 安装脚本幂等性 + boot.sh 失败信号 + 无 tzdata 时调度器不崩；假 Termux 环境只用白名单 shim（不继承宿主 PATH，否则 CI 会因宿主自带 rustc/python 假红） | 10 |
 | `p28_mcp_roundtrip_test.py` | MCP 双端真实 stdio 握手：list_tools → schema 转换（驼峰/下划线兼容）、工具调用返回、无 termux-api 时结构化失败 | 7 |
@@ -33,6 +33,7 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 | `p5_frontend_contract_test.py` | P5 前端契约：导出覆盖档案/清单/知识库、agent/context/memory 三块设置回环与越界收敛、新工具分组齐备、手动压缩端点 | 18 |
 | `p6_unconfigured_test.py` | P6 首次使用（未配置模型）：自起真实模式服务，断言 health 给出缺失项、发消息 5 秒内返回指引、连续两条都处理（不被永久锁成「排队」）、历史留完整一问一答 | 8 |
 | `p7_cross_audit_test.py` | P7 横向审计修复回归：非 ASCII 令牌不 500、非法配置块不污染（否则设置页永久 500）、litellm/MCP env 密钥不回传、interval 极值 400、get_messages 取最近 N 条、run_shell 非零退出带 error、phone 写操作校验退出码、凭据目录不可读、MCP readOnlyHint 不降级、取消后不续跑、清空任务清单有服务端端点（刷新不复活）、delete_session 失败回滚、配置回退不绕范围收敛 | 49 |
+| `p40_harness_test.py` | M1.3 Agent Harness：单轮墙钟、重复调用拦截、非法 JSON 不执行、上下文硬裁剪、原子写/mtime、Git status/log/commit、apply_patch、todo_read | 26 |
 | `p0_queue_test.py` | P0 排队验收：并发——第一轮挂审批时第二轮应 `queued`，审批放行后自动执行 | 3 |
 | `p1_jobs_test.py` | P1 定时任务验收：创建 interval 任务 → 触发执行 → 启停 → 条件拒绝 → 删除 → jobs.db 持久化恢复 | 8 |
 
@@ -44,7 +45,7 @@ bash tests/run_all.sh --backend  # 只跑后端（本目录的所有套件都包
 
 ## 浏览器实测
 
-- 设置面板工具分组（手机 25 / 文件 4 / 任务与编排 3 / 知识库 3 / 长期记忆 1 / 技能 1 / 系统 1 / 语音 1 / 联网 2）
+- 设置面板工具分组（手机 25 / 文件 13 / 任务与编排 4 / 知识库 3 / 长期记忆 1 / 技能 1 / 系统 1 / 语音 1 / 联网 2）
 - 能力面：运行参数与上下文/记忆旋钮可调并保存；知识库条目可删（二次确认）；技能只读展示
 - 品牌细节：顶栏状态灯（绿/琥珀/红）、任务清单进度条、工具结果复制按钮、空态新文案
 - 手机适配矩阵（e2e/mobile.spec.ts，8 视口）：触摸目标 ≥36px、不依赖 hover、审批 5 键完整可见、无溢出/裁切

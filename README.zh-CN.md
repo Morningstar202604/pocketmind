@@ -29,7 +29,7 @@
                      │
                      └──▶ 你配置的 LLM 端点（仅推理）
 
-完整运行时（可选）：Web UI / PWA ──▶ agentd（Python，Termux）──▶ 41 个工具
+完整运行时（可选）：Web UI / PWA ──▶ agentd（Python，Termux）──▶ 51 个工具
 ```
 
 ## 看它跑起来
@@ -63,16 +63,16 @@
   模型没有任何路径可以绕过这张卡。</sub>
 </p>
 
-### 覆盖手机的 41 个工具
+### 覆盖手机的 51 个工具
 
-> 下表是 Termux 完整运行时（41 = 39 内置 + `remember_fact`/`read_skill` 两个运行时注册）。
+> 下表是 Termux 完整运行时（51 = 49 内置 + `remember_fact`/`read_skill` 两个运行时注册）。
 > 独立 APK 的 37 个原生工具覆盖其中绝大多数；差额是上面「有三件事做不到」里的那几项。
 
 | 分组 | 数量 | 例子 |
 |---|---|---|
 | 手机能力（termux-api） | 25 | `send_sms` · `read_sms` · `make_call` · `get_location` · `take_photo` · `get_wifi_info` · `scan_wifi` · `list_sensors` · `get_clipboard` · `set_torch` · `download_file` |
-| 文件 | 4 | 读 / 写 / 列 / 删，限定在 `$HOME`、`~/storage`、`/sdcard`，并对 `.ssh`、`.gnupg`、`.agent` 设拒绝名单 |
-| 任务与编排 | 3 | `todo_write` · `todo_clear` · `subagent` |
+| 文件 | 13 | 读 / 写 / 列 / 删 / 精确编辑 / grep / glob / `run_tests` / `git_diff` / `git_status` / `git_log` / `git_commit` / `apply_patch`，限定在 `$HOME`、`~/storage`、`/sdcard`，并对 `.ssh`、`.gnupg`、`.agent` 设拒绝名单 |
+| 任务与编排 | 4 | `todo_write` · `todo_read` · `todo_clear` · `subagent` |
 | 知识库 | 3 | `kb_add` · `kb_search` · `kb_list`——FTS5 trigram，只在显式调用时检索 |
 | 长期记忆 | 1 | `remember_fact`——结构化 USER/FACT/JOURNAL 文件 |
 | 技能 | 1 | `read_skill`——从 `SKILL.md` 渐进披露 |
@@ -81,9 +81,9 @@
 | 联网 | 2 | `web_search` · `read_url`——SSRF 加固，标 `write` 因为查询词会离开设备 |
 
 <p align="center">
-  <img src="assets/screenshots/05-capabilities.png" width="880" alt="能力页按分组列出 41 个工具及风险等级" />
+  <img src="assets/screenshots/05-capabilities.png" width="880" alt="能力页按分组列出 51 个工具及风险等级" />
   <br />
-  <sub>每个工具都能在应用里浏览并看到风险等级——41 个里有 3 个标记为破坏性，
+  <sub>每个工具都能在应用里浏览并看到风险等级——51 个里有 5 个标记为破坏性，
   永远需要确认。</sub>
 </p>
 
@@ -101,7 +101,7 @@
 ### 装上就能用
 
 1.4.0 起 APK 自带原生引擎与已构建的前端，装完打开即可配置使用，**不需要 Termux、
-Python 或 Node**。需要完整 41 工具运行时时才用 Termux：`termux/install.sh` 装依赖、
+Python 或 Node**。需要完整 51 工具运行时时才用 Termux：`termux/install.sh` 装依赖、
 `termux/start.sh` 启动、`boot.sh` 开机自启。
 
 ### 重启也不会丢的定时任务
@@ -135,7 +135,7 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
 
 ### 双向远程控制
 
-- **MCP 服务端**——把全部 41 个工具通过 stdio 暴露给 Claude Desktop、Cline 或 Codex。
+- **MCP 服务端**——把全部 51 个工具通过 stdio 暴露给 Claude Desktop、Cline 或 Codex。
   这是与 Web 审批中心分离的接口，桌面宿主必须自己做确认；每个工具描述都带风险前缀。
 - **Telegram 网关**——在聊天里驱动手机。写操作与危险操作以「允许/拒绝」按钮下发；
   只有白名单里的 `chat_id` 会被响应。
@@ -190,7 +190,7 @@ bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签�
 > 也没有 Python/Node。能做的事很多（文件、文本处理、调用系统二进制），
 > 但不要期待一个 Termux 环境。诊断页会把它标成 `restricted` 而不是 `ok`。
 
-### 方案 B —— Termux 完整 41 工具运行时
+### 方案 B —— Termux 完整 51 工具运行时
 
 ```bash
 # 在 Termux（F-Droid 版，另装 Termux:API）里一次性准备
@@ -259,7 +259,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（浏览器装一次）
 - **后端**：`ruff` + `mypy` + 51 个套件 + `compileall` + **依赖锁一致性** + **覆盖率红线**
 - **前端**：`tsc` + Vitest + 生产构建 + **`dist/` 新鲜度校验**
   （入库的产物必须与当前源码一致，因为手机端从不构建它）
-- **Android**：57 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
+- **Android**：61 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
 
 ```bash
 # Android 单独跑（需要 JDK 17+ 与 Android SDK）
@@ -279,6 +279,7 @@ GRADLE_USER_HOME="$PWD/.gradle-home" gradle testDebugUnitTest lintDebug assemble
 逐套件说明：[smoke/README.md](smoke/README.md)。
 API 参考：[docs/API.md](docs/API.md)。
 架构：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+Agent Harness 基线：[docs/AGENT-HARNESS.md](docs/AGENT-HARNESS.md)。
 
 ## 项目治理
 

@@ -33,6 +33,29 @@ class AgentLoop(
         @Volatile var awaitingApproval: PendingApproval? = null
     }
 
+    /** 一次用户请求内的运行时护栏：连续相同工具调用拦截（原生侧与 Python TurnGuard 对齐）。 */
+    private class ToolGuard(private val repeatLimit: Int) {
+        private var lastFingerprint = ""
+        private var repeatCount = 0
+
+        fun check(name: String, args: JSONObject): String? {
+            val keys = ArrayList<String>()
+            val it = args.keys()
+            while (it.hasNext()) keys.add(it.next())
+            keys.sort()
+            val fp = name + "\u0000" + keys.joinToString("|") { "$it=${args.opt(it)}" }
+            if (fp == lastFingerprint) repeatCount += 1 else {
+                lastFingerprint = fp
+                repeatCount = 1
+            }
+            if (repeatLimit > 0 && repeatCount > repeatLimit) {
+                return "检测到连续 $repeatCount 次完全相同的工具调用（$name），已阻止本次执行。" +
+                    "请改变参数/工具，或直接给出结论。"
+            }
+            return null
+        }
+    }
+
     class PendingApproval(
         val toolCallId: String,
         val name: String,
@@ -129,14 +152,27 @@ class AgentLoop(
         store.addMessage(sessionId, "user", message)
 
         val cfg = settings.llmConfig()
+        val agentCfg = settings.agentCfg()
+        val guard = ToolGuard(agentCfg.repeatToolLimit)
+        val turnStarted = System.nanoTime()
         val client = llmFactory(cfg)
         val permissionMode = settings.permissionMode()
         // plan 模式批准重发：同会话同文本 → 本次以 act 执行
         val planApproved = pendingPlans.remove(sessionId) == message
         val planMode = settings.agentMode() == "plan" && !planApproved
 
-        // 组装上下文：system + 历史归档 + 最近历史
-        val history = store.getMessages(sessionId, 40)
+        // 组装上下文：system + 历史归档 + 最近历史。
+        // auto_compress 以前只存在于配置里没被使用；到阈值先归档，再取最近窗口，
+        // 否则 trimToBudget 只会静默丢掉旧消息，模型会以为自己没看过。
+        var history = store.getMessages(sessionId, 40)
+        val ctxCfg = settings.contextCfg()
+        if (ctxCfg.autoCompress && ctxCfg.budgetTokens > 0) {
+            val allHistory = store.getMessages(sessionId, 400)
+            if (estimateMessages(allHistory) > ctxCfg.budgetTokens * ctxCfg.compressThreshold) {
+                runCatching { compact(sessionId, 12) }
+                history = store.getMessages(sessionId, 40)
+            }
+        }
         val messages = JSONArray()
         val system = StringBuilder(systemPrompt(permissionMode))
         // 归档摘要必须注入，否则「压缩」只是把消息藏起来、模型照样失忆。
@@ -187,11 +223,24 @@ class AgentLoop(
         // （40 条 × 单条几千字）。这里从最旧开始丢，system 与最后一条用户
         // 消息永远保留——丢到最后一问一答仍然可回答。
         trimToBudget(messages)
+        if (ctxCfg.budgetTokens > 0 && estimateMessages(messages) > ctxCfg.budgetTokens) {
+            sse.send(JSONObject().put("type", "error").put("message",
+                "上下文超过预算（约 ${estimateMessages(messages)} tokens，预算 ${ctxCfg.budgetTokens}）：" +
+                    "请缩短问题、减少工具输出，或调大 context.budget_tokens").toString())
+            sse.send(JSONObject().put("type", "done").put("stop_reason", "context_budget").toString())
+            return
+        }
 
         val tools = if (permissionMode == "chat") null else ToolRegistry.schemaJson()
         var depth = 0
         try {
-            while (depth < MAX_DEPTH && !run.cancelled) {
+            while (depth < agentCfg.maxToolChainDepth && !run.cancelled) {
+                if (agentCfg.maxTurnSeconds > 0 &&
+                    (System.nanoTime() - turnStarted) / 1_000_000_000L >= agentCfg.maxTurnSeconds.toLong()) {
+                    sse.send(JSONObject().put("type", "error").put("message", "本轮对话超过时间上限，已自动停止").toString())
+                    sse.send(JSONObject().put("type", "done").put("stop_reason", "turn_timeout").toString())
+                    return
+                }
                 depth += 1
                 val acc = LlmClient.ToolCallAccumulator()
                 val textBuf = StringBuilder()
@@ -274,10 +323,11 @@ class AgentLoop(
                 val env = DeviceEnv(appContext(), store, sessionId)
                 for ((tid, name, argsStr) in calls) {
                     if (run.cancelled) break
-                    runOneTool(sessionId, run, env, sse, messages, tid, name, argsStr, permissionMode, headless)
+                    runOneTool(sessionId, run, env, sse, messages, tid, name, argsStr,
+                        permissionMode, headless, guard, agentCfg.maxToolRetries)
                 }
             }
-            if (depth >= MAX_DEPTH) {
+            if (depth >= agentCfg.maxToolChainDepth) {
                 sse.send(JSONObject().put("type", "error").put("message", "工具调用次数过多，已自动停止").toString())
                 sse.send(JSONObject().put("type", "done").put("stop_reason", "max_depth").toString())
             }
@@ -302,10 +352,38 @@ class AgentLoop(
         argsStr: String,
         mode: String,
         headless: Boolean = false,
+        guard: ToolGuard? = null,
+        maxRetries: Int = 0,
     ) {
-        val args = runCatching { JSONObject(argsStr.ifEmpty { "{}" }) }.getOrDefault(JSONObject())
+        val parsed = runCatching { JSONObject(argsStr.ifEmpty { "{}" }) }
         val tool = ToolRegistry.byName(name)
+        if (parsed.isFailure) {
+            sse.send(JSONObject().put("type", "tool_start").put("id", tid).put("name", name)
+                .put("input", JSONObject()).toString())
+            val result = JSONObject().put("error", "工具参数不是合法 JSON 对象")
+                .put("error_code", "invalid_arguments")
+            sse.send(JSONObject().put("type", "tool_update").put("id", tid).put("name", name)
+                .put("status", "failed").put("result", result).toString())
+            val text = result.toString()
+            messages.put(JSONObject().put("role", "tool").put("tool_call_id", tid).put("content", text))
+            store.addMessage(sessionId, "tool", text,
+                JSONObject().put("tool_call_id", tid).put("name", name).put("status", "failed"))
+            return
+        }
+        val args = parsed.getOrThrow()
         sse.send(JSONObject().put("type", "tool_start").put("id", tid).put("name", name).put("input", args).toString())
+
+        val blocked = guard?.check(name, args)
+        if (blocked != null) {
+            val result = JSONObject().put("error", blocked).put("error_code", "repeat_tool_call")
+            sse.send(JSONObject().put("type", "tool_update").put("id", tid).put("name", name)
+                .put("status", "failed").put("result", result).toString())
+            val text = result.toString()
+            messages.put(JSONObject().put("role", "tool").put("tool_call_id", tid).put("content", text))
+            store.addMessage(sessionId, "tool", text,
+                JSONObject().put("tool_call_id", tid).put("name", name).put("status", "failed"))
+            return
+        }
 
         // ---- 决策（与 _decide_tool 逐条对齐）----
         // headless（定时任务）分支必须排在审批之前：后台没人能点批准，
@@ -356,10 +434,25 @@ class AgentLoop(
         }
 
         // ---- 执行 ----
+        // 只读工具瞬时失败可以重试；写/危险工具绝不重试（避免重复副作用）。
         val result = try {
-            tool!!.handler(args, env)
-        } catch (e: com.pocket.agent.tools.ToolAbort) {
-            e.result
+            var out: JSONObject? = null
+            var attempt = 0
+            while (out == null) {
+                attempt += 1
+                out = try {
+                    tool!!.handler(args, env)
+                } catch (e: com.pocket.agent.tools.ToolAbort) {
+                    e.result
+                } catch (e: Exception) {
+                    if (tool?.risk == "safe" && attempt <= maxRetries) {
+                        null
+                    } else {
+                        err("工具执行异常：${e.message}")
+                    }
+                }
+            }
+            out!!
         } catch (e: Exception) {
             err("工具执行异常：${e.message}")
         }
@@ -418,7 +511,7 @@ class AgentLoop(
         val cfg = settings.contextCfg()
         val budget = cfg.budgetTokens
         if (budget <= 0) return
-        fun est(msg: JSONObject): Int = msg.optString("content").length / CHARS_PER_TOKEN + 8
+        fun est(msg: JSONObject): Int = msg.toString().length / CHARS_PER_TOKEN + 8
         var total = 0
         for (i in 0 until messages.length()) total += est(messages.optJSONObject(i) ?: JSONObject())
         if (total <= budget) return
@@ -562,6 +655,14 @@ class AgentLoop(
         }
     }
 
+    private fun estimateMessages(messages: JSONArray): Int {
+        var total = 0
+        for (i in 0 until messages.length()) {
+            total += messages.optJSONObject(i).toString().length / CHARS_PER_TOKEN + 8
+        }
+        return total
+    }
+
     private fun needsAsk(risk: String, mode: String): Boolean =
         mode == "approve" && risk in setOf("write", "danger")
 
@@ -592,7 +693,6 @@ class AgentLoop(
     }
 
     companion object {
-        private const val MAX_DEPTH = 8
         /** 单条工具结果入上下文的固定上限（未配置预算时），与 Python MAX_TOOL_TEXT 同值。 */
         private const val MAX_TOOL_TEXT = 6000
         /** 按预算放大时的硬顶：约 1.5 万 token，再大就不是"上下文"而是"文件传输"了。 */
