@@ -60,6 +60,11 @@ class NativeEngineService : Service() {
         } else {
             Log.i(TAG, "native engine listening on 127.0.0.1:${engine.port}")
         }
+        // MCP 连接是网络动作，不能占住主线程；失败只影响 MCP 工具是否出现。
+        Thread {
+            runCatching { McpManager.refresh(settings) }
+                .onFailure { Log.w(TAG, "MCP refresh failed: ${it.message}") }
+        }.apply { isDaemon = true; start() }
         startForegroundCompat()
     }
 
@@ -99,6 +104,7 @@ class NativeEngineService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        NativeTerminalHub.shutdown()
         TtsPool.shutdown()
         engine?.stop()
         engine = null

@@ -42,7 +42,7 @@ const LIGHT_THEME = {
  * 与「命令台」的区别：这里保留一个真正的 shell 进程，`cd`、环境变量、
  * 交互式命令（vim / top / less）都能用；命令台是一次一条、无状态。
  */
-export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean }) {
+export function WorkspaceTerminal({ cwd, dark, mode = "shell" }: { cwd: string; dark: boolean; mode?: "shell" | "proot" }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
@@ -73,7 +73,7 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
     };
     requestAnimationFrame(fitSoon);
 
-    const sessionKey = `pm-ws-term:${cwd}`;
+    const sessionKey = `pm-ws-term:${mode}:${cwd}`;
     if (!sessionRef.current) {
       try {
         sessionRef.current = window.sessionStorage.getItem(sessionKey);
@@ -82,7 +82,7 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
       }
     }
     const token = getToken();
-    const params = new URLSearchParams({ cwd, token });
+    const params = new URLSearchParams({ cwd, token, mode });
     if (sessionRef.current) params.set("session", sessionRef.current);
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${window.location.host}/api/workspace/term?${params.toString()}`;
@@ -111,7 +111,7 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
             term.write(
               ctrl.reconnected
                 ? "\x1b[32m● 已接管原 shell\x1b[0m\r\n"
-                : "\x1b[32m● 已连接工作区终端\x1b[0m\r\n"
+                : `\x1b[32m● 已连接工作区终端${mode === "proot" ? "（Linux/PRoot）" : ""}\x1b[0m\r\n`
             );
             return;
           }
@@ -164,7 +164,7 @@ export function WorkspaceTerminal({ cwd, dark }: { cwd: string; dark: boolean })
       }
       term.dispose();
     };
-  }, [cwd, dark, nonce]);
+  }, [cwd, dark, nonce, mode]);
 
   return (
     <div className="ws-term">

@@ -869,7 +869,7 @@ export function SettingsPanel({
               启用 MCP Client（让 PocketMind 调用外部 MCP Server）
             </label>
             <p className="hint">
-              服务器列表每行一个：名称 | 命令 | 参数。保存后需重启服务生效，连接成功后其工具会出现在「MCP 扩展」分组（默认需审批）。
+              服务器列表每行一个：名称 | 命令或 URL | 参数。原生 APK 只支持 Streamable HTTP 的 `https://…/mcp` URL；stdio 命令仍走 Termux。保存后重启服务生效，工具会出现在「MCP 扩展」分组（默认需审批）。
             </p>
             <textarea
               rows={3}
@@ -893,9 +893,9 @@ export function SettingsPanel({
                   .filter((s) => s.command);
                 setForm((f) => (f ? { ...f, mcp_client: { ...(f.mcp_client || {}), servers: rows } } : f));
               }}
-              placeholder={"github | npx | -y @modelcontextprotocol/server-github"}
+              placeholder={"demo | https://example.com/mcp\ngithub | npx | -y @modelcontextprotocol/server-github"}
             />
-            <p className="hint">需先安装对应 MCP Server 依赖（如 npx 包），且外部服务器需可从手机访问。</p>
+            <p className="hint">原生 APK 用 HTTP URL，不需要安装 npx；外部服务器需可从手机访问。stdio 命令只在 Termux 运行时可用。</p>
           </div>
         </CollapsibleGroup>
 

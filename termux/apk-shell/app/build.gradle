@@ -16,6 +16,7 @@ if (!versionNameValue || !versionCodeValue) {
 // 每次构建前同步，保证 APK 里的页面与仓库提交的 dist 一致。
 def webDistDir = file("$rootDir/../../agentd/web/dist")
 tasks.register('syncWebDist', Copy) {
+    doFirst { delete file('src/main/assets/web') }
     from webDistDir
     into file('src/main/assets/web')
 }
@@ -34,6 +35,12 @@ def hasReleaseKeystore = keystoreProps["storeFile"] &&
 android {
     namespace 'com.pocket.agent'
     compileSdk 35
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
 
     defaultConfig {
         applicationId "com.pocket.agent"

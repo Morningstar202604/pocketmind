@@ -36,20 +36,21 @@ object ApiContract {
     const val PROVIDERS = "/api/providers"
     const val LLM_TEST = "/api/llm/test"
     const val PROFILE = "/api/memory/profile"
+    const val MCP = "/api/mcp"
     const val SSE_CONTENT_TYPE = "text/event-stream"
 
     /** 原生引擎真实实现并返回业务数据的端点。 */
     val implemented = setOf(
         HEALTH, STATUS, CHAT, TOOLS, EXPORT, IMPORT, SETTINGS, SESSIONS, SEARCH, COMPACT,
         APPROVAL, APPROVALS, JOBS, JOB_RUN, RECIPES, UNDO, STOP, KB, SKILLS, PERMISSIONS, STATS,
-        METRICS, DIAGNOSTICS, PROVIDERS, LLM_TEST, PROFILE,
+        METRICS, DIAGNOSTICS, PROVIDERS, LLM_TEST, PROFILE, MCP,
     )
 
     /**
      * 只在 Python（Termux）运行时存在的端点：原生引擎对它们返回 503。
      * 列在这里是为了区分「尚未实现」与「不打算实现」。
      */
-    val pythonOnly = setOf("/api/mcp", "/api/memory", "/api/memory/search", "/api/memory/reset")
+    val pythonOnly = setOf("/api/memory", "/api/memory/search", "/api/memory/reset")
 
     val events = setOf("session", "text", "thinking", "tool_start", "tool_update", "approval", "plan", "todo", "queued", "error", "done")
 }

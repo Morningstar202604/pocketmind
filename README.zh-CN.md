@@ -44,7 +44,7 @@
 
 > 范围说明：审批、结构化结果、备份、Plan/Act、用量统计、**定时任务、shell、撤销**
 > 在 APK 与 Termux 两个运行时都有。独立 APK 提供 **38 个原生工具**；
-> 只有 **MCP、Telegram 网关、子代理** 属于 Termux 专属，
+> **stdio MCP 服务端、Telegram 网关、子代理** 属于 Termux 专属；原生 APK 自带 PTY、Alpine/PRoot 和 Streamable HTTP MCP 客户端，
 > 未覆盖的能力会明确返回"不可用"，不会假装成功。
 
 ### 审批是安全边界，不是弹窗
@@ -135,7 +135,7 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
 
 ### 双向远程控制
 
-- **MCP 服务端**——把全部 51 个工具通过 stdio 暴露给 Claude Desktop、Cline 或 Codex。
+- **MCP 服务端（stdio）**——把全部 51 个工具通过 stdio 暴露给 Claude Desktop、Cline 或 Codex；原生 APK 只做 HTTP MCP 客户端。
   这是与 Web 审批中心分离的接口，桌面宿主必须自己做确认；每个工具描述都带风险前缀。
 - **Telegram 网关**——在聊天里驱动手机。写操作与危险操作以「允许/拒绝」按钮下发；
   只有白名单里的 `chat_id` 会被响应。
@@ -165,7 +165,7 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
   离线 TTS 模型（数百 MB）、`subagent`（成本权衡）。见
   [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
 - **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell）。** 核心功能不装 Termux 即可用；
-  MCP 与 Telegram 网关仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
+  stdio MCP 服务端与 Telegram 网关仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
 
 ## 安装
 
@@ -184,7 +184,7 @@ bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签�
 `read_skill` 渐进披露）、运行时权限引导（工具缺权限时可一键弹系统授权框）、开发工作区 REST（文件树/读写/diff/搜索/命令台、变更记录与撤销、后台任务与增量输出 + SSE、JGit 原生 Git 状态/分支/合并/冲突/撤销）、会话、导出导入、搜索、
 定时任务（AlarmManager + cron/间隔/一次性，锁屏与重启后仍生效）、
 文件写删的可撤销备份、开机自启。仍属 Termux 专属并会**明确告知**
-（不伪成功）：MCP、Telegram 网关、子代理。需要这些请用方案 B。
+（不伪成功）：stdio MCP 服务端、Telegram 网关、子代理。需要这些请用方案 B。
 
 > **原生 shell 的边界**：`run_shell` 跑的是系统的 `/system/bin/sh`，身份是
 > 应用自己的 uid——没有 root，没有 `pkg`/`apt`，只有 toybox 提供的命令子集，
@@ -260,7 +260,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（浏览器装一次）
 - **后端**：`ruff` + `mypy` + 52 个套件 + `compileall` + **依赖锁一致性** + **覆盖率红线**
 - **前端**：`tsc` + Vitest + 生产构建 + **`dist/` 新鲜度校验**
   （入库的产物必须与当前源码一致，因为手机端从不构建它）
-- **Android**：97 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
+- **Android**：101 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
 
 ```bash
 # Android 单独跑（需要 JDK 17+ 与 Android SDK）

@@ -75,6 +75,16 @@ class SettingsStore(context: Context) {
         return if (m in setOf("auto", "approve", "chat")) m else "approve"
     }
 
+    /** MCP Client 配置；servers 里 url 优先，command 格只当 URL 兼容旧表单。 */
+    @Synchronized fun mcpClientCfg(): JSONObject {
+        val cfg = data.optJSONObject("mcp_client") ?: return JSONObject()
+            .put("enabled", false).put("servers", org.json.JSONArray()).put("timeout", 15)
+        val out = JSONObject(cfg.toString())
+        if (!out.has("servers")) out.put("servers", org.json.JSONArray())
+        out.put("timeout", out.optInt("timeout", 15).coerceIn(3, 60))
+        return out
+    }
+
     @Synchronized fun agentMode(): String {
         val m = data.optString("agent_mode", "act")
         return if (m in setOf("plan", "act")) m else "act"

@@ -572,6 +572,12 @@ async def list_changes(limit: int = Query(50, ge=1, le=200), include_undone: boo
     return {"items": items}
 
 
+@router.post("/changes/undo-all")
+async def undo_all_changes() -> dict:
+    """撤销当前变更集里的全部未撤销记录。"""
+    return await asyncio.to_thread(get_store().undo_all)
+
+
 @router.post("/changes/{change_id}/undo")
 async def undo_change(change_id: str) -> dict:
     item = get_store().get(change_id)

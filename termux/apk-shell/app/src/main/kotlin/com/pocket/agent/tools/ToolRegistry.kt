@@ -130,8 +130,8 @@ object ToolRegistry {
 
     private val tools = ArrayList<ToolDef>()
 
-    fun all(): List<ToolDef> = tools
-    fun byName(name: String): ToolDef? = tools.firstOrNull { it.name == name }
+    @Synchronized fun all(): List<ToolDef> = ArrayList(tools)
+    @Synchronized fun byName(name: String): ToolDef? = tools.firstOrNull { it.name == name }
 
     /** /api/tools 的 wire 格式（前端能力页契约）。 */
     fun listJson(): JSONArray {
@@ -166,6 +166,13 @@ object ToolRegistry {
     }
 
     private fun register(t: ToolDef) = tools.add(t)
+
+    /** MCP 等外部工具在启动后动态注册；同名替换，避免刷新时重复膨胀 schema。 */
+    @Synchronized
+    fun registerDynamic(t: ToolDef) {
+        tools.removeIf { it.name == t.name }
+        tools.add(t)
+    }
 
     private fun schema(vararg fields: Pair<String, Pair<String, Boolean>>): JSONObject {
         val props = JSONObject()

@@ -38,6 +38,20 @@ class ApiRouter(
         requestCount += 1
         val path = ex.path
         try {
+            // WebSocket 必须在普通 HTTP 分发前接管连接；鉴权已由 NativeEngine 完成。
+            if (path == "/api/workspace/term" && ex.isWebSocketUpgrade()) {
+                val ws = ex.upgradeWebSocket()
+                    ?: return ex.respond(400, JSON, "{\"error\":\"bad_websocket_handshake\"}")
+                try {
+                    NativeWorkspace(context).term(ws, ex.query["cwd"], ex.query["session"], ex.query["mode"])
+                } catch (e: NativeWorkspace.WorkspaceException) {
+                    ws.sendText(org.json.JSONObject().put("type", "error")
+                        .put("message", e.message ?: "终端启动失败").toString())
+                } finally {
+                    ws.close()
+                }
+                return
+            }
             when {
                 ex.method == "GET" && path == "/" -> serveDocument(ex)
                 ex.method == "GET" && path.startsWith("/assets/") -> serveAsset(ex)
@@ -219,6 +233,8 @@ class ApiRouter(
                     )
                 }
             }
+            path == "/api/workspace/changes/undo-all" && ex.method == "POST" ->
+                workspace(ex) { ws -> ws.undoAllChanges() }
             path == "/api/workspace/changes" && ex.method == "GET" ->
                 workspace(ex) { ws ->
                     ws.listChanges(
@@ -353,6 +369,10 @@ class ApiRouter(
                 ex.respond(200, JSON, JSONObject().put("recipes", Recipes.list(store)).toString())
             path.startsWith("/api/recipes/") && path.endsWith("/apply") && ex.method == "POST" ->
                 applyRecipe(ex, path.removePrefix("/api/recipes/").removeSuffix("/apply"))
+            path == "/api/mcp" && ex.method == "GET" ->
+                ex.respond(200, JSON, McpManager.snapshot().toString())
+            path == "/api/mcp/refresh" && ex.method == "POST" ->
+                ex.respond(200, JSON, McpManager.refresh(settings).toString())
             path == "/api/memory/profile" && ex.method == "GET" -> profileGet(ex)
             path == "/api/memory/profile" && ex.method == "PUT" -> profilePut(ex)
             path.startsWith("/api/jobs/") -> jobDetail(ex, path)

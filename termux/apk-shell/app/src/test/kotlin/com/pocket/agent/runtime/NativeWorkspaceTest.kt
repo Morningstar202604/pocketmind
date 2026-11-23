@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -45,6 +46,30 @@ class NativeWorkspaceTest {
         assertEquals(true, info.getJSONObject("features").getBoolean("git"))
         assertEquals(true, info.getJSONObject("features").getBoolean("git_blocks"))
         assertEquals(true, info.getJSONObject("features").getBoolean("exec"))
+        assertFalse(info.getJSONObject("features").getBoolean("pty"))
+    }
+
+    @Test
+    fun `Alpine rootfs 可从 assets 解压`() {
+        val root = NativeProot.rootfs(context)
+        assertNotNull(NativeProot.lastError, root)
+        assertNotNull(root)
+        assertTrue(File(root!!, "etc/alpine-release").isFile)
+        assertTrue(File(root, "bin/busybox").isFile)
+        assertTrue(java.nio.file.Files.isSymbolicLink(File(root, "bin/sh").toPath()))
+        assertTrue(File(root, "bin/busybox").canExecute())
+    }
+
+    @Test
+    fun `变更集可一次撤销整批写入`() {
+        ws.write("batch/a.txt", "a\n", null)
+        ws.write("batch/b.txt", "b\n", null)
+        val list = ws.listChanges(50, false).getJSONArray("items")
+        assertTrue(list.length() >= 2)
+        val undone = ws.undoAllChanges()
+        assertEquals(0, undone.getInt("failed"))
+        assertFalse(File(context.filesDir, "batch/a.txt").exists())
+        assertFalse(File(context.filesDir, "batch/b.txt").exists())
     }
 
     @Test

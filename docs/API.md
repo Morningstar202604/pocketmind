@@ -48,7 +48,7 @@
 
 前缀 `/api/workspace`，全部要求 token。Python 路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
 
-原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=true`（JGit 计算的 base/ours/theirs 逐块选择），PTY 仍明确不可用。
+原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=true`（JGit 计算的 base/ours/theirs 逐块选择）；`features.pty=true` 时 WebSocket 终端走 JNI `libpty.so`，不支持 ABI 时明确降级为命令台。变更面板另有 `POST /changes/undo-all` 撤销当前变更集。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -83,7 +83,7 @@
 | GET | `/api/workspace/git/conflicts/blocks?cwd=&path=` | 三路冲突块（ours/base/theirs，来自 `git merge-file --diff3`） |
 | POST | `/api/workspace/git/conflicts/blocks/resolve` | 按块解决：`choices:[{index,side,content?}]`，全部块都选完才写文件并 `git add` |
 | POST | `/api/workspace/patch` | 应用 unified diff；默认 `dry_run=true` 只预检 |
-| WS | `/api/workspace/term?cwd=&token=&session=` | PTY；30 秒内带 `session` 重连可接管原 shell |
+| WS | `/api/workspace/term?cwd=&token=&session=&mode=shell|proot` | PTY；`mode=proot` 启动 Alpine/PRoot，30 秒内带 `session` 重连可接管原 shell |
 
 写文件、删除、重命名、撤销、冲突 resolve 都经过进程内路径锁；默认等待 8 秒，
 超时返回 409。保存仍带 `expected_mtime`，跨进程/命令台改动由 mtime 兜底。
@@ -148,7 +148,9 @@ WS 首帧为 `{"type":"ready","session_id":...,"reconnected":bool}`，其余为�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/tools` | 工具清单（名称/描述/风险/分组/超时） |
-| GET | `/api/mcp` | MCP 服务器配置与已连接工具 |
+| GET | `/api/mcp` | 原生 MCP：已连接的 HTTP 服务器与 `mcp__server__tool` 列表 |
+| POST | `/api/mcp/refresh` | 重新初始化 Streamable HTTP MCP 服务器 |
+| POST | `/api/workspace/changes/undo-all` | 一次撤销当前变更集（逐条失败不中断） |
 | GET/PUT | `/api/settings` | 读写配置；GET 返回的 api_key / token / tg_token 均为打码值 |
 | POST | `/api/llm/test` | 用当前配置发一次最小请求验证连通性 |
 | GET | `/api/providers` | 内置厂商预设 |

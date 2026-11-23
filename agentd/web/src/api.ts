@@ -348,6 +348,8 @@ export interface WorkspaceInfo {
     locks?: boolean;
     git_merge?: boolean;
     git_blocks?: boolean;
+    pty?: boolean;
+    proot?: boolean;
   };
 }
 export interface WorkspaceEntry {
@@ -582,6 +584,11 @@ export const getWorkspaceChanges = (limit = 50, includeUndone = false) =>
   api.get<{ items: WorkspaceChange[] }>(
     `/api/workspace/changes?limit=${limit}&include_undone=${includeUndone ? "true" : "false"}`
   );
+export const undoAllWorkspaceChanges = () =>
+  api.post<{ ok: boolean; restored: number; failed: number; results: Array<{ id: string; path: string; ok: boolean; error?: string }> }>(
+    "/api/workspace/changes/undo-all", {}
+  );
+
 export const undoWorkspaceChange = (changeId: string) =>
   api.post<{ ok?: boolean; restored?: string; kind?: string; error?: string }>(
     `/api/workspace/changes/${encodeURIComponent(changeId)}/undo`

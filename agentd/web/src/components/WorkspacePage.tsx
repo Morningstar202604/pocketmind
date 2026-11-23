@@ -26,6 +26,7 @@ import {
   resolveWorkspaceConflictBlocks,
   searchWorkspace,
   startWorkspaceTask,
+  undoAllWorkspaceChanges,
   undoWorkspaceChange,
   undoWorkspaceMerge,
   type WorkspaceChange,
@@ -121,15 +122,24 @@ export function WorkspacePage() {
   const [blockBusy, setBlockBusy] = useState("");
   const [jumpLine, setJumpLine] = useState<number | null>(null);
   const [consoleMode, setConsoleMode] = useState<"term" | "cmd">("term");
+  const [termFlavor, setTermFlavor] = useState<"android" | "linux">("android");
   const [panel, setPanel] = useState<"changes" | "tasks" | "git" | null>(null);
   const [changes, setChanges] = useState<WorkspaceChange[]>([]);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [panelBusy, setPanelBusy] = useState("");
   const theme = useAgentStore((s) => s.theme);
+
   const dark = theme === "dark" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: light)").matches);
 
   const dirty = current != null && draft !== current.content;
   const nativeRuntime = info?.runtime === "kotlin";
+  const hasPty = !nativeRuntime || info?.features?.pty === true;
+  const hasProot = !nativeRuntime || info?.features?.proot === true;
+  const showTerm = consoleMode === "term" && hasPty;
+
+  useEffect(() => {
+    if (nativeRuntime && !hasPty) setConsoleMode("cmd");
+  }, [nativeRuntime, hasPty]);
 
   const loadTree = useCallback(async (path: string) => {
     setTreeLoading(true);
@@ -306,6 +316,26 @@ export function WorkspacePage() {
       await refreshTasks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPanelBusy("");
+    }
+  };
+
+  const undoAllChanges = async () => {
+    if (!window.confirm(`撤销本次变更集里的全部 ${changes.length} 项改动？已单独改过的文件会被跳过。`)) return;
+    setPanelBusy("all");
+    setError("");
+    try {
+      const r = await undoAllWorkspaceChanges();
+      if (r.failed > 0) {
+        const failed = r.results.filter((x) => !x.ok).map((x) => x.path).slice(0, 3).join("、");
+        setError(`已还原 ${r.restored} 项，${r.failed} 项失败：${failed}`);
+      } else {
+        setStatus(`已撤销变更集：${r.restored} 项`);
+      }
+      await refreshChanges();
+    } catch (e) {
+      setError(String(e));
     } finally {
       setPanelBusy("");
     }
@@ -847,7 +877,7 @@ export function WorkspacePage() {
           <div className={`ws-console ${consoleMode}`}>
             <div className="ws-console-head">
               <div className="ws-mode" role="group" aria-label="终端模式">
-                {!nativeRuntime && (
+                {hasPty && (
                   <button
                     className={consoleMode === "term" ? "on" : ""}
                     onClick={() => setConsoleMode("term")}
@@ -865,21 +895,32 @@ export function WorkspacePage() {
               <span className="ws-cwd" title={cwd}>
                 {cwd}
               </span>
+              {showTerm && hasProot && (
+                <select
+                  value={termFlavor}
+                  onChange={(e) => setTermFlavor(e.target.value === "linux" ? "linux" : "android")}
+                  aria-label="终端环境"
+                  title="Linux 环境首次打开会解压 Alpine rootfs，需要几秒"
+                >
+                  <option value="android">Android Shell</option>
+                  <option value="linux">Linux · PRoot</option>
+                </select>
+              )}
               {consoleMode === "cmd" && (
                 <button className="ws-x" onClick={() => setOutput("")} title="清空输出">
                   清空
                 </button>
               )}
             </div>
-            {consoleMode === "term" && !nativeRuntime ? (
+            {showTerm ? (
               <Suspense fallback={<div className="ws-muted">终端加载中…</div>}>
-                <WorkspaceTerminal cwd={cwd} dark={dark} />
+                <WorkspaceTerminal cwd={cwd} dark={dark} mode={termFlavor === "linux" ? "proot" : "shell"} />
               </Suspense>
             ) : (
               <>
                 <pre className="ws-output" aria-live="polite">
                   {output || (nativeRuntime
-                  ? "原生运行时只有 app uid 的 /system/bin/sh：没有 python、node、git、apt；命令会在上方工作目录里执行。"
+                  ? "当前设备没有可用的原生 PTY；命令仍会在上方工作目录里执行。"
                   : "在这里运行 git / python / npm test；命令会在上方工作目录里执行。")}
                 </pre>
                 <div className="ws-command-row">
@@ -1230,7 +1271,18 @@ export function WorkspacePage() {
               changes.length === 0 ? (
                 <p className="ws-muted">还没有变更。保存文件、新建或删除后会出现在这里。</p>
               ) : (
-                <ul className="ws-change-list">
+                <>
+                  <div className="ws-panel-row">
+                    <span className="ws-muted">变更集 · {changes.length} 项</span>
+                    <button
+                      className="btn sm danger"
+                      disabled={panelBusy !== ""}
+                      onClick={() => void undoAllChanges()}
+                    >
+                      {panelBusy === "all" ? "撤销中…" : "撤销全部"}
+                    </button>
+                  </div>
+                  <ul className="ws-change-list">
                   {changes.map((c) => (
                     <li key={c.id}>
                       <div className="ws-panel-row">
@@ -1251,7 +1303,8 @@ export function WorkspacePage() {
                       </div>
                     </li>
                   ))}
-                </ul>
+                  </ul>
+                </>
               )
             ) : tasks.length === 0 ? (
               <p className="ws-muted">还没有后台任务。命令台里点「后台」即可启动，长任务不会卡住页面。</p>

@@ -29,7 +29,7 @@ class NativeWorkspace(private val context: Context) {
     private val tasks = WorkspaceTasks.get(context)
     private val git = NativeGit(root)
     private val deniedFiles = setOf("config.json", "rules.json", "rules.json.bak", "pocketmind.db", "workspace_changes.json")
-    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups", "workspace_tasks", ".git")
+    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups", "workspace_tasks", ".git", "proot")
 
     init {
         root.mkdirs()
@@ -44,7 +44,8 @@ class NativeWorkspace(private val context: Context) {
             .put("tree", true).put("read", true).put("write", true)
             .put("preview", true).put("search", true).put("exec", true)
             .put("git", true).put("changes", true).put("tasks", true)
-            .put("locks", false).put("git_merge", true).put("git_blocks", true))
+            .put("locks", false).put("git_merge", true).put("git_blocks", true)
+            .put("pty", NativePty.available).put("proot", NativeProot.available(context)))
 
     fun tree(path: String?): JSONObject {
         val dir = resolve(path, mustExist = true)
@@ -240,6 +241,8 @@ class NativeWorkspace(private val context: Context) {
 
     fun undoChange(id: String): JSONObject = changes.undo(id)
 
+    fun undoAllChanges(): JSONObject = changes.undoAll()
+
     fun startTask(command: String?, cwd: String?, timeoutSec: Int): JSONObject {
         val dir = resolve(cwd ?: ".", mustExist = true)
         if (!dir.isDirectory) throw WorkspaceException(400, "cwd 不是目录")
@@ -254,6 +257,18 @@ class NativeWorkspace(private val context: Context) {
     fun cancelTask(id: String): JSONObject = tasks.cancel(id)
 
     fun streamTask(id: String, writer: SseWriter) = tasks.stream(id, writer)
+
+    fun term(ws: NativeWebSocket, cwd: String?, requested: String?, mode: String?) {
+        val dir = resolve(cwd ?: ".", mustExist = true)
+        if (!dir.isDirectory) throw WorkspaceException(400, "终端 cwd 不是目录")
+        if (mode == "proot") {
+            val argv = NativeProot.argv(context)
+                ?: throw WorkspaceException(503, "PRoot 不可用：rootfs 解压失败或 ABI 不支持")
+            NativeTerminalHub.serve(ws, dir, root, context.cacheDir, requested, "proot", argv, NativeProot.env(context))
+        } else {
+            NativeTerminalHub.serve(ws, dir, root, context.cacheDir, requested, "shell")
+        }
+    }
 
     fun gitStatus(cwd: String?): JSONObject = git.status(resolve(cwd ?: ".", mustExist = true))
 

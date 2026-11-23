@@ -28,6 +28,8 @@ class Exchange(
     val body: ByteArray,
     private val out: OutputStream,
     private val deadline: DeadlineHandle?,
+    private val input: BufferedInputStream? = null,
+    private val socket: Socket? = null,
 ) {
     val query: Map<String, String> by lazy {
         val m = LinkedHashMap<String, String>()
@@ -62,6 +64,39 @@ class Exchange(
         out.write(b.toString().toByteArray(StandardCharsets.US_ASCII))
         out.write(data)
         out.flush()
+    }
+
+    /** 是否是 WebSocket 升级请求（只接受 GET + Upgrade: websocket + v13）。 */
+    fun isWebSocketUpgrade(): Boolean {
+        if (method != "GET") return false
+        if (!headers["upgrade"].equals("websocket", ignoreCase = true)) return false
+        val connection = headers["connection"] ?: return false
+        if (connection.split(',').none { it.trim().equals("upgrade", ignoreCase = true) }) return false
+        return !headers["sec-websocket-key"].isNullOrBlank() &&
+            headers["sec-websocket-version"] == "13"
+    }
+
+    /**
+     * 完成 101 握手并返回帧读写器。调用后该连接由 WebSocket 接管，
+     * handler 必须阻塞到会话结束；不能再写普通响应。
+     */
+    fun upgradeWebSocket(): NativeWebSocket? {
+        if (!isWebSocketUpgrade()) return null
+        val key = headers["sec-websocket-key"] ?: return null
+        val input = input ?: return null
+        val socket = socket ?: return null
+        val accept = NativeWebSocket.acceptKey(key)
+        val head = StringBuilder()
+            .append("HTTP/1.1 101 Switching Protocols\r\n")
+            .append("Upgrade: websocket\r\n")
+            .append("Connection: Upgrade\r\n")
+            .append("Sec-WebSocket-Accept: ").append(accept).append("\r\n")
+            .append("\r\n")
+        deadline?.cancel()
+        socket.soTimeout = 0
+        out.write(head.toString().toByteArray(StandardCharsets.US_ASCII))
+        out.flush()
+        return NativeWebSocket(socket, input, out)
     }
 
     /**
@@ -345,7 +380,10 @@ class NativeEngine(
                 return
             }
 
-            val ex = Exchange(method, path, target.substringAfter('?', ""), headers, body, client.getOutputStream(), deadline)
+            val ex = Exchange(
+                method, path, target.substringAfter('?', ""), headers, body,
+                client.getOutputStream(), deadline, input, client,
+            )
             try {
                 handler.handle(ex)
             } catch (_: Exception) {

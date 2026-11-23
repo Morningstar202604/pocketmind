@@ -148,6 +148,16 @@ def main() -> int:
         check("工作区提交接口返回 200", commit.status_code == 200, str(commit.text[:200]))
         check("提交后工作区干净", commit.json().get("state", {}).get("clean") is True, str(commit.text[:250]))
 
+        # 变更集：连续两次写入后，一次 undo-all 把这一批还原
+        c.put("/api/workspace/file", json={"path": "repo/batch-a.txt", "content": "a\n"})
+        c.put("/api/workspace/file", json={"path": "repo/batch-b.txt", "content": "b\n"})
+        changes = c.get("/api/workspace/changes", params={"limit": 50}).json().get("items", [])
+        check("变更集能看到两条", len(changes) >= 2, str(changes)[:200])
+        undo_all = c.post("/api/workspace/changes/undo-all")
+        udata = undo_all.json()
+        check("撤销变更集返回 200", undo_all.status_code == 200 and udata.get("failed") == 0, str(udata)[:250])
+        check("变更集文件已删除", not (repo / "batch-a.txt").exists() and not (repo / "batch-b.txt").exists())
+
     print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
     if failed:
         print("失败项：" + "、".join(failed))

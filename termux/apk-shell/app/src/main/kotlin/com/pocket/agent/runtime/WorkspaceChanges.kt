@@ -76,6 +76,32 @@ class WorkspaceChanges(private val context: Context, private val root: File) {
         JSONObject().put("items", visible).put("count", visible.length())
     }
 
+    /**
+     * 撤销当前这一批未撤销的变更（变更集），按记录倒序执行。
+     * 单条失败不会中断其余条目，结果里逐条返回，让 UI 能说明哪一条没还原。
+     */
+    fun undoAll(): JSONObject = synchronized(LOCK) {
+        val items = read()
+        val results = JSONArray()
+        var ok = 0
+        var failed = 0
+        for (i in items.length() - 1 downTo 0) {
+            val item = items.getJSONObject(i)
+            if (item.optBoolean("undone")) continue
+            val result = undo(item.optString("id"))
+            val entry = JSONObject().put("id", item.optString("id"))
+                .put("path", item.optString("path"))
+                .put("ok", result.optBoolean("ok"))
+            if (!result.optBoolean("ok")) {
+                entry.put("error", result.optString("error"))
+                failed += 1
+            } else ok += 1
+            results.put(entry)
+        }
+        JSONObject().put("ok", failed == 0).put("restored", ok).put("failed", failed)
+            .put("results", results)
+    }
+
     fun undo(id: String): JSONObject = synchronized(LOCK) {
         val items = read()
         var found: JSONObject? = null

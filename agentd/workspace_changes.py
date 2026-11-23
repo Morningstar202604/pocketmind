@@ -137,6 +137,26 @@ class ChangeStore:
         self.mark_undone(change_id)
         return {"ok": True, "restored": str(target), "kind": kind}
 
+    def undo_all(self) -> dict:
+        """撤销当前全部未撤销记录（变更集）；单条失败不中断，逐条返回。"""
+        items = self.list(limit=_MAX_RECORDS, include_undone=False)
+        results = []
+        ok = failed = 0
+        for item in items:
+            result = self.undo(str(item.get("id") or ""))
+            entry = {
+                "id": item.get("id"),
+                "path": item.get("path"),
+                "ok": bool(result.get("ok")),
+            }
+            if not result.get("ok"):
+                entry["error"] = result.get("error")
+                failed += 1
+            else:
+                ok += 1
+            results.append(entry)
+        return {"ok": failed == 0, "restored": ok, "failed": failed, "results": results}
+
     @staticmethod
     def _matches_after(target: Path, item: dict) -> bool:
         """目标是否仍是记录写入后的那一版；不一致就不覆盖用户的后续修改。"""
