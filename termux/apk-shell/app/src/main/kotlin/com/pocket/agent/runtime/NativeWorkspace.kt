@@ -44,7 +44,7 @@ class NativeWorkspace(private val context: Context) {
             .put("tree", true).put("read", true).put("write", true)
             .put("preview", true).put("search", true).put("exec", true)
             .put("git", true).put("changes", true).put("tasks", true)
-            .put("locks", false).put("git_merge", true).put("git_blocks", false))
+            .put("locks", false).put("git_merge", true).put("git_blocks", true))
 
     fun tree(path: String?): JSONObject {
         val dir = resolve(path, mustExist = true)
@@ -285,6 +285,12 @@ class NativeWorkspace(private val context: Context) {
 
     fun gitResolveConflict(cwd: String?, path: String, strategy: String, content: String?): JSONObject =
         git.resolveConflict(resolve(cwd ?: ".", mustExist = true), path, strategy, content)
+
+    fun gitConflictBlocks(cwd: String?, path: String): JSONObject =
+        git.conflictBlocks(resolve(cwd ?: ".", mustExist = true), path)
+
+    fun gitResolveConflictBlocks(cwd: String?, path: String, choices: JSONArray): JSONObject =
+        git.resolveConflictBlocks(resolve(cwd ?: ".", mustExist = true), path, choices)
 
     private fun resolve(path: String?, mustExist: Boolean): File {
         val raw = path?.trim().orEmpty()

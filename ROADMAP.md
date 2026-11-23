@@ -24,7 +24,7 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Merge checkpoint (1.6.x) | shipped | `refs/pocketmind/premerge/*` pinned before `git merge`; committed merge can be reset, abort clears it; `/api/workspace/git/merge/checkpoint` + `/undo`. |
 | Native workspace REST + undo/tasks (1.6.x) | shipped | `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks` on app-private `filesDir`; change log with backups, background tasks with cancel, persisted metadata and live output snapshots; config/db/checkpoint/audit/.git stay hidden; Git via JGit (status/branch/merge/conflict/undo), PTY remains unavailable. |
 | Incremental task output (1.6.x) | shipped | Both task managers append stdout/stderr as the process runs; `/tasks/{id}/stream` adds SSE snapshots, and the task panel still polls every 1.5s. |
-| Three-way block conflict resolution (1.6.x) | shipped | Python runtime: `GET /api/workspace/git/conflicts/blocks` + `POST .../blocks/resolve` diff3 blocks. Native JGit exposes whole-file ours/theirs/manual and sets `git_blocks=false`. |
+| Three-way block conflict resolution (1.6.x) | shipped | Python `git merge-file --diff3` and native JGit `HistogramDiff` both expose `GET/POST /api/workspace/git/conflicts/blocks*`; choose ours/base/theirs/manual per block, assemble and stage. |
 | Runtime permission flow (1.6.x) | shipped | Tool errors carry exact permission names; foreground Activity shows the system dialog; tool card has one-tap grant; background calls fail with `no_activity`. |
 | Backup export / import | shipped | `format_version` stamped on both runtimes; bundles are cross-compatible. |
 | MCP stdio server / Telegram gateway | Python only | Native engine degrades explicitly. |
@@ -32,7 +32,7 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Session search across tool output | shipped | `matched` kinds on both runtimes (native: LIKE over tool rows). |
 | Structured tool result viewer | shipped | List-shaped results render as tables/cards. |
 | `mypy` gate | shipped | Zero errors, enforced by `tests/run_all.sh`. |
-| Full local gate in one command | shipped | `bash tests/run_all.sh` + `gradle testDebugUnitTest lintDebug assembleDebug` (96 Robolectric tests). |
+| Full local gate in one command | shipped | `bash tests/run_all.sh` + `gradle testDebugUnitTest lintDebug assembleDebug` (97 Robolectric tests). |
 
 ## Next — 1.6.x
 
@@ -72,7 +72,7 @@ mistakes a green local gate for full coverage.
 | Gap | Why it exists | What would close it |
 |---|---|---|
 | **The native scheduler has not fired a real alarm on a physical device.** The cron parser, job CRUD, run-now delivery and undo round-trip are covered by Robolectric tests, but `AlarmManager` callbacks, Doze behaviour and `BOOT_COMPLETED` replay are only exercised on real hardware. | The development host is Windows; no Linux runner or working Docker daemon was available. | One green CI run on `ubuntu-latest`, or `bash tests/run_all.sh` inside a Linux container. |
-| **No real-device APK test — still the top gap.** The native engine passes 96 Robolectric tests (engine auth, routing, storage, agent loop, approvals, jobs, undo, shell) and the APK builds with lint clean, but no physical device has run the full bootstrap → LLM → tool → approval flow. | The host is a KVM guest without nested virtualisation, so AVDs never come up. | Install v1.4.0 on a physical Android device; exercise onboarding, chat with tool calls, and approval cards. |
+| **No real-device APK test — still the top gap.** The native engine passes 97 Robolectric tests (engine auth, routing, storage, agent loop, approvals, jobs, undo, shell) and the APK builds with lint clean, but no physical device has run the full bootstrap → LLM → tool → approval flow. | The host is a KVM guest without nested virtualisation, so AVDs never come up. | Install v1.4.0 on a physical Android device; exercise onboarding, chat with tool calls, and approval cards. |
 | **Playwright E2E is opt-in.** | Browsers are a large download; the gate must stay runnable on a phone. | Run `--with-e2e` on CI as a separate job. |
 
 ## Explicitly not planned

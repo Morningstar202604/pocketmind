@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -123,6 +124,34 @@ class NativeGitTest {
         assertEquals(0, resolved.getJSONArray("remaining").length())
         assertEquals("main\n", File(repoDir, "a.txt").readText())
         val done = git.mergeCommit(repoDir, "merge feature")
+        assertFalse(done.getJSONObject("state").getBoolean("merging"))
+    }
+
+    @Test
+    fun `冲突块可按 ours base theirs 逐块解决`() {
+        Git.open(repoDir).use { g ->
+            g.checkout().setCreateBranch(true).setName("feature").call()
+            File(repoDir, "a.txt").writeText("feature\n")
+            g.add().addFilepattern("a.txt").call()
+            commit(g, "feature")
+            g.checkout().setName("main").call()
+            File(repoDir, "a.txt").writeText("main\n")
+            g.add().addFilepattern("a.txt").call()
+            commit(g, "main2")
+        }
+        git.mergePreview(repoDir, "feature")
+        val blocks = git.conflictBlocks(repoDir, "a.txt")
+        assertFalse(blocks.getBoolean("binary"))
+        assertEquals(1, blocks.getInt("count"))
+        val b = blocks.getJSONArray("blocks").getJSONObject(0)
+        assertEquals("main", b.getString("ours"))
+        assertEquals("feature", b.getString("theirs"))
+        assertEquals("base", b.getString("base"))
+        val choices = JSONArray().put(JSONObject().put("index", 0).put("side", "theirs"))
+        val resolved = git.resolveConflictBlocks(repoDir, "a.txt", choices)
+        assertEquals(0, resolved.getJSONArray("remaining").length())
+        assertEquals("feature\n", File(repoDir, "a.txt").readText())
+        val done = git.mergeCommit(repoDir, "merge blocks")
         assertFalse(done.getJSONObject("state").getBoolean("merging"))
     }
 

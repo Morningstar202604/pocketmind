@@ -197,6 +197,17 @@ class ApiRouter(
                 workspace(ex) { ws -> ws.gitMergeUndo(bodyJson(ex).optString("cwd", ".")) }
             path == "/api/workspace/git/conflicts" && ex.method == "GET" ->
                 workspace(ex) { ws -> ws.gitConflicts(ex.query["cwd"]) }
+            path == "/api/workspace/git/conflicts/blocks" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.gitConflictBlocks(ex.query["cwd"], ex.query["path"] ?: "") }
+            path == "/api/workspace/git/conflicts/blocks/resolve" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.gitResolveConflictBlocks(
+                        body.optString("cwd", "."), body.optString("path", ""),
+                        body.optJSONArray("choices") ?: JSONArray(),
+                    )
+                }
+            }
             path == "/api/workspace/git/conflicts/resolve" && ex.method == "POST" -> {
                 val body = bodyJson(ex)
                 workspace(ex) { ws ->

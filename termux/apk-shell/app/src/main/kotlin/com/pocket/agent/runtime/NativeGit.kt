@@ -3,6 +3,11 @@ package com.pocket.agent.runtime
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.MergeCommand
 import org.eclipse.jgit.api.ResetCommand
+import org.eclipse.jgit.diff.DiffAlgorithm
+import org.eclipse.jgit.diff.Edit
+import org.eclipse.jgit.diff.HistogramDiff
+import org.eclipse.jgit.diff.RawText
+import org.eclipse.jgit.diff.RawTextComparator
 import org.eclipse.jgit.dircache.DirCache
 import org.eclipse.jgit.lib.BranchTrackingStatus
 import org.eclipse.jgit.lib.CommitBuilder
@@ -291,6 +296,84 @@ class NativeGit(private val root: File) {
         }
     }
 
+    fun conflictBlocks(cwd: File, rawPath: String): JSONObject {
+        val dir = checkedDir(cwd)
+        val git = open(dir)
+        git.use {
+            val repo = it.repository
+            val rel = normalizeRel(rawPath)
+            safeRepoPath(repo, rel)
+            if (rel !in it.status().call().conflicting) fail(409, "该文件当前不是冲突文件")
+            val stages = stageTexts(repo, rel)
+            val binary = stages.values.any { it.first }
+            if (binary) return JSONObject().put("path", rel).put("binary", true)
+                .put("blocks", JSONArray()).put("count", 0)
+            val computed = threeWay(
+                stages["base"]?.second ?: "",
+                stages["ours"]?.second ?: "",
+                stages["theirs"]?.second ?: "",
+            )
+            return JSONObject().put("path", rel).put("binary", false)
+                .put("blocks", JSONArray(computed.blocks.map { b ->
+                    JSONObject().put("index", b.index).put("ours", b.ours)
+                        .put("base", b.base).put("theirs", b.theirs)
+                })).put("count", computed.blocks.size)
+        }
+    }
+
+    fun resolveConflictBlocks(cwd: File, rawPath: String, choices: JSONArray): JSONObject {
+        val dir = checkedDir(cwd)
+        val git = open(dir)
+        git.use {
+            val repo = it.repository
+            val rel = normalizeRel(rawPath)
+            val target = safeRepoPath(repo, rel)
+            if (rel !in it.status().call().conflicting) fail(409, "该文件当前不是冲突文件")
+            val stages = stageTexts(repo, rel)
+            if (stages.values.any { it.first }) fail(409, "二进制冲突不能按块解决")
+            val computed = threeWay(
+                stages["base"]?.second ?: "",
+                stages["ours"]?.second ?: "",
+                stages["theirs"]?.second ?: "",
+            )
+            if (computed.blocks.isEmpty()) fail(409, "没有可解决的冲突块，请用整文件解决")
+            data class Pick(val side: String, val content: String?)
+            val picks = LinkedHashMap<Int, Pick>()
+            for (i in 0 until choices.length()) {
+                val o = choices.optJSONObject(i) ?: fail(400, "choices 格式不合法")
+                val idx = o.optInt("index", -1)
+                if (idx < 0 || idx >= computed.blocks.size || idx in picks) fail(400, "冲突块序号不合法或重复：$idx")
+                val side = o.optString("side", "ours")
+                if (side !in setOf("ours", "theirs", "base", "manual")) fail(400, "side 只能是 ours / theirs / base / manual")
+                picks[idx] = Pick(side, if (o.has("content") && !o.isNull("content")) o.optString("content") else null)
+            }
+            if (picks.size != computed.blocks.size) {
+                val missing = computed.blocks.map { it.index }.filter { it !in picks }.take(6)
+                fail(400, "还有未选择的冲突块：$missing")
+            }
+            val out = StringBuilder()
+            for (seg in computed.segments) {
+                if (seg.block == null) { out.append(seg.text); continue }
+                val pick = picks[seg.block.index]!!
+                out.append(when (pick.side) {
+                    "manual" -> pick.content.orEmpty()
+                    else -> seg.block.valueOf(pick.side)
+                })
+            }
+            var finalText = out.toString()
+            val wantsNewline = stages.values.any { it.second.endsWith("\n") }
+            if (wantsNewline && finalText.isNotEmpty() && !finalText.endsWith("\n")) finalText += "\n"
+            if (finalText.length > 800_000) fail(413, "解决后的文件过大")
+            if (java.nio.file.Files.isSymbolicLink(target.toPath())) fail(409, "拒绝写入符号链接冲突文件")
+            target.parentFile?.mkdirs()
+            target.writeText(finalText, Charsets.UTF_8)
+            it.add().addFilepattern(rel).call()
+            return JSONObject().put("ok", true).put("path", rel)
+                .put("remaining", JSONArray(it.status().call().conflicting.toList().sorted()))
+                .put("state", status(dir))
+        }
+    }
+
     fun resolveConflict(cwd: File, rawPath: String, strategy: String, content: String?): JSONObject {
         val dir = checkedDir(cwd)
         val git = open(dir)
@@ -473,6 +556,119 @@ class NativeGit(private val root: File) {
 
     private fun RepositoryState.isMergingState(): Boolean =
         this == RepositoryState.MERGING || this == RepositoryState.MERGING_RESOLVED
+
+    // ---------- 三路块（diff3） ----------
+
+    private data class Change(val start: Int, val end: Int, val lines: List<String>)
+    private data class Block(val index: Int, val base: String, val ours: String, val theirs: String) {
+        fun valueOf(side: String): String = when (side) {
+            "ours" -> ours
+            "theirs" -> theirs
+            "base" -> base
+            else -> ""
+        }
+    }
+    private data class Segment(val text: String, val block: Block?)
+    private data class ThreeWay(val segments: List<Segment>, val blocks: List<Block>)
+
+    private fun threeWay(baseText: String, oursText: String, theirsText: String): ThreeWay {
+        val baseLines = splitLines(baseText)
+        val oursLines = splitLines(oursText)
+        val theirsLines = splitLines(theirsText)
+        val oursEdits = diffs(baseLines, oursLines)
+        val theirsEdits = diffs(baseLines, theirsLines)
+        val segments = ArrayList<Segment>()
+        val blocks = ArrayList<Block>()
+        var pos = 0
+        var oi = 0
+        var ti = 0
+        fun visible(edits: List<Change>, at: Int) = edits[at].start < pos || edits[at].start == pos
+        while (oi < oursEdits.size || ti < theirsEdits.size) {
+            val o = oursEdits.getOrNull(oi)
+            val t = theirsEdits.getOrNull(ti)
+            if (o == null || t == null) {
+                val e = o ?: t!!
+                if (e.start > pos) {
+                    segments.add(Segment(joinLines(baseLines.subList(pos, e.start)), null))
+                    pos = e.start
+                }
+                segments.add(Segment(joinLines(e.lines), null))
+                pos = e.end
+                if (o != null) oi++ else ti++
+                continue
+            }
+            if (o.end <= t.start || t.end <= o.start) {
+                // 两边修改不重叠：先处理更早的一处，另一处留到下一轮
+                val e = if (o.start <= t.start) o else t
+                if (e.start > pos) {
+                    segments.add(Segment(joinLines(baseLines.subList(pos, e.start)), null))
+                }
+                segments.add(Segment(joinLines(e.lines), null))
+                pos = e.end
+                if (e === o) oi++ else ti++
+                continue
+            }
+            // 冲突簇：把与 [start,end) 相交的所有修改并进来
+            var start = minOf(o.start, t.start)
+            var end = maxOf(o.end, t.end)
+            var oEnd = oi
+            var tEnd = ti
+            var changed = true
+            while (changed) {
+                changed = false
+                while (oEnd < oursEdits.size && touches(oursEdits[oEnd], start, end)) {
+                    end = maxOf(end, oursEdits[oEnd].end); oEnd++; changed = true
+                }
+                while (tEnd < theirsEdits.size && touches(theirsEdits[tEnd], start, end)) {
+                    end = maxOf(end, theirsEdits[tEnd].end); tEnd++; changed = true
+                }
+            }
+            if (start > pos) segments.add(Segment(joinLines(baseLines.subList(pos, start)), null))
+            val block = Block(
+                index = blocks.size,
+                base = joinLines(baseLines.subList(start, end)),
+                ours = sideText(baseLines, oursEdits.subList(oi, oEnd), start, end),
+                theirs = sideText(baseLines, theirsEdits.subList(ti, tEnd), start, end),
+            )
+            blocks.add(block)
+            segments.add(Segment("", block))
+            pos = end
+            oi = oEnd
+            ti = tEnd
+        }
+        if (pos < baseLines.size) segments.add(Segment(joinLines(baseLines.subList(pos, baseLines.size)), null))
+        return ThreeWay(segments, blocks)
+    }
+
+    private fun touches(e: Change, start: Int, end: Int): Boolean {
+        if (e.start == e.end) return e.start in start..end
+        return e.start < end && e.end > start
+    }
+
+    private fun sideText(base: List<String>, edits: List<Change>, start: Int, end: Int): String {
+        val sb = StringBuilder()
+        var p = start
+        for (e in edits) {
+            if (e.start > p) sb.append(joinLines(base.subList(p, e.start)))
+            sb.append(joinLines(e.lines))
+            p = e.end
+        }
+        if (p < end) sb.append(joinLines(base.subList(p, end)))
+        return sb.toString()
+    }
+
+    private fun diffs(base: List<String>, other: List<String>): List<Change> {
+        val algorithm = HistogramDiff()
+        val b = RawText(toBytes(base))
+        val o = RawText(toBytes(other))
+        return algorithm.diff(RawTextComparator.DEFAULT, b, o).map { e ->
+            Change(e.beginA, e.endA, other.subList(e.beginB, e.endB))
+        }
+    }
+
+    private fun splitLines(text: String): List<String> = text.split("\n")
+    private fun joinLines(lines: List<String>): String = lines.joinToString("\n")
+    private fun toBytes(lines: List<String>): ByteArray = joinLines(lines).toByteArray(Charsets.UTF_8)
 
     private fun fail(status: Int, message: String): Nothing =
         throw NativeWorkspace.WorkspaceException(status, message)

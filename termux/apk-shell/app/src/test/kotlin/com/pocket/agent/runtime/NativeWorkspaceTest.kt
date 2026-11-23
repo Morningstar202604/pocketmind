@@ -43,7 +43,7 @@ class NativeWorkspaceTest {
         assertEquals(context.filesDir.canonicalPath, File(info.getString("root")).canonicalPath)
         assertEquals("kotlin", info.getString("runtime"))
         assertEquals(true, info.getJSONObject("features").getBoolean("git"))
-        assertEquals(false, info.getJSONObject("features").getBoolean("git_blocks"))
+        assertEquals(true, info.getJSONObject("features").getBoolean("git_blocks"))
         assertEquals(true, info.getJSONObject("features").getBoolean("exec"))
     }
 

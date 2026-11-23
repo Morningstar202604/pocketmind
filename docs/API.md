@@ -48,7 +48,7 @@
 
 前缀 `/api/workspace`，全部要求 token。Python 路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
 
-原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=false`（三路块仍是 Python 运行时能力），PTY 仍明确不可用。
+原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=true`（JGit 计算的 base/ours/theirs 逐块选择），PTY 仍明确不可用。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
