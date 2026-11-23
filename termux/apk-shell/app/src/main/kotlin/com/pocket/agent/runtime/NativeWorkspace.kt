@@ -27,8 +27,9 @@ class NativeWorkspace(private val context: Context) {
     private val root: File = context.filesDir.canonicalFile
     private val changes = WorkspaceChanges(context, root)
     private val tasks = WorkspaceTasks.get(context)
+    private val git = NativeGit(root)
     private val deniedFiles = setOf("config.json", "rules.json", "rules.json.bak", "pocketmind.db", "workspace_changes.json")
-    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups", "workspace_tasks")
+    private val deniedDirs = setOf("checkpoints", "audit", ".workspace-backups", "workspace_tasks", ".git")
 
     init {
         root.mkdirs()
@@ -42,8 +43,8 @@ class NativeWorkspace(private val context: Context) {
         .put("features", JSONObject()
             .put("tree", true).put("read", true).put("write", true)
             .put("preview", true).put("search", true).put("exec", true)
-            .put("git", false).put("changes", true).put("tasks", true)
-            .put("locks", false).put("git_merge", false))
+            .put("git", true).put("changes", true).put("tasks", true)
+            .put("locks", false).put("git_merge", true).put("git_blocks", false))
 
     fun tree(path: String?): JSONObject {
         val dir = resolve(path, mustExist = true)
@@ -252,13 +253,35 @@ class NativeWorkspace(private val context: Context) {
 
     fun cancelTask(id: String): JSONObject = tasks.cancel(id)
 
-    fun gitStatus(cwd: String?): JSONObject {
-        val dir = resolve(cwd ?: ".", mustExist = true)
-        return JSONObject().put("available", false).put("cwd", dir.absolutePath)
-            .put("repo_root", "").put("branch", "").put("clean", true)
-            .put("files", JSONArray()).put("branches", JSONArray())
-            .put("message", "原生 APK 未内置 git；需要版本控制时请用 Termux 运行时或 /system/bin/sh 里的 git")
-    }
+    fun streamTask(id: String, writer: SseWriter) = tasks.stream(id, writer)
+
+    fun gitStatus(cwd: String?): JSONObject = git.status(resolve(cwd ?: ".", mustExist = true))
+
+    fun gitInit(cwd: String?): JSONObject = git.init(resolve(cwd ?: ".", mustExist = true))
+
+    fun gitCheckout(cwd: String?, branch: String, create: Boolean): JSONObject =
+        git.checkout(resolve(cwd ?: ".", mustExist = true), branch, create)
+
+    fun gitMergePreview(cwd: String?, branch: String): JSONObject =
+        git.mergePreview(resolve(cwd ?: ".", mustExist = true), branch)
+
+    fun gitMergeAbort(cwd: String?): JSONObject =
+        git.mergeAbort(resolve(cwd ?: ".", mustExist = true))
+
+    fun gitMergeCommit(cwd: String?, message: String): JSONObject =
+        git.mergeCommit(resolve(cwd ?: ".", mustExist = true), message)
+
+    fun gitMergeCheckpoint(cwd: String?): JSONObject =
+        git.checkpoint(resolve(cwd ?: ".", mustExist = true))
+
+    fun gitMergeUndo(cwd: String?): JSONObject =
+        git.undoMerge(resolve(cwd ?: ".", mustExist = true))
+
+    fun gitConflicts(cwd: String?): JSONObject =
+        git.conflicts(resolve(cwd ?: ".", mustExist = true))
+
+    fun gitResolveConflict(cwd: String?, path: String, strategy: String, content: String?): JSONObject =
+        git.resolveConflict(resolve(cwd ?: ".", mustExist = true), path, strategy, content)
 
     private fun resolve(path: String?, mustExist: Boolean): File {
         val raw = path?.trim().orEmpty()

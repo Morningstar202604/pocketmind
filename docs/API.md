@@ -48,7 +48,7 @@
 
 前缀 `/api/workspace`，全部要求 token。Python 路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
 
-原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks`，写删会先备份并记一条变更，后台任务可查询和取消，stdout/stderr 在运行中增量写入记录（前端 1.5s 轮询显示尾部）；`git/term` 明确不可用（`features` 为 false，Git status 返回 `available:false`）。
+原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=false`（三路块仍是 Python 运行时能力），PTY 仍明确不可用。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -62,6 +62,7 @@
 | POST | `/api/workspace/tasks` | 后台任务 `{command,cwd,timeout}`，返回 `id` |
 | GET | `/api/workspace/tasks?limit=` | 最近任务 |
 | GET | `/api/workspace/tasks/{id}` | 任务状态、输出、日志路径 |
+| GET | `/api/workspace/tasks/{id}/stream` | SSE 任务流：运行中推快照，终态发 done；最长挂 300s |
 | POST | `/api/workspace/tasks/{id}/cancel` | 取消任务并回收进程组 |
 | GET | `/api/workspace/changes?limit=&include_undone=` | 文件变更记录 |
 | POST | `/api/workspace/changes/{id}/undo` | 撤销写入/删除/新建；后续修改冲突 409 |
@@ -69,6 +70,7 @@
 | DELETE | `/api/workspace/file?path=` | 删除文件（先备份）或空目录 |
 | GET | `/api/workspace/git?cwd=` | 兼容旧接口：原始分支/status/diffstat 文本 |
 | GET | `/api/workspace/git/status?cwd=` | 结构化 Git 状态：branch、clean、ahead/behind、merging、files、branches、conflicts |
+| POST | `/api/workspace/git/init` | 初始化工作区 Git 仓库并写入 `.gitignore`（隐藏应用私有数据） |
 | POST | `/api/workspace/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
 | POST | `/api/workspace/git/merge/preview` | 进入两阶段合并 `{cwd,branch}`，返回冲突列表、状态与 premerge 检查点 |
 | POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态并清理检查点 |

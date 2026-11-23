@@ -2,9 +2,9 @@
 
 边界：
 - 只管理工作区里由人显式启动的命令；Agent 的 run_shell 仍走 Agent 自己的调用链；
-- 进程由 `run_shell` 启动，取消时它会回收整个进程组，避免 `npm run dev` 留孤儿；
+- 任务用独立进程组启动，取消时回收整个进程组，避免 `npm run dev` 留孤儿；
 - 任务元数据落 `$AGENT_HOME/workspace_tasks/*.json`，只保留最近 100 条；
-- 输出在任务结束后一次性读取（最多 30KB）。真正的流式日志留给下一阶段。
+- 输出边跑边写入记录（最多 30KB），并提供 `/tasks/{id}/stream` SSE 快照流。
 """
 from __future__ import annotations
 
@@ -168,6 +168,23 @@ class WorkspaceTaskManager:
     def get(self, task_id: str) -> dict | None:
         rec = self._tasks.get(task_id)
         return _public(rec) if rec else None
+
+    async def stream(self, task_id: str):
+        """SSE 生成器：每 0.5s 推快照；终态发 done 后结束。"""
+        last: str | None = None
+        while True:
+            rec = self.get(task_id)
+            if rec is None:
+                yield {"event": "error", "data": json.dumps({"error": "任务不存在"}, ensure_ascii=False)}
+                return
+            payload = json.dumps({"type": "snapshot", "task": rec}, ensure_ascii=False)
+            if payload != last:
+                yield {"event": "task", "data": payload}
+                last = payload
+            if rec.get("status") not in {"running", "cancelling"}:
+                yield {"event": "done", "data": json.dumps({"type": "done", "task": rec}, ensure_ascii=False)}
+                return
+            await asyncio.sleep(0.5)
 
     def cancel(self, task_id: str) -> dict:
         rec = self._tasks.get(task_id)

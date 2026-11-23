@@ -24,6 +24,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 from ..paths import workspace_dir
 from ..tools.files import _resolve
@@ -537,6 +538,15 @@ async def get_workspace_task(task_id: str) -> dict:
     if not task:
         raise HTTPException(404, "任务不存在")
     return task
+
+
+@router.get("/tasks/{task_id}/stream")
+async def stream_workspace_task(task_id: str):
+    """任务增量 SSE；EventSource 不能带 Authorization，前端仍用轮询，此端点给脚本/调试。"""
+    manager = get_manager()
+    if manager.get(task_id) is None:
+        raise HTTPException(404, "任务不存在")
+    return EventSourceResponse(manager.stream(task_id), ping=15)
 
 
 @router.post("/tasks/{task_id}/cancel")

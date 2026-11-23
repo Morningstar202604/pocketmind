@@ -927,6 +927,25 @@ class EngineContractTest {
     }
 
     @Test
+    fun `原生 Git 接口 - 初始化后状态可读且脏文件可见`() {
+        bootstrap()
+        val init = send("POST", "/api/workspace/git/init", "{\"cwd\":\".\"}")
+        assertEquals(200, init.code)
+        val st = JSONObject(get("/api/workspace/git/status?cwd=.").body)
+        assertTrue(st.getBoolean("available"))
+        assertEquals("main", st.getString("branch"))
+        assertTrue(st.getBoolean("clean"))
+        val save = send("PUT", "/api/workspace/file",
+            JSONObject().put("path", "git-note.txt").put("content", "hello\n").toString())
+        assertEquals(200, save.code)
+        val dirty = JSONObject(get("/api/workspace/git/status?cwd=.").body)
+        assertFalse(dirty.getBoolean("clean"))
+        assertTrue((0 until dirty.getJSONArray("files").length()).any {
+            dirty.getJSONArray("files").getJSONObject(it).getString("path") == "git-note.txt"
+        })
+    }
+
+    @Test
     fun `超时未决也记审计 且审计接口受鉴权保护`() {
         bootstrap()
         // 直接构造一次超时：approval.awaitDecision 用最短 10 秒太久，改用 0 → 被收敛到 10

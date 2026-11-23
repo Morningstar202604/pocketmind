@@ -61,6 +61,18 @@ class WorkspaceTasksTest {
     }
 
     @Test
+    fun `SSE 推送增量并在任务结束后发 done`() {
+        val t = ws.startTask("printf 'SSE_A\\n'; sleep 0.4; printf 'SSE_B\\n'", "ws-tasks", 10)
+        val id = t.getString("id")
+        val out = java.io.ByteArrayOutputStream()
+        ws.streamTask(id, SseWriter(out))
+        val text = out.toString(Charsets.UTF_8.name())
+        assertTrue("应包含 snapshot：$text", text.contains("\"type\":\"snapshot\""))
+        assertTrue("应包含 done：$text", text.contains("\"type\":\"done\""))
+        assertTrue("应包含尾部输出：$text", text.contains("SSE_B"))
+    }
+
+    @Test
     fun `取消运行中的任务`() {
         val t = ws.startTask("sleep 30", "ws-tasks", 5)
         val id = t.getString("id")

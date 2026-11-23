@@ -169,6 +169,41 @@ class ApiRouter(
             }
             path == "/api/workspace/git/status" && ex.method == "GET" ->
                 workspace(ex) { ws -> ws.gitStatus(ex.query["cwd"]) }
+            path == "/api/workspace/git/init" && ex.method == "POST" ->
+                workspace(ex) { ws -> ws.gitInit(bodyJson(ex).optString("cwd", ".")) }
+            path == "/api/workspace/git/checkout" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.gitCheckout(body.optString("cwd", "."), body.optString("branch", ""), body.optBoolean("create", false))
+                }
+            }
+            path == "/api/workspace/git/merge/preview" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws -> ws.gitMergePreview(body.optString("cwd", "."), body.optString("branch", "")) }
+            }
+            path == "/api/workspace/git/merge/abort" && ex.method == "POST" ->
+                workspace(ex) { ws -> ws.gitMergeAbort(bodyJson(ex).optString("cwd", ".")) }
+            path == "/api/workspace/git/merge/commit" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws -> ws.gitMergeCommit(body.optString("cwd", "."), body.optString("message", "")) }
+            }
+            path == "/api/workspace/git/merge/checkpoint" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.gitMergeCheckpoint(ex.query["cwd"]) }
+            path == "/api/workspace/git/merge/undo" && ex.method == "POST" ->
+                workspace(ex) { ws -> ws.gitMergeUndo(bodyJson(ex).optString("cwd", ".")) }
+            path == "/api/workspace/git/conflicts" && ex.method == "GET" ->
+                workspace(ex) { ws -> ws.gitConflicts(ex.query["cwd"]) }
+            path == "/api/workspace/git/conflicts/resolve" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.gitResolveConflict(
+                        body.optString("cwd", "."),
+                        body.optString("path", ""),
+                        body.optString("strategy", "ours"),
+                        if (body.has("content") && !body.isNull("content")) body.optString("content") else null,
+                    )
+                }
+            }
             path == "/api/workspace/changes" && ex.method == "GET" ->
                 workspace(ex) { ws ->
                     ws.listChanges(
@@ -194,6 +229,20 @@ class ApiRouter(
                         body.optString("cwd", "."),
                         body.optInt("timeout", 300),
                     )
+                }
+            }
+            path.startsWith("/api/workspace/tasks/") && path.endsWith("/stream") && ex.method == "GET" -> {
+                val id = path.removePrefix("/api/workspace/tasks/").removeSuffix("/stream")
+                if (id.isEmpty() || id.contains('/')) {
+                    ex.respond(400, JSON, "{\"error\":\"任务 id 不合法\"}")
+                } else {
+                    val ws = NativeWorkspace(context)
+                    val writer = ex.startSse()
+                    try { ws.streamTask(id, writer) } catch (e: Exception) {
+                        writer.send(JSONObject().put("type", "error")
+                            .put("error", e.message ?: "任务流失败").toString())
+                        writer.close()
+                    }
                 }
             }
             path.startsWith("/api/workspace/tasks/") && ex.method == "GET" -> {

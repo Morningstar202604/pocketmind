@@ -11,6 +11,7 @@ import {
   getWorkspaceConflicts,
   getWorkspaceFile,
   getWorkspaceGitStatus,
+  initWorkspaceGit,
   getWorkspaceMergeCheckpoint,
   getWorkspaceInfo,
   getWorkspaceTasks,
@@ -378,6 +379,21 @@ export function WorkspacePage() {
   const openGit = async () => {
     await refreshGit();
     setPanel("git");
+  };
+
+  const initGit = async () => {
+    setGitBusy("init");
+    setError("");
+    try {
+      const g = await initWorkspaceGit(cwd || info?.root || ".");
+      setGit(g);
+      await refreshGit();
+      setStatus("已初始化 Git 仓库");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
   };
 
   const checkoutBranch = async (branch: string) => {
@@ -901,7 +917,12 @@ export function WorkspacePage() {
             {panel === "git" ? (
               <div className="ws-git-panel">
                 {git && !git.available && (
-                  <p className="ws-muted">{git.message || "当前目录不是 Git 仓库；先 git init 或把项目放到工作区。"}</p>
+                  <div className="ws-merge-box">
+                    <p className="ws-muted">{git.message || "当前目录不是 Git 仓库；先初始化或把项目放到工作区。"}</p>
+                    <button className="btn primary sm" onClick={() => void initGit()} disabled={gitBusy !== ""}>
+                      {gitBusy === "init" ? "初始化中…" : "初始化 Git 仓库"}
+                    </button>
+                  </div>
                 )}
                 <div className="ws-git-summary">
                   <span className={`ws-git-dot ${git?.clean ? "ok" : "dirty"}`} />
@@ -991,7 +1012,7 @@ export function WorkspacePage() {
                             </span>
                           </div>
                           <div className="ws-conflict-head-actions">
-                            {!c.binary && (
+                            {!c.binary && info.features.git_blocks !== false && (
                               <button
                                 className="btn sm"
                                 disabled={blockBusy !== ""}

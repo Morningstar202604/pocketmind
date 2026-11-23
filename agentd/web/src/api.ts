@@ -347,6 +347,7 @@ export interface WorkspaceInfo {
     tasks?: boolean;
     locks?: boolean;
     git_merge?: boolean;
+    git_blocks?: boolean;
   };
 }
 export interface WorkspaceEntry {
@@ -527,6 +528,8 @@ export const deleteWorkspaceFile = (path: string) =>
   }>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
 export const getWorkspaceGitStatus = (cwd: string) =>
   api.get<WorkspaceGitStatus>(`/api/workspace/git/status?cwd=${encodeURIComponent(cwd)}`);
+export const initWorkspaceGit = (cwd: string) =>
+  api.post<WorkspaceGitStatus>("/api/workspace/git/init", { cwd });
 export const checkoutWorkspaceBranch = (cwd: string, branch: string, create = false) =>
   api.post<{ ok: boolean; branch: string; changed: boolean }>("/api/workspace/git/checkout", {
     cwd, branch, create,

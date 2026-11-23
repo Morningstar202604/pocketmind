@@ -115,7 +115,10 @@ android {
 }
 
 dependencies {
-    // 运行时零第三方依赖：原生 WebView 即可，不引 Capacitor/WebView 增强库。
+    // 原生 Git：JGit 纯 Java，避免把 git 二进制打进 APK；slf4j-nop 关掉日志绑定。
+    implementation "org.eclipse.jgit:org.eclipse.jgit:5.13.3.202401111512-r"
+    implementation "org.slf4j:slf4j-api:1.7.36"
+    runtimeOnly "org.slf4j:slf4j-nop:1.7.36"
     // 测试依赖只在 JVM 单测用，不进 APK。
     testImplementation "junit:junit:4.13.2"
     // Robolectric：纯 JVM 模拟 Android 框架（Activity/Context/Intent），

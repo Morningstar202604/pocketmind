@@ -10,8 +10,9 @@ import java.util.concurrent.TimeUnit
 /**
  * 原生工作区后台任务：长命令不占住 HTTP 请求，可查询、可取消。
  *
- * 输出仍是一次性快照（最多 30KB），不做流式；任务元数据落 `workspace_tasks/<id>.json`
- * 并从工作区文件树里隐藏。进程运行在 app uid 的 `/system/bin/sh` 下，没有 Python/Node。
+ * 输出有增量快照（最多 30KB），并提供 SSE 任务流；任务元数据落
+ * `workspace_tasks/<id>.json` 并从工作区文件树里隐藏。进程运行在 app uid 的
+ * `/system/bin/sh` 下，没有 Python/Node。
  */
 class WorkspaceTasks(private val context: Context) {
 
@@ -76,6 +77,31 @@ class WorkspaceTasks(private val context: Context) {
             processes.remove(oldId)
             runCatching { File(logDir, "$oldId.json").delete() }
         }
+    }
+
+    /** SSE：每 0.5s 推一次快照，状态终结后发 done 并关闭。最长挂 300s，客户端可重连。 */
+    fun stream(id: String, writer: SseWriter, maxSeconds: Int = 300) {
+        val started = System.currentTimeMillis()
+        var last = ""
+        while (System.currentTimeMillis() - started < maxSeconds.coerceIn(1, 600) * 1000L) {
+            val rec = get(id)
+            if (!rec.has("id")) {
+                writer.send(JSONObject().put("type", "error")
+                    .put("error", rec.optString("error", "任务不存在")).toString())
+                break
+            }
+            val payload = JSONObject().put("type", "snapshot").put("task", rec).toString()
+            if (payload != last) {
+                if (!writer.send(payload)) break
+                last = payload
+            }
+            if (rec.optString("status") !in setOf("running", "cancelling")) {
+                writer.send(JSONObject().put("type", "done").put("task", rec).toString())
+                break
+            }
+            try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+        }
+        writer.close()
     }
 
     fun cancel(id: String): JSONObject {

@@ -108,6 +108,16 @@ def main() -> int:
             time.sleep(0.1)
         check("后台任务完成", detail.get("status") == "done" and "TASK_OK" in detail.get("stdout", ""), str(detail)[:200])
 
+        sse_task = c.post("/api/workspace/tasks", json={
+            "command": "printf 'SSE_ONE\\n'; sleep 0.4; printf 'SSE_END\\n'", "cwd": ".", "timeout": 30,
+        })
+        sse_id = sse_task.json().get("id")
+        with c.stream("GET", f"/api/workspace/tasks/{sse_id}/stream") as resp:
+            sse_body = "\n".join(resp.iter_lines())
+        check("任务 SSE 返回快照与 done", '"type": "snapshot"' in sse_body and '"type": "done"' in sse_body and "SSE_END" in sse_body, sse_body[:300])
+        missing = c.get("/api/workspace/tasks/no-such/stream")
+        check("任务 SSE 不存在返回 404", missing.status_code == 404, str(missing.text[:120]))
+
         slow = c.post("/api/workspace/tasks", json={"command": "sleep 5", "cwd": ".", "timeout": 30})
         slow_id = slow.json().get("id")
         time.sleep(0.2)
