@@ -6,6 +6,8 @@ import {
   abortWorkspaceMerge,
   checkoutWorkspaceBranch,
   commitWorkspaceChanges,
+  cloneWorkspaceRepo,
+  pullWorkspaceRepo,
   commitWorkspaceMerge,
   getWorkspaceChanges,
   getWorkspaceConflictBlocks,
@@ -14,7 +16,11 @@ import {
   getWorkspaceGitStatus,
   initWorkspaceGit,
   getWorkspaceMergeCheckpoint,
+  getApprovalAudit,
   getWorkspaceInfo,
+  getWorkspaceProot,
+  bootstrapWorkspaceProot,
+  selfTestWorkspaceProot,
   getWorkspaceTasks,
   getWorkspaceTree,
   makeWorkspaceDir,
@@ -29,6 +35,7 @@ import {
   undoAllWorkspaceChanges,
   undoWorkspaceChange,
   undoWorkspaceMerge,
+  type ApprovalAuditItem,
   type WorkspaceChange,
   type WorkspaceCheckpoint,
   type WorkspaceConflict,
@@ -38,6 +45,7 @@ import {
   type WorkspaceGitStatus,
   type WorkspaceInfo,
   type WorkspacePreview,
+  type WorkspaceProotStatus,
   type WorkspaceSearchHit,
   type WorkspaceTask,
   type WorkspaceTree,
@@ -114,6 +122,9 @@ export function WorkspacePage() {
   const [newBranch, setNewBranch] = useState("");
   const [gitBusy, setGitBusy] = useState("");
   const [mergeCheckpoint, setMergeCheckpoint] = useState<WorkspaceCheckpoint | null>(null);
+  const [cloneUrl, setCloneUrl] = useState("");
+  const [cloneTarget, setCloneTarget] = useState("");
+  const [cloneBranch, setCloneBranch] = useState("");
   const [conflicts, setConflicts] = useState<WorkspaceConflict[]>([]);
   const [conflictOpen, setConflictOpen] = useState<string | null>(null);
   const [manualDrafts, setManualDrafts] = useState<Record<string, string>>({});
@@ -123,7 +134,13 @@ export function WorkspacePage() {
   const [jumpLine, setJumpLine] = useState<number | null>(null);
   const [consoleMode, setConsoleMode] = useState<"term" | "cmd">("term");
   const [termFlavor, setTermFlavor] = useState<"android" | "linux">("android");
-  const [panel, setPanel] = useState<"changes" | "tasks" | "git" | null>(null);
+  const [panel, setPanel] = useState<"changes" | "tasks" | "git" | "env" | "audit" | null>(null);
+  const [prootStatus, setProotStatus] = useState<WorkspaceProotStatus | null>(null);
+  const [prootProfile, setProotProfile] = useState<"minimal" | "full">("minimal");
+  const [prootBusy, setProotBusy] = useState("");
+  const [prootTest, setProotTest] = useState<WorkspaceProotStatus["last_test"]>(null);
+  const [audit, setAudit] = useState<ApprovalAuditItem[]>([]);
+  const [auditBusy, setAuditBusy] = useState(false);
   const [changes, setChanges] = useState<WorkspaceChange[]>([]);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [panelBusy, setPanelBusy] = useState("");
@@ -134,7 +151,7 @@ export function WorkspacePage() {
   const dirty = current != null && draft !== current.content;
   const nativeRuntime = info?.runtime === "kotlin";
   const hasPty = !nativeRuntime || info?.features?.pty === true;
-  const hasProot = !nativeRuntime || info?.features?.proot === true;
+  const hasProot = info?.features?.proot === true;
   const showTerm = consoleMode === "term" && hasPty;
 
   useEffect(() => {
@@ -204,6 +221,52 @@ export function WorkspacePage() {
       alive = false;
     };
   }, [loadTree]);
+
+  const loadProot = useCallback(async () => {
+    try {
+      setProotStatus(await getWorkspaceProot());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (panel === "env") void loadProot();
+  }, [panel, loadProot]);
+
+  useEffect(() => {
+    if (prootStatus?.bootstrap !== "running") return;
+    const timer = window.setInterval(() => void loadProot(), 2000);
+    return () => window.clearInterval(timer);
+  }, [prootStatus?.bootstrap, loadProot]);
+
+  const startProotBootstrap = async () => {
+    setProotBusy("install");
+    setError("");
+    try {
+      await bootstrapWorkspaceProot(prootProfile);
+      setStatus(`正在安装 ${prootProfile === "full" ? "完整" : "最小"}开发环境；可关闭面板，后台继续`);
+      await loadProot();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProotBusy("");
+    }
+  };
+
+  const runProotSelfTest = async () => {
+    setProotBusy("test");
+    setError("");
+    try {
+      const r = await selfTestWorkspaceProot();
+      setProotTest(r);
+      await loadProot();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProotBusy("");
+    }
+  };
 
   const openFile = useCallback(async (path: string, line?: number) => {
     setError("");
@@ -422,6 +485,57 @@ export function WorkspacePage() {
       setGit(g);
       await refreshGit();
       setStatus("已初始化 Git 仓库");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const openAudit = async () => {
+    setAuditBusy(true);
+    setError("");
+    try {
+      const r = await getApprovalAudit(80);
+      setAudit(r.items ?? []);
+      setPanel("audit");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAuditBusy(false);
+    }
+  };
+
+  const cloneRepo = async () => {
+    if (!cloneUrl.trim() || !cloneTarget.trim()) return;
+    setGitBusy("clone");
+    setError("");
+    try {
+      const g = await cloneWorkspaceRepo(cloneUrl.trim(), cloneTarget.trim(), cloneBranch.trim());
+      setGit(g);
+      setCloneUrl("");
+      setCloneBranch("");
+      await loadTree(info?.root || ".");
+      await refreshGit(g.repo_root);
+      setStatus(`已克隆到 ${cloneTarget}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const pullRepo = async () => {
+    if (!git) return;
+    setGitBusy("pull");
+    setError("");
+    try {
+      const r = await pullWorkspaceRepo(git.repo_root || cwd);
+      setGit(r.state);
+      const c = await getWorkspaceConflicts(git.repo_root || cwd);
+      setConflicts(c.items ?? []);
+      setStatus(r.ok ? `已拉取 ${r.merge_status || ""}` : (r.message || "拉取有冲突，请处理"));
+      refreshCurrentTree();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -707,7 +821,11 @@ export function WorkspacePage() {
 
   const entries = useMemo(() => tree?.entries ?? [], [tree]);
   const rootLabel = info?.roots.find((r) => r.path === info.root)?.label || "工作区";
-  const panelTitle = panel === "changes" ? "工作区变更" : panel === "tasks" ? "后台任务" : "Git 分支 / 合并";
+  const panelTitle = panel === "changes" ? "工作区变更"
+    : panel === "tasks" ? "后台任务"
+    : panel === "env" ? "Linux 环境"
+    : panel === "audit" ? "审批审计"
+    : "Git 分支 / 合并";
 
   if (!info) {
     return (
@@ -743,6 +861,16 @@ export function WorkspacePage() {
           {info.features.git !== false && (
             <button className="btn sm" onClick={() => void openGit()}>
               Git{git?.branch ? ` ${git.branch}` : ""}{git && !git.clean ? " •" : ""}
+            </button>
+          )}
+          {nativeRuntime && (
+            <button className="btn sm" onClick={() => void openAudit()} disabled={auditBusy}>
+              {auditBusy ? "读取中…" : "审计"}
+            </button>
+          )}
+          {nativeRuntime && hasProot && (
+            <button className="btn sm" onClick={() => setPanel("env")}>
+              Linux 环境
             </button>
           )}
           {info.features.changes !== false && (
@@ -998,10 +1126,48 @@ export function WorkspacePage() {
               <div className="ws-git-panel">
                 {git && !git.available && (
                   <div className="ws-merge-box">
-                    <p className="ws-muted">{git.message || "当前目录不是 Git 仓库；先初始化或把项目放到工作区。"}</p>
-                    <button className="btn primary sm" onClick={() => void initGit()} disabled={gitBusy !== ""}>
-                      {gitBusy === "init" ? "初始化中…" : "初始化 Git 仓库"}
-                    </button>
+                    <p className="ws-muted">{git.message || "当前目录不是 Git 仓库；先初始化或克隆一个远程仓库。"}</p>
+                    <div className="ws-clone-form">
+                      {nativeRuntime && (
+                        <>
+                          <input
+                            value={cloneUrl}
+                            onChange={(e) => setCloneUrl(e.target.value)}
+                            placeholder="https://github.com/user/repo.git"
+                            aria-label="仓库地址"
+                            spellCheck={false}
+                          />
+                          <input
+                            value={cloneTarget}
+                            onChange={(e) => setCloneTarget(e.target.value)}
+                            placeholder="目标目录，例如 repos/project"
+                            aria-label="克隆目标目录"
+                            spellCheck={false}
+                          />
+                          <input
+                            value={cloneBranch}
+                            onChange={(e) => setCloneBranch(e.target.value)}
+                            placeholder="分支（可选）"
+                            aria-label="克隆分支"
+                            spellCheck={false}
+                          />
+                          <div className="ws-panel-row">
+                            <button
+                              className="btn primary sm"
+                              onClick={() => void cloneRepo()}
+                              disabled={gitBusy !== "" || !cloneUrl.trim() || !cloneTarget.trim()}
+                            >
+                              {gitBusy === "clone" ? "克隆中…" : "克隆仓库"}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      <div className="ws-panel-row">
+                        <button className="btn sm" onClick={() => void initGit()} disabled={gitBusy !== ""}>
+                          {gitBusy === "init" ? "初始化中…" : "初始化空仓库"}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
                 <div className="ws-git-summary">
@@ -1039,6 +1205,11 @@ export function WorkspacePage() {
                   <button className="btn sm" onClick={() => void refreshGit()} disabled={gitBusy !== ""}>
                     刷新
                   </button>
+                  {nativeRuntime && git?.available && (
+                    <button className="btn sm" onClick={() => void pullRepo()} disabled={gitBusy !== "" || git.merging}>
+                      {gitBusy === "pull" ? "拉取中…" : "拉取 origin"}
+                    </button>
+                  )}
                   <select
                     value={gitTarget}
                     onChange={(e) => setGitTarget(e.target.value)}
@@ -1266,6 +1437,106 @@ export function WorkspacePage() {
                 <p className="ws-muted">
                   合并会在工作区留下冲突文件；先选 ours/theirs，再提交合并。中止会恢复合并前状态。
                 </p>
+              </div>
+            ) : panel === "audit" ? (
+              audit.length === 0 ? (
+                <p className="ws-muted">还没有审批记录。危险工具被批准或拒绝后会写进只读审计日志。</p>
+              ) : (
+                <ul className="ws-audit-list">
+                  {audit.map((a, i) => (
+                    <li key={`${a.call}-${i}`}>
+                      <div className="ws-panel-row">
+                        <div>
+                          <code>{a.tool}</code>
+                          <span className={`tool-risk ${a.risk}`}>{a.risk}</span>
+                          <span className="ws-muted">{a.decision} · {shortTime(a.ts)}</span>
+                        </div>
+                        <span className="ws-muted">{a.session}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : panel === "env" ? (
+              <div className="ws-env-panel">
+                {!prootStatus ? (
+                  <p className="ws-muted">正在读取 PRoot 环境…</p>
+                ) : !prootStatus.available ? (
+                  <div className="ws-merge-box">
+                    <p>当前设备或安装包没有可用的 PRoot（需要 arm64 设备与 libproot.so）。</p>
+                    <p className="ws-muted">Android Shell 与命令台仍可用；Linux 终端需要 arm64 APK。</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="ws-git-summary">
+                      <span className={`ws-git-dot ${prootStatus.rootfs_ready ? "ok" : "dirty"}`} />
+                      <strong>{prootStatus.rootfs_ready ? "Alpine rootfs 已就绪" : "rootfs 未解压"}</strong>
+                      <span className="ws-muted">{formatSize(prootStatus.rootfs_bytes)}</span>
+                      <span className="ws-muted">
+                        {prootStatus.bootstrap === "running" ? "安装中…"
+                          : prootStatus.bootstrap === "done" ? "开发依赖已安装"
+                          : prootStatus.bootstrap === "failed" ? "上次安装失败"
+                          : "开发依赖未安装"}
+                      </span>
+                    </div>
+                    <div className="ws-merge-box">
+                      <p>在 Alpine guest 内安装 Node、Python、Git 与基础编译链。首次需要网络，rootfs 会增大。</p>
+                      <div className="ws-merge-commit">
+                        <select
+                          value={prootProfile}
+                          onChange={(e) => setProotProfile(e.target.value === "full" ? "full" : "minimal")}
+                          aria-label="开发环境规格"
+                          disabled={prootStatus.bootstrap === "running"}
+                        >
+                          <option value="minimal">最小 · Node/Python/Git</option>
+                          <option value="full">完整 · 加 gcc/make/headers</option>
+                        </select>
+                        <button
+                          className="btn primary sm"
+                          disabled={prootStatus.bootstrap === "running" || prootBusy !== ""}
+                          onClick={() => void startProotBootstrap()}
+                        >
+                          {prootStatus.bootstrap === "running" ? "安装中…" : "安装开发环境"}
+                        </button>
+                        <button
+                          className="btn sm"
+                          disabled={prootBusy !== "" || prootStatus.bootstrap === "running"}
+                          onClick={() => void runProotSelfTest()}
+                        >
+                          {prootBusy === "test" ? "自检中…" : "环境自检"}
+                        </button>
+                      </div>
+                      {prootStatus.last_error && <p className="ws-error">{prootStatus.last_error}</p>}
+                    </div>
+                    {(prootTest ?? prootStatus.last_test) && (
+                      <div className="ws-merge-box">
+                        <p>
+                          自检结果：
+                          {(prootTest ?? prootStatus.last_test)?.ok ? " 通过" : " 未通过"}
+                          {(prootTest ?? prootStatus.last_test)?.exit_code != null
+                            ? ` · exit ${(prootTest ?? prootStatus.last_test)?.exit_code}` : ""}
+                        </p>
+                        <ul className="ws-env-checks">
+                          {((prootTest ?? prootStatus.last_test)?.checks || []).map((c) => (
+                            <li key={c.name}>
+                              <span className={c.ok ? "ok" : "bad"}>{c.ok ? "✓" : "✗"}</span>
+                              <code>{c.name}</code>
+                              <span className="ws-muted">{c.detail || (c.ok ? "可用" : "未安装")}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {((prootTest ?? prootStatus.last_test)?.error) && (
+                          <p className="ws-error">{(prootTest ?? prootStatus.last_test)?.error}</p>
+                        )}
+                      </div>
+                    )}
+                    <p className="ws-muted">
+                      Linux 终端会把当前工作目录挂到 guest 的 <code>/workspace</code>。不要在应用根目录开 Linux 终端：
+                      guest 能看到根目录下的配置文件；请在项目子目录里开。
+                    </p>
+                    <pre className="ws-task-log ws-env-log">{prootStatus.log.slice(-4000) || "尚无安装日志。"}</pre>
+                  </>
+                )}
               </div>
             ) : panel === "changes" ? (
               changes.length === 0 ? (

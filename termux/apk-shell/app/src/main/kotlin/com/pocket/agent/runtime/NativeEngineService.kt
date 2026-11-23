@@ -7,8 +7,10 @@ import android.os.IBinder
 import android.util.Log
 import com.pocket.agent.agent.AgentLoop
 import com.pocket.agent.agent.ApprovalCenter
+import com.pocket.agent.agent.SubAgentRunner
 import com.pocket.agent.data.SettingsStore
 import com.pocket.agent.data.Store
+import com.pocket.agent.tools.ToolRegistry
 import com.pocket.agent.tools.TtsPool
 
 /**
@@ -39,6 +41,7 @@ class NativeEngineService : Service() {
         val approval = ApprovalCenter(this)
         AgentLoop.appContext = { applicationContext }
         val agent = AgentLoop(store, settings, approval)
+        ToolRegistry.registerDynamic(SubAgentRunner.toolDef(agent, store))
         val scheduler = NativeScheduler(this, store, agent)
         val router = ApiRouter(this, store, settings, approval, agent, {
             engine?.takeIf { it.state == EngineState.RUNNING }
@@ -62,7 +65,7 @@ class NativeEngineService : Service() {
         }
         // MCP 连接是网络动作，不能占住主线程；失败只影响 MCP 工具是否出现。
         Thread {
-            runCatching { McpManager.refresh(settings) }
+            runCatching { McpManager.refresh(settings, this) }
                 .onFailure { Log.w(TAG, "MCP refresh failed: ${it.message}") }
         }.apply { isDaemon = true; start() }
         startForegroundCompat()
@@ -105,6 +108,7 @@ class NativeEngineService : Service() {
 
     override fun onDestroy() {
         NativeTerminalHub.shutdown()
+        McpManager.closeAll()
         TtsPool.shutdown()
         engine?.stop()
         engine = null

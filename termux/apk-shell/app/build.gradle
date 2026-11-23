@@ -20,7 +20,14 @@ tasks.register('syncWebDist', Copy) {
     from webDistDir
     into file('src/main/assets/web')
 }
-preBuild.dependsOn syncWebDist
+// 合规文件随 APK 分发：PRoot 是 GPL 系，第三方说明与许可证必须能被用户看到。
+tasks.register('syncLegal', Copy) {
+    doFirst { delete file('src/main/assets/legal') }
+    from rootProject.file('../../THIRD_PARTY_NOTICES.md')
+    from rootProject.file('../../LICENSE')
+    into file('src/main/assets/legal')
+}
+preBuild.dependsOn syncWebDist, syncLegal
 
 // 发布签名：可选的 keystore.properties（不入库）。
 // 没有它时 release 构建产出 unsigned APK —— 显式命名，避免把未签名包当成品分发。

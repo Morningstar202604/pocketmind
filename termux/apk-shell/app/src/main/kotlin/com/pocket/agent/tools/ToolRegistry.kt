@@ -148,9 +148,10 @@ object ToolRegistry {
     }
 
     /** LLM 的 tools schema（OpenAI function calling 格式）。 */
-    fun schemaJson(): JSONArray {
+    fun schemaJson(allowed: Set<String>? = null): JSONArray {
         val arr = JSONArray()
         all().forEach { t ->
+            if (allowed != null && t.name !in allowed) return@forEach
             arr.put(
                 JSONObject()
                     .put("type", "function")
@@ -172,6 +173,12 @@ object ToolRegistry {
     fun registerDynamic(t: ToolDef) {
         tools.removeIf { it.name == t.name }
         tools.add(t)
+    }
+
+    /** 刷新 MCP 时移除旧动态工具，避免服务器被删后工具仍留在 schema 里。 */
+    @Synchronized
+    fun removeDynamicGroup(group: String) {
+        tools.removeIf { it.group == group }
     }
 
     private fun schema(vararg fields: Pair<String, Pair<String, Boolean>>): JSONObject {

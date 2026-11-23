@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.pocket.agent.agent.AgentLoop
 import com.pocket.agent.agent.ApprovalCenter
+import com.pocket.agent.agent.SubAgentRunner
 import com.pocket.agent.data.SettingsStore
 import com.pocket.agent.data.Store
 import com.pocket.agent.llm.LlmClient
+import com.pocket.agent.tools.ToolRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -73,6 +75,7 @@ class HarnessTest {
         AgentLoop.appContext = { context }
         fake = FakeLlm(SettingsStore.LlmConfig("http://fake.local", "sk-test", "fake-model", 0.7, 2048))
         loop = AgentLoop(store, settings, approval) { fake }
+        ToolRegistry.registerDynamic(SubAgentRunner.toolDef(loop, store))
     }
 
     @After
@@ -98,6 +101,24 @@ class HarnessTest {
         val sse = runChat(sid)
         assertTrue("应返回 invalid_arguments：$sse", sse.contains("invalid_arguments"))
         assertFalse("参数坏了却写了文件", target.exists())
+    }
+
+    @Test
+    fun `子代理只读且不能写文件`() {
+        val sid = store.createSession().getString("id")
+        val target = java.io.File(context.filesDir, "subagent-must-not-write.txt")
+        fake.turns.add(FakeTurn(calls = listOf(
+            Triple("s1", "subagent", "{\"task\":\"看看工作区\"}")
+        )))
+        fake.turns.add(FakeTurn(calls = listOf(
+            Triple("w1", "write_file", "{\"path\":\"$target\",\"content\":\"x\"}")
+        )))
+        fake.turns.add(FakeTurn(text = "写入被拒绝。"))
+        fake.turns.add(FakeTurn(text = "父代理结论。"))
+        val sse = runChat(sid)
+        assertFalse("子代理不应能写文件", target.exists())
+        assertTrue("子代理拒绝应回传给模型：$sse", sse.contains("headless_denied") || sse.contains("拒绝"))
+        assertTrue("父代理应收尾：$sse", sse.contains("父代理结论"))
     }
 
     @Test

@@ -48,7 +48,7 @@
 
 前缀 `/api/workspace`，全部要求 token。Python 路径规则：读走 `$HOME` / `~/storage` / `/sdcard` 白名单；写/删/改名只允许 `AGENT_WORKSPACE` 内部。
 
-原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=true`（JGit 计算的 base/ours/theirs 逐块选择）；`features.pty=true` 时 WebSocket 终端走 JNI `libpty.so`，不支持 ABI 时明确降级为命令台。变更面板另有 `POST /changes/undo-all` 撤销当前变更集。
+原生 APK 的根是应用私有 `filesDir`，`config.json` / `pocketmind.db` / `checkpoints` / `audit` / `workspace_changes.json` / `workspace_tasks` / `.git` / `proot` 不出现在树里，也不能读写；读上限 200KB、搜索单文件 1MB。原生已实现 `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks/git`：写删会先备份并记一条变更，后台任务可查询、取消、通过 SSE 看增量，Git 用 JGit 纯 Java 实现状态/分支/预合并/提交/中止/撤销/冲突整文件解决；`features.git_blocks=true`（JGit 计算的 base/ours/theirs 逐块选择）；`features.pty=true` 时 WebSocket 终端走 JNI `libpty.so`，不支持 ABI 时明确降级为命令台；`features.proot=true` 时 `mode=proot` 走 Alpine，当前 cwd 绑定到 guest `/workspace`。变更面板另有 `POST /changes/undo-all` 撤销当前变更集。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -70,6 +70,8 @@
 | DELETE | `/api/workspace/file?path=` | 删除文件（先备份）或空目录 |
 | GET | `/api/workspace/git?cwd=` | 兼容旧接口：原始分支/status/diffstat 文本 |
 | GET | `/api/workspace/git/status?cwd=` | 结构化 Git 状态：branch、clean、ahead/behind、merging、files、branches、conflicts |
+| POST | `/api/workspace/git/clone` | 克隆 `{url,target,branch?}`；支持 http(s)/`file://`，目标必须为空 |
+| POST | `/api/workspace/git/pull` | fetch + pull `origin`；冲突时返回 `state.merging=true` 与现场 |
 | POST | `/api/workspace/git/init` | 初始化工作区 Git 仓库并写入 `.gitignore`（隐藏应用私有数据） |
 | POST | `/api/workspace/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
 | POST | `/api/workspace/git/commit` | 提交工作区改动 `{cwd,message,all}`；`all=true` 时先暂存当前目录全部改动 |
@@ -82,11 +84,16 @@
 | POST | `/api/workspace/git/conflicts/resolve` | 解决单个冲突：`ours` / `theirs` / `manual`，并 `git add` |
 | GET | `/api/workspace/git/conflicts/blocks?cwd=&path=` | 三路冲突块（ours/base/theirs，来自 `git merge-file --diff3`） |
 | POST | `/api/workspace/git/conflicts/blocks/resolve` | 按块解决：`choices:[{index,side,content?}]`，全部块都选完才写文件并 `git add` |
+| GET | `/api/workspace/proot` | PRoot 状态：available/rootfs/bootstrap/log/last_test（只读缓存，不解压） |
+| POST | `/api/workspace/proot/bootstrap` | 后台安装开发依赖 `{profile:minimal|full}`；minimal=Node/Python/Git，full 加 gcc/make |
+| GET | `/api/workspace/proot/selftest` | 真启动 proot 自检：alpine-release/uid/apk/node/python3/git/gcc/make |
 | POST | `/api/workspace/patch` | 应用 unified diff；默认 `dry_run=true` 只预检 |
 | WS | `/api/workspace/term?cwd=&token=&session=&mode=shell|proot` | PTY；`mode=proot` 启动 Alpine/PRoot，30 秒内带 `session` 重连可接管原 shell |
 
 写文件、删除、重命名、撤销、冲突 resolve 都经过进程内路径锁；默认等待 8 秒，
 超时返回 409。保存仍带 `expected_mtime`，跨进程/命令台改动由 mtime 兜底。
+
+`mode=proot` 首次会解压 Alpine rootfs，并把当前 `cwd` 通过 `-b host:/workspace` 挂进 guest；不要在应用根目录开 Linux 终端（guest 能看到根目录下的配置/数据库），请在项目子目录里开。
 
 WS 首帧为 `{"type":"ready","session_id":...,"reconnected":bool}`，其余为原始终端输出；客户端输入 `{"type":"input","data":...}`、`{"type":"resize","cols":..,"rows":..}`。
 
@@ -148,14 +155,17 @@ WS 首帧为 `{"type":"ready","session_id":...,"reconnected":bool}`，其余为�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/tools` | 工具清单（名称/描述/风险/分组/超时） |
-| GET | `/api/mcp` | 原生 MCP：已连接的 HTTP 服务器与 `mcp__server__tool` 列表 |
-| POST | `/api/mcp/refresh` | 重新初始化 Streamable HTTP MCP 服务器 |
+| GET | `/api/mcp` | 原生 MCP：已连接的 HTTP/stdio 服务器与 `mcp__server__tool` 列表 |
+| POST | `/api/mcp/refresh` | 重新初始化 MCP：`url` 走 Streamable HTTP；`command`+`args` 经 PRoot 启动 stdio（工作区绑定为 guest `/workspace`，只装可信服务器） |
 | POST | `/api/workspace/changes/undo-all` | 一次撤销当前变更集（逐条失败不中断） |
 | GET/PUT | `/api/settings` | 读写配置；GET 返回的 api_key / token / tg_token 均为打码值 |
 | POST | `/api/llm/test` | 用当前配置发一次最小请求验证连通性 |
 | GET | `/api/providers` | 内置厂商预设 |
 | GET | `/api/export` | 全量导出（会话/消息/归档/清单/档案/知识库/定时任务） |
 | POST | `/api/import` | 从导出文件恢复：合并语义（同 id 会话跳过、知识库去重、任务默认停用），坏文件 400 且不写半截 |
+
+stdio MCP 进程以 app uid 运行，`filesDir` 被绑定为 guest `/workspace`，因此服务器能读到
+`config.json` / `pocketmind.db` 等同目录文件；只安装可信服务器，其工具默认按 danger 审批。
 
 `PUT /api/settings` 的语义：`api_key` / `server.token` / `server.tg_token` 回传打码值
 或空串时**不覆盖**已存值，只有新值才写入；数值字段由 pydantic 模型收敛到合法区间。

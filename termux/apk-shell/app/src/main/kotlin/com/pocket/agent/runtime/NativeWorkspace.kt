@@ -262,13 +262,21 @@ class NativeWorkspace(private val context: Context) {
         val dir = resolve(cwd ?: ".", mustExist = true)
         if (!dir.isDirectory) throw WorkspaceException(400, "终端 cwd 不是目录")
         if (mode == "proot") {
-            val argv = NativeProot.argv(context)
+            val argv = NativeProot.argv(context, dir)
                 ?: throw WorkspaceException(503, "PRoot 不可用：rootfs 解压失败或 ABI 不支持")
             NativeTerminalHub.serve(ws, dir, root, context.cacheDir, requested, "proot", argv, NativeProot.env(context))
         } else {
             NativeTerminalHub.serve(ws, dir, root, context.cacheDir, requested, "shell")
         }
     }
+
+    fun gitClone(url: String?, target: String?, branch: String?): JSONObject {
+        if (url.isNullOrBlank()) throw WorkspaceException(400, "url 不能为空")
+        if (target.isNullOrBlank()) throw WorkspaceException(400, "target 不能为空")
+        return git.clone(url, target, branch)
+    }
+
+    fun gitPull(cwd: String?): JSONObject = git.pull(resolve(cwd ?: ".", mustExist = true))
 
     fun gitStatus(cwd: String?): JSONObject = git.status(resolve(cwd ?: ".", mustExist = true))
 

@@ -65,6 +65,57 @@ class NativeGit(private val root: File) {
         return status(dir).put("initialized", true)
     }
 
+    /** 克隆公开 HTTPS 仓库到工作区子目录；目标必须不存在或为空。 */
+    fun clone(url: String, target: String, branch: String? = null): JSONObject {
+        val uri = url.trim()
+        if (!uri.startsWith("https://") && !uri.startsWith("http://") && !uri.startsWith("file:")) {
+            fail(400, "原生 Git 支持 http(s) 与 file:// 仓库地址；私有库请把 token 放进 URL")
+        }
+        val rel = normalizeRel(target)
+        val dir = File(root, rel).canonicalFile
+        if (dir != root && !dir.path.startsWith(rootPath + File.separator)) fail(403, "目标路径越界")
+        if (dir.exists() && (dir.listFiles()?.isNotEmpty() == true)) fail(409, "目标目录非空：$rel")
+        dir.parentFile?.mkdirs()
+        val cmd = Git.cloneRepository()
+            .setURI(uri)
+            .setDirectory(dir)
+            .setCloneAllBranches(true)
+        if (!branch.isNullOrBlank()) cmd.setBranch(validateBranch(branch))
+        try {
+            cmd.call().use { }
+        } catch (e: Exception) {
+            runCatching { dir.deleteRecursively() }
+            fail(400, "克隆失败：${e.message}")
+        }
+        return status(dir).put("cloned", rel).put("url", uri)
+    }
+
+    /** 从 origin 拉取当前分支；有冲突时返回 merging 状态而不是抛异常。 */
+    fun pull(cwd: File): JSONObject {
+        val dir = checkedDir(cwd)
+        val git = open(dir)
+        git.use {
+            try {
+                it.fetch().setRemote("origin").setRemoveDeletedRefs(true).call()
+            } catch (e: Exception) {
+                fail(400, "fetch 失败：${e.message}")
+            }
+            val pull = try {
+                it.pull().setRemote("origin").call()
+            } catch (e: Exception) {
+                // JGit 在冲突时可能抛出 CheckoutConflictException；保留工作区现场，交给冲突面板。
+                val st = status(dir)
+                if (st.optBoolean("merging") || !st.optBoolean("clean")) {
+                    return JSONObject().put("ok", false).put("message", e.message ?: "pull 有冲突")
+                        .put("state", st)
+                }
+                fail(400, "pull 失败：${e.message}")
+            }
+            val merged = pull.mergeResult?.mergeStatus?.toString() ?: "FAST_FORWARD"
+            return JSONObject().put("ok", true).put("merge_status", merged).put("state", status(dir))
+        }
+    }
+
     fun status(cwd: File): JSONObject {
         val dir = checkedDir(cwd)
         val git = openOrNull(dir)

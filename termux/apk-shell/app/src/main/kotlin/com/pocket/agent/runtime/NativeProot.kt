@@ -33,6 +33,16 @@ object NativeProot {
         return File(libDir, "libproot.so").isFile && File(libDir, "libproot-loader.so").isFile
     }
 
+    /** 不解压、不检查 rootfs，只判断是否已经准备好。状态接口轮询不能触发 8MB 解压。 */
+    fun rootfsIfReady(context: Context): File? {
+        if (!available(context)) return null
+        val root = File(File(context.filesDir, "proot"), "rootfs")
+        return root.takeIf { File(it, ".pocketmind-rootfs").isFile }
+    }
+
+    fun rootfsBytes(context: Context): Long = rootfsIfReady(context)?.walkTopDown()
+        ?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+
     @Synchronized
     fun rootfs(context: Context): File? {
         val base = File(context.filesDir, "proot")
@@ -79,19 +89,53 @@ object NativeProot {
         }
     }
 
-    /** 返回 proot 的 argv；rootfs 解压失败返回 null。 */
-    fun argv(context: Context): List<String>? {
+    /**
+     * 返回 proot 的 argv；rootfs 解压失败返回 null。
+     *
+     * [workspace] 非空时通过 `-b host:/workspace` 把应用工作区挂进 guest，
+     * 并把初始 cwd 设成 /workspace——否则 Linux 终端是一个与代码仓库无关的空 Alpine，
+     * 用户在 guest 里看不到自己的项目。终端、bootstrap、stdio MCP 共用这个入口。
+     */
+    fun argv(context: Context, workspace: File? = null, command: String? = null): List<String>? {
         if (!available(context)) return null
         val root = rootfs(context) ?: return null
         val libDir = File(context.applicationInfo.nativeLibraryDir)
         val proot = File(libDir, "libproot.so")
-        return listOf(
-            proot.absolutePath,
-            "-r", root.absolutePath,
-            "-0",
-            "-w", "/root",
-            "/bin/sh", "-i",
-        )
+        val args = mutableListOf(proot.absolutePath, "-r", root.absolutePath, "-0")
+        if (workspace != null) {
+            workspace.mkdirs()
+            args += listOf("-b", "${workspace.absolutePath}:/workspace", "-w", "/workspace")
+        } else {
+            args += listOf("-w", "/root")
+        }
+        if (command != null) {
+            args += listOf("/bin/sh", "-lc", command)
+        } else {
+            args += listOf("/bin/sh", "-i")
+        }
+        return args
+    }
+
+    /** 启动一个非 PTY 的 guest 命令（bootstrap / 自检 / stdio MCP）。 */
+    fun startProcess(
+        context: Context,
+        command: String,
+        workspace: File? = null,
+        mergeStderr: Boolean = true,
+    ): Process? {
+        val argv = argv(context, workspace, command) ?: return null
+        val pb = ProcessBuilder(argv).directory(context.filesDir).redirectErrorStream(mergeStderr)
+        for (pair in env(context)) {
+            val i = pair.indexOf('=')
+            if (i > 0) pb.environment()[pair.substring(0, i)] = pair.substring(i + 1)
+        }
+        pb.environment()["HOME"] = "/root"
+        pb.environment()["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        pb.environment()["TERM"] = "dumb"
+        return runCatching { pb.start() }.getOrElse { e ->
+            lastError = e.message ?: e.javaClass.simpleName
+            null
+        }
     }
 
     fun env(context: Context): List<String> {

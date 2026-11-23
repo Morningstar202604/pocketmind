@@ -26,7 +26,7 @@
 | 长期记忆 / 检索 | 已有 | `profile_memory.py`、`mem0_memory.py`、`memory.py` | USER/FACT/JOURNAL + FTS5 + 可选 Mem0；RRF 融合 |
 | 规划 / todo | 已有 + **读取** | `tools/todo.py` | `todo_write` / `todo_read` / `todo_clear` 按会话落库 |
 | 技能目录 / 渐进披露 | 已有 + **原生补齐** | `skills.py`、`SkillRegistry.kt` | `SKILL.md` 只把 name+description 注入 system，正文由 `read_skill` 按需读取；两运行时同契约 |
-| 子代理 | 已有 | `subagent.py` | 独立上下文、工具收窄、禁止嵌套、审批不豁免 |
+| 子代理 | 已有 + **原生补齐（只读）** | `subagent.py`、`SubAgentRunner.kt` | 独立上下文、工具收窄、禁止嵌套、审批不豁免；原生版只暴露 `list_dir`/`read_file`，headless 拒绝写/执行，子会话用完即删 |
 | 编码工具 | 已有 + **补齐** | `tools/code.py` | 读/写/改/删、grep、glob、git diff/status/log/commit、apply_patch、run_tests |
 | 原子写 / 并发写保护 | **M1.3 新增** | `tools/files.py` | 同目录临时文件 + `fsync` + `os.replace`；`expected_mtime` 拒绝旧内容覆盖 |
 | 可观测性 | 已有 | `metrics.py`、`telemetry.py` | Prometheus 计数、OTEL span、`/api/stats` |
@@ -104,5 +104,5 @@ M1.2 的 Git 面板是给人用的；这一层补的是**模型自己能用**的
 - 冲突解决仍是整文件级，三栏逐块合并未做。
 - 原生 Kotlin 引擎已同步补齐：配置化链长/重试、单轮墙钟、重复调用拦截、
   非法参数拒绝、预算硬闸、auto_compress；`HarnessTest.kt` 覆盖前四项。
-  尚未做的是逐块冲突 UI 与 Python 侧的完整工具集（原生仍是 38 个手机工具）。
+  原生逐块冲突 UI 已在 M1.14 补齐；尚未做的是 Python 侧的完整工具集（原生是 39 个手机工具 + 动态 MCP）。
 - 这些是能力边界，不是回归；新增项均由 p40 与后端门禁锁定。

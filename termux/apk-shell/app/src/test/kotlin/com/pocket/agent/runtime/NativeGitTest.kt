@@ -194,6 +194,28 @@ class NativeGitTest {
     }
 
     @Test
+    fun `从本地 bare 仓库克隆并读取状态`() {
+        val source = tmp.newFolder("source")
+        Git.init().setDirectory(source).setInitialBranch("main").call().use { g ->
+            g.repository.config.apply {
+                setString("user", null, "name", "Test")
+                setString("user", null, "email", "test@example.com")
+                save()
+            }
+            File(source, "readme.md").writeText("hello\n")
+            g.add().addFilepattern("readme.md").call()
+            commit(g, "seed")
+        }
+        val bare = File(root, "remote.git")
+        Git.cloneRepository().setURI(source.toURI().toString()).setDirectory(bare).setBare(true).call().use { }
+        val r = git.clone(bare.toURI().toString(), "cloned", "main")
+        assertTrue(r.getBoolean("available"))
+        assertEquals("main", r.getString("branch"))
+        assertTrue(r.getBoolean("clean"))
+        assertEquals("hello\n", File(root, "cloned/readme.md").readText())
+    }
+
+    @Test
     fun `非仓库返回 available false 并可初始化`() {
         val empty = tmp.newFolder("empty")
         val s = git.status(empty)

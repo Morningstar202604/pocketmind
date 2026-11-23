@@ -100,7 +100,14 @@ class AgentLoop(
      * 不再等 120 秒——后台没有任何人能点批准，等满只会让任务白转两分钟，
      * 用户还以为任务卡住了。拒绝理由写清楚，任务结果里能看到。
      */
-    fun chat(sessionId: String, message: String, sse: SseWriter, headless: Boolean = false) {
+    fun chat(
+        sessionId: String,
+        message: String,
+        sse: SseWriter,
+        headless: Boolean = false,
+        /** 非空时只允许这些工具；子代理用它在同一条 Agent 循环里收窄能力面。 */
+        allowedTools: Set<String>? = null,
+    ) {
         sse.send(JSONObject().put("type", "session").put("session_id", sessionId).toString())
         val run = Run()
         val existing = runs.putIfAbsent(sessionId, run)
@@ -114,7 +121,7 @@ class AgentLoop(
         try {
             var current = message
             do {
-                runOne(sessionId, current, run, sse, headless)
+                runOne(sessionId, current, run, sse, headless, allowedTools)
                 current = ""
                 synchronized(run.pending) {
                     if (run.pending.isNotEmpty()) {
@@ -129,7 +136,14 @@ class AgentLoop(
         }
     }
 
-    private fun runOne(sessionId: String, message: String, run: Run, sse: SseWriter, headless: Boolean = false) {
+    private fun runOne(
+        sessionId: String,
+        message: String,
+        run: Run,
+        sse: SseWriter,
+        headless: Boolean = false,
+        allowedTools: Set<String>? = null,
+    ) {
         val llmReady = settings.llmReady()
         if (!llmReady) {
             val missing = settings.llmMissing().joinToString("、")
@@ -238,7 +252,7 @@ class AgentLoop(
             return
         }
 
-        val tools = if (permissionMode == "chat") null else ToolRegistry.schemaJson()
+        val tools = if (permissionMode == "chat") null else ToolRegistry.schemaJson(allowedTools)
         var depth = 0
         try {
             while (depth < agentCfg.maxToolChainDepth && !run.cancelled) {
@@ -331,7 +345,7 @@ class AgentLoop(
                 for ((tid, name, argsStr) in calls) {
                     if (run.cancelled) break
                     runOneTool(sessionId, run, env, sse, messages, tid, name, argsStr,
-                        permissionMode, headless, guard, agentCfg.maxToolRetries)
+                        permissionMode, headless, guard, agentCfg.maxToolRetries, allowedTools)
                 }
             }
             if (depth >= agentCfg.maxToolChainDepth) {
@@ -361,9 +375,10 @@ class AgentLoop(
         headless: Boolean = false,
         guard: ToolGuard? = null,
         maxRetries: Int = 0,
+        allowedTools: Set<String>? = null,
     ) {
         val parsed = runCatching { JSONObject(argsStr.ifEmpty { "{}" }) }
-        val tool = ToolRegistry.byName(name)
+        val tool = ToolRegistry.byName(name)?.takeIf { allowedTools == null || it.name in allowedTools }
         if (parsed.isFailure) {
             sse.send(JSONObject().put("type", "tool_start").put("id", tid).put("name", name)
                 .put("input", JSONObject()).toString())

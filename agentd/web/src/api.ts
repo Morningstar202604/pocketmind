@@ -330,6 +330,15 @@ export interface WorkspaceRoot {
   path: string;
   label: string;
 }
+export interface ApprovalAuditItem {
+  ts: number;
+  session: string;
+  call: string;
+  tool: string;
+  risk: string;
+  decision: string;
+  timeout_s?: number;
+}
 export interface WorkspaceInfo {
   ok: boolean;
   root: string;
@@ -351,6 +360,29 @@ export interface WorkspaceInfo {
     pty?: boolean;
     proot?: boolean;
   };
+}
+export interface WorkspaceProotCheck {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+export interface WorkspaceProotStatus {
+  available: boolean;
+  rootfs_ready: boolean;
+  rootfs_path: string;
+  rootfs_bytes: number;
+  bootstrap: "idle" | "running" | "done" | "failed" | string;
+  profile: string;
+  log: string;
+  last_test?: {
+    ok: boolean;
+    exit_code?: number;
+    checks?: WorkspaceProotCheck[];
+    output?: string;
+    error?: string;
+  } | null;
+  last_error: string;
+  updated_at: number;
 }
 export interface WorkspaceEntry {
   name: string;
@@ -491,7 +523,15 @@ export interface WorkspaceTask {
   log_path?: string | null;
 }
 
+export const getApprovalAudit = (limit = 50) =>
+  api.get<{ count: number; items: ApprovalAuditItem[] }>(`/api/approvals/audit?limit=${limit}`);
 export const getWorkspaceInfo = () => api.get<WorkspaceInfo>("/api/workspace/info");
+export const getWorkspaceProot = () => api.get<WorkspaceProotStatus>("/api/workspace/proot");
+export const bootstrapWorkspaceProot = (profile: "minimal" | "full") =>
+  api.post<{ ok: boolean; bootstrap: string; profile: string }>(
+    "/api/workspace/proot/bootstrap", { profile }
+  );
+export const selfTestWorkspaceProot = () => api.get<WorkspaceProotStatus["last_test"]>("/api/workspace/proot/selftest");
 export const getWorkspaceTree = (path: string) =>
   api.get<WorkspaceTree>(`/api/workspace/tree?path=${encodeURIComponent(path)}`);
 export const getWorkspaceFile = (path: string) =>
@@ -530,6 +570,14 @@ export const deleteWorkspaceFile = (path: string) =>
   }>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
 export const getWorkspaceGitStatus = (cwd: string) =>
   api.get<WorkspaceGitStatus>(`/api/workspace/git/status?cwd=${encodeURIComponent(cwd)}`);
+export const cloneWorkspaceRepo = (url: string, target: string, branch?: string) =>
+  api.post<WorkspaceGitStatus & { cloned: string; url: string }>("/api/workspace/git/clone", {
+    url, target, branch: branch || null,
+  });
+export const pullWorkspaceRepo = (cwd: string) =>
+  api.post<{ ok: boolean; merge_status?: string; message?: string; state: WorkspaceGitStatus }>(
+    "/api/workspace/git/pull", { cwd }
+  );
 export const initWorkspaceGit = (cwd: string) =>
   api.post<WorkspaceGitStatus>("/api/workspace/git/init", { cwd });
 export const checkoutWorkspaceBranch = (cwd: string, branch: string, create = false) =>

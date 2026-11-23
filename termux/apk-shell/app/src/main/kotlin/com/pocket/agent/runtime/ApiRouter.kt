@@ -181,8 +181,23 @@ class ApiRouter(
                     ws.exec(body.optString("command", ""), body.optString("cwd", "."), body.optInt("timeout", 60))
                 }
             }
+            path == "/api/workspace/proot" && ex.method == "GET" ->
+                ex.respond(200, JSON, ProotEnvironment.status(context).toString())
+            path == "/api/workspace/proot/bootstrap" && ex.method == "POST" ->
+                ex.respond(200, JSON, ProotEnvironment.startBootstrap(context, bodyJson(ex).optString("profile", "minimal")).toString())
+            path == "/api/workspace/proot/selftest" && (ex.method == "GET" || ex.method == "POST") ->
+                ex.respond(200, JSON, ProotEnvironment.selfTest(context).toString())
             path == "/api/workspace/git/status" && ex.method == "GET" ->
                 workspace(ex) { ws -> ws.gitStatus(ex.query["cwd"]) }
+            path == "/api/workspace/git/clone" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws ->
+                    ws.gitClone(body.optString("url", ""), body.optString("target", ""),
+                        if (body.has("branch") && !body.isNull("branch")) body.optString("branch") else null)
+                }
+            }
+            path == "/api/workspace/git/pull" && ex.method == "POST" ->
+                workspace(ex) { ws -> ws.gitPull(bodyJson(ex).optString("cwd", ".")) }
             path == "/api/workspace/git/init" && ex.method == "POST" ->
                 workspace(ex) { ws -> ws.gitInit(bodyJson(ex).optString("cwd", ".")) }
             path == "/api/workspace/git/checkout" && ex.method == "POST" -> {
@@ -372,7 +387,7 @@ class ApiRouter(
             path == "/api/mcp" && ex.method == "GET" ->
                 ex.respond(200, JSON, McpManager.snapshot().toString())
             path == "/api/mcp/refresh" && ex.method == "POST" ->
-                ex.respond(200, JSON, McpManager.refresh(settings).toString())
+                ex.respond(200, JSON, McpManager.refresh(settings, context).toString())
             path == "/api/memory/profile" && ex.method == "GET" -> profileGet(ex)
             path == "/api/memory/profile" && ex.method == "PUT" -> profilePut(ex)
             path.startsWith("/api/jobs/") -> jobDetail(ex, path)

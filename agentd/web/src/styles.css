@@ -3982,3 +3982,19 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.ws-env-panel { display: flex; flex-direction: column; gap: 12px; }
+.ws-env-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ws-env-checks li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ws-env-checks .ok { color: var(--ok, #3fb950); }
+.ws-env-checks .bad { color: var(--danger, #f85149); }
+.ws-env-checks code { flex: 0 0 auto; }
+.ws-env-checks .ws-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-env-log { max-height: 240px; white-space: pre-wrap; }
+
+.ws-clone-form { display: flex; flex-direction: column; gap: 8px; }
+.ws-clone-form input { width: 100%; }
+
+.ws-audit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 62vh; overflow: auto; }
+.ws-audit-list .ws-panel-row { align-items: baseline; }
+.ws-audit-list .ws-muted { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

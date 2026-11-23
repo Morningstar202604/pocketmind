@@ -45,8 +45,8 @@ Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s
 ## The parts that matter
 
 > Scope: approvals, structured results, backups, Plan/Act, usage stats, the
-> scheduler, shell and undo exist in both runtimes. The standalone APK ships 38
-> native tools. Only **MCP, the Telegram gateway and the subagent** are Termux-only; unsupported capabilities are reported explicitly
+> scheduler, shell and undo exist in both runtimes. The standalone APK ships 39
+> native tools. Only **the stdio MCP server and the Telegram gateway** are Termux-only; unsupported capabilities are reported explicitly
 > instead of faking success.
 
 ### Approval is a security boundary, not a dialog
@@ -72,8 +72,8 @@ way past it, and a compromised page cannot either.
 
 > The table below describes the Termux runtime (51 = 49 built-in plus the
 > `remember_fact` / `read_skill` tools registered at startup). The standalone APK
-> covers most of them with 38 native tools; the difference is the "three things it
-> cannot do" listed under honest boundaries.
+> covers most of them with 39 native tools; the difference is WiFi toggling, offline TTS
+> and the stdio MCP server listed under honest boundaries.
 
 | Group | Count | Examples |
 |---|---|---|
@@ -181,10 +181,29 @@ limits:
   work anywhere. Check [docs/capability-matrix.md](docs/capability-matrix.md) or
   `GET /api/diagnostics` on your device.
 - **The APK ships a native Kotlin engine (since 1.4.0; scheduler and shell since
-  1.5.0).** Core features run without Termux. MCP and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
+  1.5.0; Linux workstation since 1.7.0).** Core features run without Termux. The stdio MCP server and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
 - **The native shell is not Termux.** `run_shell` runs `/system/bin/sh` as the
   app's own uid: no root, no `pkg`/`apt`, only the toybox command subset, no
   Python or Node. Diagnostics reports it as `restricted`, not `ok`.
+
+### A Linux workstation in your pocket
+
+The workspace is not just a file tree. The native APK ships **PTY + PRoot + Alpine**:
+
+- **Linux terminal** (`mode=proot`): Alpine rootfs is extracted on first open; the
+  current workspace directory is bind-mounted at `/workspace`. Android Shell and
+  Linux Shell use separate sessions, so they never cross wires.
+- **Dev environment installer**: choose minimal (Node/Python/Git) or full
+  (plus gcc/make/headers); `apk add` runs in the background and the log stays in
+  the environment panel.
+- **Real self-test**: starts proot and checks `alpine-release`, uid, `apk`, `node`,
+  `python3`, `git`, `gcc`, `make` individually — no guessing.
+- **Git remote entry**: clone http(s)/`file://` repositories and pull `origin`
+  from the Git panel, next to branches, commits, pre-merge, three-way conflict
+  blocks and merge undo.
+- **Approval audit**: every approve/deny decision is appended to a read-only
+  `audit/approvals.jsonl`; the workspace Audit panel shows the latest 80 entries
+  without command arguments or file contents.
 
 ## Install
 
@@ -199,11 +218,11 @@ bash scripts/build-apk.sh --release  # unsigned unless keystore.properties is pr
 ```
 
 What the native engine covers today: chat (SSE), all three permission modes,
-server-enforced approvals, 38 phone/file/knowledge/system/skill tools via Android
-APIs, a `SKILL.md` directory with on-demand `read_skill`, guided runtime-permission requests, a native workspace REST surface (tree/read/write/diff/search/command console, change log with undo, background tasks with live output + SSE, JGit-backed Git status/branch/merge/conflict/undo), sessions, export/import, search, a real `/system/bin/sh`, and scheduled
+server-enforced approvals, 39 phone/file/knowledge/system/skill tools via Android
+APIs, a read-only subagent, a `SKILL.md` directory with on-demand `read_skill`, guided runtime-permission requests, a native workspace REST surface (tree/read/write/diff/search/command console, change log with undo, background tasks with live output + SSE, JGit-backed Git status/branch/merge/conflict/undo/remote clone/pull), native PTY with a PRoot Alpine Linux terminal (`apk` dev-environment install + self-test), HTTP and PRoot-backed stdio MCP clients, approval audit, sessions, export/import, search, a real `/system/bin/sh`, and scheduled
 jobs (AlarmManager with cron/interval/one-shot triggers that survive screen
 lock and reboot), plus undoable file writes and deletes. What stays Termux-only
-(the app says so explicitly instead of faking it): MCP, the Telegram gateway and the subagent. For those, use Option B.
+(the app says so explicitly instead of faking it): the stdio MCP server and the Telegram gateway. For those, use Option B.
 
 ### Option B — on your phone with Termux (full 51-tool runtime)
 

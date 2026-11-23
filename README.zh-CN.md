@@ -25,7 +25,7 @@
 它记住的一切都留在设备上。离开设备的只有推理请求。
 
 ```
-你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 38 个原生工具 ──▶ 你的手机
+你 ──▶ APK ──▶ Kotlin 原生引擎 ──▶ 39 个原生工具 ──▶ 你的手机
                      │
                      └──▶ 你配置的 LLM 端点（仅推理）
 
@@ -43,8 +43,8 @@
 ## 真正重要的部分
 
 > 范围说明：审批、结构化结果、备份、Plan/Act、用量统计、**定时任务、shell、撤销**
-> 在 APK 与 Termux 两个运行时都有。独立 APK 提供 **38 个原生工具**；
-> **stdio MCP 服务端、Telegram 网关、子代理** 属于 Termux 专属；原生 APK 自带 PTY、Alpine/PRoot 和 Streamable HTTP MCP 客户端，
+> 在 APK 与 Termux 两个运行时都有。独立 APK 提供 **39 个原生工具**；
+> **stdio MCP 服务端、Telegram 网关** 属于 Termux 专属；原生 APK 自带 PTY、Alpine/PRoot、只读子代理，以及 HTTP/stdio MCP 客户端，
 > 未覆盖的能力会明确返回"不可用"，不会假装成功。
 
 ### 审批是安全边界，不是弹窗
@@ -66,7 +66,7 @@
 ### 覆盖手机的 51 个工具
 
 > 下表是 Termux 完整运行时（51 = 49 内置 + `remember_fact`/`read_skill` 两个运行时注册）。
-> 独立 APK 的 38 个原生工具覆盖其中绝大多数；差额是上面「有三件事做不到」里的那几项。
+> 独立 APK 的 39 个原生工具覆盖其中绝大多数；差额是 WiFi 开关、离线 TTS 与 stdio MCP 服务端这类平台/外部进程能力。
 
 | 分组 | 数量 | 例子 |
 |---|---|---|
@@ -97,6 +97,21 @@
   <br />
   <sub>上面是工具入参，下面是结构化结果，回复附带耗时与 token 消耗。一键复制。</sub>
 </p>
+
+### 手机里的 Linux 工作站
+
+工作区不只是一个文件树。原生 APK 带 **PTY + PRoot + Alpine**：
+
+- **Linux 终端**：`mode=proot`，Alpine rootfs 首次解压，当前工作目录挂到 guest 的
+  `/workspace`；Android Shell 与 Linux Shell 使用不同会话，不会串线。
+- **开发环境安装**：工作区「Linux 环境」面板里选最小（Node/Python/Git）或完整
+  （加 gcc/make/headers），后台执行 `apk add`；进度与日志留在面板。
+- **环境自检**：不靠猜。自检真的启动 proot，检查 `alpine-release`、uid、`apk`、
+  `node`、`python3`、`git`、`gcc`、`make`，逐项显示可用/缺失。
+- **Git 远程入口**：Git 面板可直接克隆 http(s)/`file://` 仓库、拉取 `origin`；
+  克隆、分支、提交、预合并、三路冲突块与合并撤销在同一处。
+- **审批审计**：危险工具放行/拒绝写入只读 `audit/approvals.jsonl`，工作区「审计」
+  面板可查最近 80 条，不记录命令参数与文件内容。
 
 ### 装上就能用
 
@@ -158,14 +173,14 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
   Termux 运行时经 `termux-api`，原生运行时直接走 Android API。
   聊天、文件、记忆、清单与调度在任何环境都能用。查
   [docs/capability-matrix.md](docs/capability-matrix.md) 或在设备上跑 `GET /api/diagnostics`。
-- **原生 shell 不是 Termux。** `run_shell` 跑 `/system/bin/sh`，身份是应用自己的 uid：
-  没有 root、没有 `pkg`/`apt`、只有 toybox 的命令子集、没有 Python/Node。
-  诊断页把它标成 `restricted` 而不是 `ok`。
-- **有三件事做不到，且不打算做。** 应用内开关 WiFi（Android 10+ 禁止）、
-  离线 TTS 模型（数百 MB）、`subagent`（成本权衡）。见
-  [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
-- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell）。** 核心功能不装 Termux 即可用；
-  stdio MCP 服务端与 Telegram 网关仍是 Termux 专属——见 [ROADMAP.md](ROADMAP.md)。
+- **原生 shell 与 Linux 终端是两件事。** `run_shell` 跑 `/system/bin/sh`，身份是应用自己的 uid：
+  没有 root、没有 `pkg`/`apt`、只有 toybox 的命令子集。工作区里的 **Linux 终端**走 PRoot + Alpine，
+  可以 `apk add`、跑 Node/Python/Git；它仍然是 app uid，不是 root。
+- **有两件事做不到，且不打算做。** 应用内开关 WiFi（Android 10+ 禁止）、
+  离线 TTS 模型（数百 MB）。见 [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
+- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell，1.7.0 补齐 Linux 工作站）。**
+  核心功能不装 Termux 即可用；stdio MCP 服务端与 Telegram 网关仍是 Termux 专属，
+  原生 APK 支持 HTTP MCP 与经 PRoot 的 stdio MCP 客户端——见 [ROADMAP.md](ROADMAP.md)。
 
 ## 安装
 
@@ -179,15 +194,17 @@ bash scripts/build-apk.sh            # debug APK，已校验、可直接安装
 bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签名件
 ```
 
-原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、38 个
-手机/文件/知识库/系统/技能工具（Android API 直调）、技能目录（SKILL.md 扫描 +
-`read_skill` 渐进披露）、运行时权限引导（工具缺权限时可一键弹系统授权框）、开发工作区 REST（文件树/读写/diff/搜索/命令台、变更记录与撤销、后台任务与增量输出 + SSE、JGit 原生 Git 状态/分支/合并/冲突/撤销）、会话、导出导入、搜索、
+原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、39 个
+手机/文件/知识库/系统/技能工具（Android API 直调）、只读子代理、技能目录（SKILL.md 扫描 +
+`read_skill` 渐进披露）、运行时权限引导（工具缺权限时可一键弹系统授权框）、开发工作区 REST（文件树/读写/diff/搜索/命令台、变更记录与撤销、后台任务与增量输出 + SSE、JGit 原生 Git 状态/分支/合并/冲突/撤销/远程克隆/拉取）、原生 PTY 与 PRoot Alpine Linux（`apk` 开发环境安装与环境自检）、HTTP MCP 与经 PRoot 的 stdio MCP 客户端、审批审计、会话、导出导入、搜索、
 定时任务（AlarmManager + cron/间隔/一次性，锁屏与重启后仍生效）、
 文件写删的可撤销备份、开机自启。仍属 Termux 专属并会**明确告知**
-（不伪成功）：stdio MCP 服务端、Telegram 网关、子代理。需要这些请用方案 B。
+（不伪成功）：stdio MCP 服务端、Telegram 网关。需要这些请用方案 B。
 
 > **原生 shell 的边界**：`run_shell` 跑的是系统的 `/system/bin/sh`，身份是
-> 应用自己的 uid——没有 root，没有 `pkg`/`apt`，只有 toybox 提供的命令子集，
+> 应用自己的 uid——没有 root，没有 `pkg`/`apt`，只有 toybox 提供的命令子集；
+> 需要 `apk`/Node/Python 请用工作区「Linux · PRoot」终端，那个环境是 app uid 下的
+> 独立 Alpine，能装包，但不是 root，也不等于 Termux。
 > 也没有 Python/Node。能做的事很多（文件、文本处理、调用系统二进制），
 > 但不要期待一个 Termux 环境。诊断页会把它标成 `restricted` 而不是 `ok`。
 
