@@ -163,6 +163,7 @@ class NativeEngine(
 
     private var workers: ThreadPoolExecutor? = null
     private var deadlines: ScheduledExecutorService? = null
+    private var acceptThread: Thread? = null
 
     val port: Int get() = server?.localPort ?: -1
     val address: InetAddress? get() = server?.inetAddress
@@ -185,6 +186,7 @@ class NativeEngine(
             state = EngineState.RUNNING
             Thread({ acceptLoop(socket, pool, timer) }, "native-engine").apply {
                 isDaemon = true
+                acceptThread = this
                 start()
             }
             true
@@ -206,9 +208,20 @@ class NativeEngine(
         }
         clients.forEach { try { it.close() } catch (_: IOException) { } }
         clients.clear()
-        workers?.shutdownNow()
-        deadlines?.shutdownNow()
+        val accept = acceptThread
+        acceptThread = null
+        if (accept != null && accept != Thread.currentThread()) {
+            try { accept.join(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
+        val pool = workers
         workers = null
+        pool?.shutdownNow()
+        if (pool != null) {
+            try { pool.awaitTermination(2, TimeUnit.SECONDS) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        deadlines?.shutdownNow()
         deadlines = null
     }
 

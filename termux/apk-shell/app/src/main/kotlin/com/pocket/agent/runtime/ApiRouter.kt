@@ -177,6 +177,10 @@ class ApiRouter(
                     ws.gitCheckout(body.optString("cwd", "."), body.optString("branch", ""), body.optBoolean("create", false))
                 }
             }
+            path == "/api/workspace/git/commit" && ex.method == "POST" -> {
+                val body = bodyJson(ex)
+                workspace(ex) { ws -> ws.gitCommit(body.optString("cwd", "."), body.optString("message", "")) }
+            }
             path == "/api/workspace/git/merge/preview" && ex.method == "POST" -> {
                 val body = bodyJson(ex)
                 workspace(ex) { ws -> ws.gitMergePreview(body.optString("cwd", "."), body.optString("branch", "")) }

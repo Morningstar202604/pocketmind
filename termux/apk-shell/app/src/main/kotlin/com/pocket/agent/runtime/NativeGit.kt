@@ -127,6 +127,27 @@ class NativeGit(private val root: File) {
         }
     }
 
+    fun commitAll(cwd: File, message: String): JSONObject {
+        val dir = checkedDir(cwd)
+        val git = open(dir)
+        git.use {
+            val repo = it.repository
+            if (repo.repositoryState.isMergingState()) fail(409, "合并进行中，请用“提交合并”")
+            val msg = message.trim()
+            if (msg.isEmpty()) fail(400, "提交说明不能为空")
+            if (msg.length > 500) fail(400, "提交说明过长")
+            it.add().addFilepattern(".").call()
+            val st = it.status().call()
+            val staged = st.added.isNotEmpty() || st.changed.isNotEmpty() ||
+                st.removed.isNotEmpty() || st.conflicting.isNotEmpty()
+            if (!staged) fail(409, "没有可提交的改动")
+            val commit = it.commit().setMessage(msg).call()
+            return JSONObject().put("ok", true)
+                .put("commit", commit.name.take(7))
+                .put("state", status(dir))
+        }
+    }
+
     fun mergePreview(cwd: File, branch: String): JSONObject {
         val name = validateBranch(branch)
         val dir = checkedDir(cwd)

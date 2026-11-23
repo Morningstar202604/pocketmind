@@ -5,6 +5,7 @@ import {
   execWorkspace,
   abortWorkspaceMerge,
   checkoutWorkspaceBranch,
+  commitWorkspaceChanges,
   commitWorkspaceMerge,
   getWorkspaceChanges,
   getWorkspaceConflictBlocks,
@@ -108,6 +109,8 @@ export function WorkspacePage() {
   const [git, setGit] = useState<WorkspaceGitStatus | null>(null);
   const [gitTarget, setGitTarget] = useState("");
   const [gitMessage, setGitMessage] = useState("Merge branch");
+  const [commitMessage, setCommitMessage] = useState("chore: workspace snapshot");
+  const [newBranch, setNewBranch] = useState("");
   const [gitBusy, setGitBusy] = useState("");
   const [mergeCheckpoint, setMergeCheckpoint] = useState<WorkspaceCheckpoint | null>(null);
   const [conflicts, setConflicts] = useState<WorkspaceConflict[]>([]);
@@ -389,6 +392,42 @@ export function WorkspacePage() {
       setGit(g);
       await refreshGit();
       setStatus("已初始化 Git 仓库");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const createBranch = async () => {
+    const name = newBranch.trim();
+    if (!git || !name) return;
+    setGitBusy("branch");
+    setError("");
+    try {
+      await checkoutWorkspaceBranch(git.repo_root || cwd, name, true);
+      setNewBranch("");
+      setCurrent(null);
+      setDraft("");
+      await loadTree(tree?.path || cwd);
+      await refreshGit();
+      setStatus(`已新建并切换到 ${name}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGitBusy("");
+    }
+  };
+
+  const commitAll = async () => {
+    if (!git) return;
+    setGitBusy("commit-all");
+    setError("");
+    try {
+      const r = await commitWorkspaceChanges(git.repo_root || cwd, commitMessage.trim() || "chore: workspace snapshot");
+      setGit(r.state);
+      await refreshGit();
+      setStatus(r.commit ? `已提交 ${r.commit}` : "已提交");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -935,6 +974,26 @@ export function WorkspacePage() {
                     <span className="ws-muted">↑{git.ahead ?? 0} ↓{git.behind ?? 0}</span>
                   )}
                 </div>
+                {git?.available && (
+                  <div className="ws-merge-box">
+                    <p>提交工作区改动；`.gitignore` 会挡住应用私有文件。</p>
+                    <div className="ws-merge-commit">
+                      <input
+                        value={commitMessage}
+                        onChange={(e) => setCommitMessage(e.target.value)}
+                        placeholder="提交说明"
+                        aria-label="提交说明"
+                      />
+                      <button
+                        className="btn primary sm"
+                        onClick={() => void commitAll()}
+                        disabled={gitBusy !== "" || !!git?.merging}
+                      >
+                        {gitBusy === "commit-all" ? "提交中…" : "提交全部改动"}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="ws-git-actions">
                   <button className="btn sm" onClick={() => void refreshGit()} disabled={gitBusy !== ""}>
                     刷新
@@ -1115,6 +1174,26 @@ export function WorkspacePage() {
                       </li>
                     ))}
                   </ul>
+                )}
+                {git?.available && (
+                  <div className="ws-merge-box">
+                    <p>新建分支并切换；有未提交改动时会被拒绝。</p>
+                    <div className="ws-merge-commit">
+                      <input
+                        value={newBranch}
+                        onChange={(e) => setNewBranch(e.target.value)}
+                        placeholder="例如 feature/mobile-git"
+                        aria-label="新分支名"
+                      />
+                      <button
+                        className="btn sm"
+                        onClick={() => void createBranch()}
+                        disabled={gitBusy !== "" || !newBranch.trim()}
+                      >
+                        {gitBusy === "branch" ? "创建中…" : "新建并切换"}
+                      </button>
+                    </div>
+                  </div>
                 )}
                 {(git?.branches?.length || 0) > 0 && (
                   <ul className="ws-branch-list">

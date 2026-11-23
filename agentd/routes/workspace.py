@@ -33,6 +33,7 @@ from ..workspace_changes import get_store
 from ..workspace_git import GitOperationError, GitUnavailable, open_repo, read_merge_checkpoint
 from ..workspace_git import apply_patch as git_apply_patch
 from ..workspace_git import checkout as git_checkout
+from ..workspace_git import commit as git_commit
 from ..workspace_git import conflict_blocks as git_conflict_blocks
 from ..workspace_git import conflicts as git_conflicts
 from ..workspace_git import merge_abort as git_merge_abort
@@ -117,6 +118,12 @@ class GitCheckoutBody(BaseModel):
     cwd: str = "."
     branch: str = Field(min_length=1, max_length=200)
     create: bool = False
+
+
+class GitCommitBody(BaseModel):
+    cwd: str = "."
+    message: str = Field(default="", max_length=500)
+    all: bool = True
 
 
 class GitMergeBody(BaseModel):
@@ -621,6 +628,17 @@ async def get_git_status(cwd: str = Query(".")) -> dict:
 async def checkout_branch(body: GitCheckoutBody) -> dict:
     try:
         return await asyncio.to_thread(git_checkout, body.cwd, body.branch, body.create)
+    except Exception as exc:  # noqa: BLE001
+        raise _git_http_error(exc) from None
+
+
+@router.post("/git/commit")
+async def commit_git_changes(body: GitCommitBody) -> dict:
+    """提交工作区改动；all=true 时把当前目录全部改动加入暂存区（受 .gitignore 保护）。"""
+    try:
+        return await asyncio.to_thread(
+            git_commit, body.cwd, body.message, "." if body.all else ""
+        )
     except Exception as exc:  # noqa: BLE001
         raise _git_http_error(exc) from None
 

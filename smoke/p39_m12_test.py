@@ -144,6 +144,9 @@ def main() -> int:
             "path": "repo/hello.txt", "content": "two\n", "expected_mtime": got["mtime"],
         })
         check("旧 mtime 保存被 409 拒绝", second.status_code == 409, str(second.text[:200]))
+        commit = c.post("/api/workspace/git/commit", json={"cwd": "repo", "message": "ui commit", "all": True})
+        check("工作区提交接口返回 200", commit.status_code == 200, str(commit.text[:200]))
+        check("提交后工作区干净", commit.json().get("state", {}).get("clean") is True, str(commit.text[:250]))
 
     print(f"\n结果: {len(passed)} 通过 / {len(failed)} 失败")
     if failed:

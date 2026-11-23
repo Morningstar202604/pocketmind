@@ -260,7 +260,7 @@ bash tests/run_all.sh --with-e2e   # 追加 Playwright（浏览器装一次）
 - **后端**：`ruff` + `mypy` + 52 个套件 + `compileall` + **依赖锁一致性** + **覆盖率红线**
 - **前端**：`tsc` + Vitest + 生产构建 + **`dist/` 新鲜度校验**
   （入库的产物必须与当前源码一致，因为手机端从不构建它）
-- **Android**：95 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
+- **Android**：96 个 Robolectric 测试 + `lintDebug`（0 error 才算过）+ APK 构建
 
 ```bash
 # Android 单独跑（需要 JDK 17+ 与 Android SDK）

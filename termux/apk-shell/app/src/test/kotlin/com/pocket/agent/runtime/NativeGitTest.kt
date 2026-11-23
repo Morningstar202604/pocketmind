@@ -66,6 +66,18 @@ class NativeGitTest {
     }
 
     @Test
+    fun `提交全部改动后工作区干净`() {
+        File(repoDir, "a.txt").writeText("committed\n")
+        File(repoDir, "new.txt").writeText("new\n")
+        val r = git.commitAll(repoDir, "ui commit")
+        assertTrue(r.getBoolean("ok"))
+        val s = r.getJSONObject("state")
+        assertTrue(s.getBoolean("clean"))
+        assertEquals("ui commit", headSubject())
+        assertEquals("committed\n", File(repoDir, "a.txt").readText())
+    }
+
+    @Test
     fun `无冲突合并可预合并再提交`() {
         Git.open(repoDir).use { g ->
             g.checkout().setCreateBranch(true).setName("feature").call()
@@ -165,6 +177,12 @@ class NativeGitTest {
     private fun commit(g: Git, msg: String) {
         g.commit().setMessage(msg).setAuthor("Test", "test@example.com")
             .setCommitter("Test", "test@example.com").call()
+    }
+
+    private fun headSubject(): String = Git.open(repoDir).use { g ->
+        g.repository.resolve("HEAD")?.let { id ->
+            org.eclipse.jgit.revwalk.RevWalk(g.repository).use { rw -> rw.parseCommit(id).shortMessage }
+        } ?: ""
     }
 
     private fun headParents(): Int = Git.open(repoDir).use { g ->

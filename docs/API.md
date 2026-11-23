@@ -72,6 +72,7 @@
 | GET | `/api/workspace/git/status?cwd=` | 结构化 Git 状态：branch、clean、ahead/behind、merging、files、branches、conflicts |
 | POST | `/api/workspace/git/init` | 初始化工作区 Git 仓库并写入 `.gitignore`（隐藏应用私有数据） |
 | POST | `/api/workspace/git/checkout` | 切分支 `{cwd,branch,create}`；脏工作区或合并中 409 |
+| POST | `/api/workspace/git/commit` | 提交工作区改动 `{cwd,message,all}`；`all=true` 时先暂存当前目录全部改动 |
 | POST | `/api/workspace/git/merge/preview` | 进入两阶段合并 `{cwd,branch}`，返回冲突列表、状态与 premerge 检查点 |
 | POST | `/api/workspace/git/merge/abort` | 中止合并，恢复合并前状态并清理检查点 |
 | POST | `/api/workspace/git/merge/commit` | 提交合并 `{cwd,message}`；返回检查点；还有未解决冲突则 409 |

@@ -262,6 +262,9 @@ class NativeWorkspace(private val context: Context) {
     fun gitCheckout(cwd: String?, branch: String, create: Boolean): JSONObject =
         git.checkout(resolve(cwd ?: ".", mustExist = true), branch, create)
 
+    fun gitCommit(cwd: String?, message: String): JSONObject =
+        git.commitAll(resolve(cwd ?: ".", mustExist = true), message)
+
     fun gitMergePreview(cwd: String?, branch: String): JSONObject =
         git.mergePreview(resolve(cwd ?: ".", mustExist = true), branch)
 

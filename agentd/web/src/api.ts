@@ -534,6 +534,10 @@ export const checkoutWorkspaceBranch = (cwd: string, branch: string, create = fa
   api.post<{ ok: boolean; branch: string; changed: boolean }>("/api/workspace/git/checkout", {
     cwd, branch, create,
   });
+export const commitWorkspaceChanges = (cwd: string, message: string, all = true) =>
+  api.post<{ ok: boolean; commit: string; state: WorkspaceGitStatus }>("/api/workspace/git/commit", {
+    cwd, message, all,
+  });
 export const previewWorkspaceMerge = (cwd: string, branch: string) =>
   api.post<WorkspaceMergeResult>("/api/workspace/git/merge/preview", { cwd, branch });
 export const abortWorkspaceMerge = (cwd: string) =>
