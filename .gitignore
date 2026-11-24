@@ -184,3 +184,6 @@ nul
 
 # 本地验证用的临时 venv（1.6.2 CI 修复期间创建）
 .venv-ci/
+
+# 预装开发工具链（123MB，不入库；构建脚本按需下载）
+termux/apk-shell/app/src/main/assets/proot/alpine-dev-rootfs.tar.gzip

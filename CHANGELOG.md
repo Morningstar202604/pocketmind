@@ -9,6 +9,40 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 > Entries from 1.2.1 onward are written in English. Entries for 1.2.0 and earlier
 > are preserved verbatim in their original language as a historical record.
 
+## [1.8.0] - 2026-11-25
+
+### Added
+
+- **Offline Alpine development toolchain**: the Android APK now bundles a 123MB
+  Alpine 3.20 aarch64 rootfs with Node 20.15.1, npm 10.9.1, Python 3.12.13,
+  pip 24.0, Git 2.45.4, GCC 13.2.1, make 4.4.1 and the 62 packages needed to run
+  them. It is extracted to `filesDir/proot/rootfs` (~372MB) on first use; the
+  existing 9MB minirootfs remains the fallback when the pack is not present or
+  under Robolectric. This closes the “9MB empty shell” gap versus AnyClaw
+  (850MB) and OpenClaw standalone (27.7MB + 300MB bootstrap), while keeping the
+  app self-contained and Termux-free. `ProotEnvironment.bootstrap` detects the
+  `prebuilt-full` marker and skips network `apk add`; the self-test still runs
+  real `proot` checks for `node`, `npm`, `python3`, `pip3`, `git`, `gcc`, `make`.
+- **Competitor audit**: `docs/COMPETITOR-AUDIT.md` records public APK sizes,
+  what the bytes actually contain, the remaining gaps (multi-agent, local
+  models, glibc distro, LSP, MCP server, APK build pipeline) and a P0–P4 plan.
+- **Packaging**: dev rootfs asset is `.tar.gzip` so AGP does not auto-expand it
+  into a 372MB `.tar`; the APK is 131MB. The pack is not committed; a build
+  fetch script/checksum flow is documented separately.
+
+### Changed
+
+- Version single source moves to `1.8.0` / `180`; MCP clientInfo follows.
+- README/ROADMAP/POSITIONING describe the bundled toolchain and the new APK
+  footprint.
+
+### Verification
+
+- Native suite **107/107**, lint and assemble pass; frontend 82/82 and build
+  pass; backend 58/58 and version check pass.
+- The 372MB rootfs extraction and real-device PRoot/Node/Python execution still
+  require the user's arm64 phone test; see `docs/DEVICE-TEST.md`.
+
 ## [1.7.0] - 2026-11-24
 
 ### Added

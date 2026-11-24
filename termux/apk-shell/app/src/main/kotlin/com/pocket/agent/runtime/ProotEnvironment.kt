@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
  * 这里只做「应用内可控的环境准备」，不是 root，也不修改宿主 Android：
  *  - bootstrap 在 guest 里执行 `apk add`，把 Node/Python/Git/编译链装进 rootfs；
  *  - selfTest 真正启动 proot 并执行 `/bin/sh -lc`，能验证 ptrace/loader/symlink；
- *  - status 只读缓存，不触发 8MB rootfs 解压，供前端轮询。
+ *  - status 只读缓存，不触发大 rootfs 解压，供前端轮询。
  */
 object ProotEnvironment {
     private const val MAX_LOG = 24_000
@@ -70,7 +70,13 @@ object ProotEnvironment {
                 finish("failed", NativeProot.lastError ?: "rootfs 解压失败")
                 return@submit
             }
-            rootfs.let { File(it, ".pocketmind-dev-env").delete() }
+            File(rootfs, ".pocketmind-dev-env").takeIf { it.isFile }?.let { marker ->
+                this.profile = marker.readText().trim().ifBlank { "prebuilt-full" }
+                append("检测到预装开发工具链：$profile\n")
+                append("Node/Python/Git/gcc 已就绪，跳过联网安装。\n")
+                finish("done", null)
+                return@submit
+            }
             val packages = if (p == "full") {
                 "nodejs npm python3 py3-pip git curl bash build-base"
             } else {

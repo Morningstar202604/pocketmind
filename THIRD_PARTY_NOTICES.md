@@ -53,3 +53,19 @@ PocketMind 的 APK 分发包含以下第三方二进制/库。此文件不是法
 3. 上述上游源码链接。
 
 如需完全离线合规，可把 PRoot 源码与 Termux 包构建脚本一并附在 release assets。
+
+## 1.8.0 离线开发工具链（Alpine 包）
+
+`assets/proot/alpine-dev-rootfs.tar.gzip` 内打包了 Alpine 3.20.3 aarch64 的 62 个包，
+包括 Node.js 20.15.1（MIT，含 ICU）、npm 10.9.1（Artistic-2.0）、Python 3.12.13
+（PSF-2.0）、pip 24.0（MIT）、Git 2.45.4（GPL-2.0）、GCC 13.2.1（GPL-3.0-or-later
+with GCC Runtime Library Exception）、make 4.4.1（GPL-3.0-or-later）、musl
+（MIT）、BusyBox（GPL-2.0）、OpenSSL（Apache-2.0）、ICU（Unicode License）等。
+
+逐包名称、版本、许可证与安装大小见 rootfs 内
+`/usr/share/doc/pocketmind-toolchain-packages.txt`；包内 `/usr/share/licenses` 与
+各包 `.PKGINFO` 保留原始许可信息。Alpine 包索引与源码：
+<https://dl-cdn.alpinelinux.org/alpine/v3.20/>、<https://git.alpinelinux.org/>。
+
+分发时请保留本文件、包清单与上述源码入口。GPL 组件的源码可从 Alpine `aports`
+对应包目录获取（`main/<pkg>/APKBUILD`、`community/<pkg>/APKBUILD`）。

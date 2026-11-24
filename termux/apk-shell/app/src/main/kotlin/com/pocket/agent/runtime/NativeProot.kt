@@ -13,7 +13,7 @@ import java.nio.file.StandardCopyOption
 import java.util.zip.GZIPInputStream
 
 /**
- * PRoot 运行环境：Alpine minirootfs + Termux 的 proot 二进制。
+ * PRoot 运行环境：Alpine rootfs（默认 123MB 预装开发工具链，回退 9MB minirootfs） + Termux 的 proot 二进制。
  *
  * 为什么打包而不是让用户 apt install：APK 的目标是「装上就有 Linux」。
  * proot 与 libtalloc/libandroid-shmem 放在 jniLibs，安装后位于 nativeLibraryDir
@@ -33,7 +33,7 @@ object NativeProot {
         return File(libDir, "libproot.so").isFile && File(libDir, "libproot-loader.so").isFile
     }
 
-    /** 不解压、不检查 rootfs，只判断是否已经准备好。状态接口轮询不能触发 8MB 解压。 */
+    /** 不解压、不检查 rootfs，只判断是否已经准备好。状态接口轮询不能触发大包解压。 */
     fun rootfsIfReady(context: Context): File? {
         if (!available(context)) return null
         val root = File(File(context.filesDir, "proot"), "rootfs")
@@ -58,15 +58,35 @@ object NativeProot {
         tmp.deleteRecursively()
         tmp.mkdirs()
         try {
-            // AGP 的 mergeAssets 会把 .gz 资产自动解成同名 .tar（APK 里也是 .tar）；
-            // 仍保留 .tar.gz 回退，避免构建工具行为变化时把 rootfs 当损坏。
-            val tarName = "proot/alpine-minirootfs.tar"
-            val opened = runCatching { context.assets.open(tarName) }.getOrNull()
-            if (opened != null) {
-                opened.use { extractTar(it, tmp) }
-            } else {
-                context.assets.open("proot/alpine-minirootfs.tar.gz").use { raw ->
-                    GZIPInputStream(raw).use { gz -> extractTar(gz, tmp) }
+            // 优先使用「预装开发工具链」的大包：Node/Python/Git/gcc 已在 rootfs 里，
+            // 手机不联网也能开工。扩展名用 .gzip 而不是 .gz，避免 AGP 把资产自动解压成
+            // 363MB 的 .tar；没有大包时回退到 9MB Alpine minirootfs（老构建/单元测试）。
+            val devAsset = if (!Build.FINGERPRINT.contains("robolectric", ignoreCase = true))
+                runCatching { context.assets.open("proot/alpine-dev-rootfs.tar.gzip") }.getOrNull()
+            else null
+            var prebuilt = false
+            if (devAsset != null) {
+                try {
+                    devAsset.use { raw -> GZIPInputStream(raw).use { gz -> extractTar(gz, tmp) } }
+                    prebuilt = true
+                } catch (e: Exception) {
+                    // 大包损坏不应让 Linux 终端彻底不可用；清空后回退 minirootfs。
+                    lastError = "开发工具链解压失败，已回退 minirootfs：${e.message}"
+                    tmp.deleteRecursively()
+                    tmp.mkdirs()
+                }
+            }
+            if (!prebuilt) {
+                // AGP 的 mergeAssets 会把 .gz 资产自动解成同名 .tar（APK 里也是 .tar）；
+                // 仍保留 .tar.gz 回退，避免构建工具行为变化时把 rootfs 当损坏。
+                val tarName = "proot/alpine-minirootfs.tar"
+                val opened = runCatching { context.assets.open(tarName) }.getOrNull()
+                if (opened != null) {
+                    opened.use { extractTar(it, tmp) }
+                } else {
+                    context.assets.open("proot/alpine-minirootfs.tar.gz").use { raw ->
+                        GZIPInputStream(raw).use { gz -> extractTar(gz, tmp) }
+                    }
                 }
             }
             // Alpine 的 /etc/resolv.conf 默认可能是空的，补一个可用 DNS。
@@ -75,6 +95,7 @@ object NativeProot {
                 writeText("nameserver 223.5.5.5\nnameserver 8.8.8.8\n", StandardCharsets.UTF_8)
             }
             File(tmp, ".pocketmind-rootfs").writeText("alpine 3.20.3\n")
+            if (prebuilt) File(tmp, ".pocketmind-dev-env").writeText("prebuilt-full")
             if (root.exists()) root.deleteRecursively()
             if (!tmp.renameTo(root)) {
                 tmp.copyRecursively(root, overwrite = true)

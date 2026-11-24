@@ -181,7 +181,7 @@ limits:
   work anywhere. Check [docs/capability-matrix.md](docs/capability-matrix.md) or
   `GET /api/diagnostics` on your device.
 - **The APK ships a native Kotlin engine (since 1.4.0; scheduler and shell since
-  1.5.0; Linux workstation since 1.7.0).** Core features run without Termux. The stdio MCP server and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
+  1.5.0; Linux workstation since 1.7.0; offline toolchain since 1.8.0).** Core features run without Termux. The stdio MCP server and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
 - **The native shell is not Termux.** `run_shell` runs `/system/bin/sh` as the
   app's own uid: no root, no `pkg`/`apt`, only the toybox command subset, no
   Python or Node. Diagnostics reports it as `restricted`, not `ok`.
@@ -213,6 +213,7 @@ The APK runs the agent natively: install it, open it, pick a provider, enter
 your API key, chat. No Termux, no Python, no toolchain on the phone.
 
 ```bash
+bash scripts/fetch-dev-rootfs.sh     # optional: 123MB offline toolchain; fallback is minirootfs
 bash scripts/build-apk.sh            # debug APK, verified and installable
 bash scripts/build-apk.sh --release  # unsigned unless keystore.properties is present
 ```

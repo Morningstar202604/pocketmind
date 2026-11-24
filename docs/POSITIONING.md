@@ -36,13 +36,15 @@ PRoot Alpine（`apk` 开发环境、自检）、Git 远程克隆/拉取、HTTP/s
   纯 coding agent 不具备。
 - **本地工作区 + JGit**：分支、提交、预合并、三路冲突块、合并撤销、远程克隆/拉取，
   手机上少见。
-- **单 APK 轻量**：约 9.5MB，无 Termux/Python/Node 运行时依赖；PRoot Linux 按需安装。
+- **单 APK 自带运行时**：1.8.0 为 131MB，内含 123MB Alpine 开发工具链（Node/Python/Git/gcc）与 PRoot；无 Termux/外部 Python/Node 依赖。
 
 **弱项**
 
-- **编程纵深**：PRoot Alpine 目前是“能开 shell + 能装包 + 能自检”的环境，
-  Node/Python/编译链是否在真机跑通仍需设备验证；AnyClaw 已带完整 Linux。
+- **编程纵深**：1.8.0 已内置 Node 20/Python 3.12/Git/GCC 的 123MB 离线工具链，
+  但真机执行仍待验证；它仍是 musl Alpine，不是 AnyClaw 那种完整 glibc Linux。
 - **Agent 生态**：没有多 agent 编排、没有 stdio MCP 服务端；MCP 只有 HTTP + stdio 客户端。
+- **和 850MB 同行对比**：我们补的是运行时，不是三套 agent 运行时或本地模型；
+  逐项拆解见 [`COMPETITOR-AUDIT.md`](COMPETITOR-AUDIT.md)。
 - **成熟度**：debug APK、未上架、真机全链路未验；PRoot/stdio 仍列在
   [DEVICE-TEST.md](DEVICE-TEST.md)。
 - **模型/研究**：内置豆包/DeepSeek/Qwen/GLM/Kimi 等国内预设，但没有 Nexon 的 37 家 +

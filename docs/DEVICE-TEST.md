@@ -21,9 +21,10 @@
 
 进入工作区 → 顶部「Linux 环境」：
 
-- [ ] 状态显示 `Alpine rootfs 已就绪`（首次会解压约 8MB，等几秒）
-- [ ] 点「安装开发环境」选 minimal，日志出现 `apk update` / `apk add`
-- [ ] 安装完成后点「环境自检」，逐项应显示：
+- [ ] 准备至少 800MB 空闲空间；首次进入会解压 123MB 包成约 372MB，通常 30–120 秒
+- [ ] 状态显示 `Alpine rootfs 已就绪`，`bootstrap=done`，profile 为 `prebuilt-full`
+  （若显示未安装，点「安装开发环境」也应直接命中预装标记、不联网）
+- [ ] 点「环境自检」，逐项应显示：
   - `alpine` = `3.20.x`
   - `uid` = `0`（PRoot 的 `-0` 模拟，不是真 root）
   - `apk` 可用
@@ -45,7 +46,7 @@
 - 「Linux 环境」面板的自检输出 / 安装日志全文
 - `adb logcat -s PocketMind:* AndroidRuntime:* linker:*` 中 `proot`、`libproot`、`PROOT_LOADER`、`ptrace` 相关行
 - 设备 ABI（`adb shell getprop ro.product.cpu.abi`）、Android 版本
-- APK 内是否真有 `lib/arm64-v8a/libproot.so` 与 `assets/proot/alpine-minirootfs.tar`
+- APK 内是否真有 `lib/arm64-v8a/libproot.so` 与 `assets/proot/alpine-dev-rootfs.tar.gzip`
   （`unzip -l app-debug.apk | grep -E 'proot|alpine'`）
 - 安装后 `nativeLibraryDir` 是否有 `libproot.so`、`libproot-loader.so`、`libtalloc.so`、`libandroid-shmem.so`
   （`adb shell run-as com.pocket.agent ls -l /data/app/*/lib/arm64` 或 `pm path` 后拼路径）
@@ -68,7 +69,7 @@
 
 ### stdio over PRoot
 
-- [ ] 先在「Linux 环境」安装 minimal（需要 node/npx）
+- [ ] 预装工具链已解压（可直接用 node/npx；无需再安装 minimal）
 - [ ] 设置里填 `filesystem | npx | -y @modelcontextprotocol/server-filesystem /workspace`
 - [ ] 重启服务；`GET /api/mcp` 该服务器 `transport=stdio` 且 `ok=true`
 - [ ] 调用一个只读工具；确认 `command` 与 `args` 拼成一行在 guest 内执行

@@ -102,10 +102,12 @@
 
 工作区不只是一个文件树。原生 APK 带 **PTY + PRoot + Alpine**：
 
-- **Linux 终端**：`mode=proot`，Alpine rootfs 首次解压，当前工作目录挂到 guest 的
-  `/workspace`；Android Shell 与 Linux Shell 使用不同会话，不会串线。
-- **开发环境安装**：工作区「Linux 环境」面板里选最小（Node/Python/Git）或完整
-  （加 gcc/make/headers），后台执行 `apk add`；进度与日志留在面板。
+- **Linux 终端**：`mode=proot`，APK 内置 123MB 的 Alpine 开发工具链，首次解压约
+  372MB 到应用私有目录，当前工作目录挂到 guest 的 `/workspace`；Android Shell 与
+  Linux Shell 使用不同会话，不会串线。
+- **离线开发环境**：APK 已预装 Node 20.15 / npm 10.9 / Python 3.12 / pip 24 /
+  Git 2.45 / GCC 13.2 / make 4.4，不联网也能跑 Node、Python、Git 和 C 编译；
+  「Linux 环境」面板仍可选 minimal/full 联网补包，后台执行 `apk add`。
 - **环境自检**：不靠猜。自检真的启动 proot，检查 `alpine-release`、uid、`apk`、
   `node`、`python3`、`git`、`gcc`、`make`，逐项显示可用/缺失。
 - **Git 远程入口**：Git 面板可直接克隆 http(s)/`file://` 仓库、拉取 `origin`；
@@ -178,7 +180,7 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
   可以 `apk add`、跑 Node/Python/Git；它仍然是 app uid，不是 root。
 - **有两件事做不到，且不打算做。** 应用内开关 WiFi（Android 10+ 禁止）、
   离线 TTS 模型（数百 MB）。见 [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
-- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell，1.7.0 补齐 Linux 工作站）。**
+- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell，1.7.0 补齐 Linux 工作站，1.8.0 内置离线开发工具链）。**
   核心功能不装 Termux 即可用；stdio MCP 服务端与 Telegram 网关仍是 Termux 专属，
   原生 APK 支持 HTTP MCP 与经 PRoot 的 stdio MCP 客户端——见 [ROADMAP.md](ROADMAP.md)。
 
@@ -190,13 +192,14 @@ APK 原生运行整个 Agent：安装 → 打开 → 选提供商 → 填 API Ke
 手机上不需要 Termux、Python 或任何工具链。
 
 ```bash
+bash scripts/fetch-dev-rootfs.sh     # 可选：下载 123MB 离线工具链；没有则回退 minirootfs
 bash scripts/build-apk.sh            # debug APK，已校验、可直接安装
 bash scripts/build-apk.sh --release  # 没有 keystore.properties 时是未签名件
 ```
 
 原生引擎当前覆盖：对话（SSE）、三种权限模式、服务端强制审批、39 个
 手机/文件/知识库/系统/技能工具（Android API 直调）、只读子代理、技能目录（SKILL.md 扫描 +
-`read_skill` 渐进披露）、运行时权限引导（工具缺权限时可一键弹系统授权框）、开发工作区 REST（文件树/读写/diff/搜索/命令台、变更记录与撤销、后台任务与增量输出 + SSE、JGit 原生 Git 状态/分支/合并/冲突/撤销/远程克隆/拉取）、原生 PTY 与 PRoot Alpine Linux（`apk` 开发环境安装与环境自检）、HTTP MCP 与经 PRoot 的 stdio MCP 客户端、审批审计、会话、导出导入、搜索、
+`read_skill` 渐进披露）、运行时权限引导（工具缺权限时可一键弹系统授权框）、开发工作区 REST（文件树/读写/diff/搜索/命令台、变更记录与撤销、后台任务与增量输出 + SSE、JGit 原生 Git 状态/分支/合并/冲突/撤销/远程克隆/拉取）、原生 PTY 与 PRoot Alpine Linux（内置 123MB 离线工具链、`apk` 补包与环境自检）、HTTP MCP 与经 PRoot 的 stdio MCP 客户端、审批审计、会话、导出导入、搜索、
 定时任务（AlarmManager + cron/间隔/一次性，锁屏与重启后仍生效）、
 文件写删的可撤销备份、开机自启。仍属 Termux 专属并会**明确告知**
 （不伪成功）：stdio MCP 服务端、Telegram 网关。需要这些请用方案 B。
