@@ -179,7 +179,7 @@ private class HttpMcpClient(
         val init = rpc("initialize", JSONObject()
             .put("protocolVersion", protocolVersion)
             .put("capabilities", JSONObject())
-            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.8.0")))
+            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.9.0")))
         protocolVersion = init.optJSONObject("result")?.optString("protocolVersion")
             ?.takeIf { it.isNotBlank() } ?: protocolVersion
         notify("notifications/initialized", JSONObject())
@@ -315,7 +315,7 @@ internal class StdioMcpClient(
         val init = rpc("initialize", JSONObject()
             .put("protocolVersion", protocolVersion)
             .put("capabilities", JSONObject())
-            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.8.0")))
+            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.9.0")))
         protocolVersion = init.optJSONObject("result")?.optString("protocolVersion")
             ?.takeIf { it.isNotBlank() } ?: protocolVersion
         notify("notifications/initialized", JSONObject())

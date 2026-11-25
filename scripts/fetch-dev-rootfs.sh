@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 下载 1.8.0 的离线 Alpine 开发工具链到 assets。
-# 123MB，不入库；普通构建没有它也能跑（自动回退 9MB minirootfs）。
+# 下载 1.9.0 的离线 Alpine 开发工具链到 assets。
+# 176MB，不入库；普通构建没有它也能跑（自动回退 9MB minirootfs）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-URL="${POCKETMIND_DEV_ROOTFS_URL:-https://aka.doubaocdn.com/s/ZDBLBXbgaS}"
-SHA256="${POCKETMIND_DEV_ROOTFS_SHA256:-062143f386f7f0ab7f039681d7a569533f4d8b750016ebfe6ff41eb5094f181b}"
+URL="${POCKETMIND_DEV_ROOTFS_URL:-https://aka.doubaocdn.com/s/XHqYyWP37u}"
+SHA256="${POCKETMIND_DEV_ROOTFS_SHA256:-04bb8f838cc7b3a2797e017eebdd915ce7efbd524fce808f69449805fe42c9b2}"
 OUT="termux/apk-shell/app/src/main/assets/proot/alpine-dev-rootfs.tar.gzip"
 TMP="${OUT}.part"
 

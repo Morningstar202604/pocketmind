@@ -845,10 +845,10 @@ export function SettingsPanel({
                   .filter((m) => m.command);
                 setForm((f) => (f ? { ...f, server: { ...f.server, mcp: rows } } : f));
               }}
-              placeholder={"本地demo | python3 | tests/mcp_demo_server.py\n文件系统 | npx | -y @modelcontextprotocol/server-filesystem /sdcard"}
+              placeholder={"本地demo | python3 | /workspace/tests/mcp_demo_server.py\n文件系统 | mcp-server-filesystem | /workspace"}
             />
             <p className="hint">
-              MCP 是通用工具协议（Linux 基金会托管）。每行一个：名称 | 命令 | 参数。保存重启后自动连接，其工具会出现在「手机能力」里（默认需审批）。
+              MCP 是通用工具协议（Linux 基金会托管）。每行一个：名称 | 命令 | 参数。APK 已内置 Node 22、Python 3.12 与 `mcp-server-filesystem`；文件系统示例不需要 npx。保存重启后自动连接，其工具会出现在「手机能力」里（默认需审批）。
             </p>
           </div>
         </CollapsibleGroup>
@@ -869,7 +869,7 @@ export function SettingsPanel({
               启用 MCP Client（让 PocketMind 调用外部 MCP Server）
             </label>
             <p className="hint">
-              服务器列表每行一个：名称 | 命令或 URL | 参数。原生 APK 支持 Streamable HTTP 的 `https://…/mcp` URL；stdio 命令会经 PRoot 的 Linux 环境启动（需先在工作区「Linux 环境」里安装 Node/Python）。保存后重启服务生效，工具会出现在「MCP 扩展」分组（默认需审批）。
+              服务器列表每行一个：名称 | 命令或 URL | 参数。原生 APK 支持 Streamable HTTP 的 `https://…/mcp` URL；stdio 命令会经 PRoot 的 Linux 环境启动；APK 已内置 Node 22/Python 3.12，`mcp-server-filesystem` 可直接用。保存后重启服务生效，工具会出现在「MCP 扩展」分组（默认需审批）。
             </p>
             <textarea
               rows={3}
@@ -893,9 +893,9 @@ export function SettingsPanel({
                   .filter((s) => s.command);
                 setForm((f) => (f ? { ...f, mcp_client: { ...(f.mcp_client || {}), servers: rows } } : f));
               }}
-              placeholder={"demo | https://example.com/mcp\ngithub | npx | -y @modelcontextprotocol/server-github"}
+              placeholder={"demo | https://example.com/mcp\n文件系统 | mcp-server-filesystem | /workspace"}
             />
-            <p className="hint">HTTP URL 不需要安装 npx；stdio 命令在 guest 里执行，命令与参数会在 Linux 环境中拼成一行。外部服务器需可从手机访问。</p>
+            <p className="hint">HTTP URL 不需要安装；stdio 命令在 guest 里执行，命令与参数会在 Linux 环境中拼成一行。内置 `mcp-server-filesystem` 可直接用；npx 拉其他包仍需联网。</p>
           </div>
         </CollapsibleGroup>
 

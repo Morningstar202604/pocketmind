@@ -8,6 +8,7 @@ import android.util.Log
 import com.pocket.agent.agent.AgentLoop
 import com.pocket.agent.agent.ApprovalCenter
 import com.pocket.agent.agent.SubAgentRunner
+import com.pocket.agent.agent.QwenCodeRunner
 import com.pocket.agent.data.SettingsStore
 import com.pocket.agent.data.Store
 import com.pocket.agent.tools.ToolRegistry
@@ -42,6 +43,7 @@ class NativeEngineService : Service() {
         AgentLoop.appContext = { applicationContext }
         val agent = AgentLoop(store, settings, approval)
         ToolRegistry.registerDynamic(SubAgentRunner.toolDef(agent, store))
+        ToolRegistry.registerDynamic(QwenCodeRunner.toolDef(settings))
         val scheduler = NativeScheduler(this, store, agent)
         val router = ApiRouter(this, store, settings, approval, agent, {
             engine?.takeIf { it.state == EngineState.RUNNING }

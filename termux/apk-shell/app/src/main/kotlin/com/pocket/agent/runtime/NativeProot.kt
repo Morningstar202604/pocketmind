@@ -94,8 +94,11 @@ object NativeProot {
                 parentFile?.mkdirs()
                 writeText("nameserver 223.5.5.5\nnameserver 8.8.8.8\n", StandardCharsets.UTF_8)
             }
-            File(tmp, ".pocketmind-rootfs").writeText("alpine 3.20.3\n")
-            if (prebuilt) File(tmp, ".pocketmind-dev-env").writeText("prebuilt-full")
+            File(tmp, ".pocketmind-rootfs").writeText("alpine 3.21.3\n")
+            if (prebuilt) {
+                val marker = File(tmp, ".pocketmind-dev-env")
+                if (!marker.isFile || marker.readText().isBlank()) marker.writeText("prebuilt-full")
+            }
             if (root.exists()) root.deleteRecursively()
             if (!tmp.renameTo(root)) {
                 tmp.copyRecursively(root, overwrite = true)
@@ -143,6 +146,7 @@ object NativeProot {
         command: String,
         workspace: File? = null,
         mergeStderr: Boolean = true,
+        extraEnv: Map<String, String> = emptyMap(),
     ): Process? {
         val argv = argv(context, workspace, command) ?: return null
         val pb = ProcessBuilder(argv).directory(context.filesDir).redirectErrorStream(mergeStderr)
@@ -153,6 +157,7 @@ object NativeProot {
         pb.environment()["HOME"] = "/root"
         pb.environment()["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         pb.environment()["TERM"] = "dumb"
+        for ((k, v) in extraEnv) pb.environment()[k] = v
         return runCatching { pb.start() }.getOrElse { e ->
             lastError = e.message ?: e.javaClass.simpleName
             null

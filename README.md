@@ -46,7 +46,7 @@ Full video: [docs/demo/pocketmind-demo.mp4](docs/demo/pocketmind-demo.mp4) (40 s
 
 > Scope: approvals, structured results, backups, Plan/Act, usage stats, the
 > scheduler, shell and undo exist in both runtimes. The standalone APK ships 39
-> native tools. Only **the stdio MCP server and the Telegram gateway** are Termux-only; unsupported capabilities are reported explicitly
+> native tools plus the bundled `qwen_code` CLI tool. Only **the stdio MCP server and the Telegram gateway** are Termux-only; unsupported capabilities are reported explicitly
 > instead of faking success.
 
 ### Approval is a security boundary, not a dialog
@@ -181,7 +181,7 @@ limits:
   work anywhere. Check [docs/capability-matrix.md](docs/capability-matrix.md) or
   `GET /api/diagnostics` on your device.
 - **The APK ships a native Kotlin engine (since 1.4.0; scheduler and shell since
-  1.5.0; Linux workstation since 1.7.0; offline toolchain since 1.8.0).** Core features run without Termux. The stdio MCP server and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
+  1.5.0; Linux workstation since 1.7.0; offline toolchain since 1.8.0; bundled Qwen Code and MCP filesystem since 1.9.0).** Core features run without Termux. The stdio MCP server and the Telegram gateway stay Termux-only — see [ROADMAP.md](ROADMAP.md).
 - **The native shell is not Termux.** `run_shell` runs `/system/bin/sh` as the
   app's own uid: no root, no `pkg`/`apt`, only the toybox command subset, no
   Python or Node. Diagnostics reports it as `restricted`, not `ok`.
@@ -190,14 +190,19 @@ limits:
 
 The workspace is not just a file tree. The native APK ships **PTY + PRoot + Alpine**:
 
-- **Linux terminal** (`mode=proot`): Alpine rootfs is extracted on first open; the
-  current workspace directory is bind-mounted at `/workspace`. Android Shell and
-  Linux Shell use separate sessions, so they never cross wires.
-- **Dev environment installer**: choose minimal (Node/Python/Git) or full
-  (plus gcc/make/headers); `apk add` runs in the background and the log stays in
-  the environment panel.
+- **Linux terminal** (`mode=proot`): the 176MB Alpine rootfs is extracted on first
+  open (~585MB); the current workspace directory is bind-mounted at `/workspace`.
+  Android Shell and Linux Shell use separate sessions, so they never cross wires.
+- **Bundled dev environment**: Node 22.23, npm 11, Python 3.12, pip, Git 2.47,
+  GCC 14.2, make 4.4 and the full build-base work offline. The environment panel
+  can still `apk add` extra packages.
+- **Bundled agent CLI**: Qwen Code 0.28.4 (Apache-2.0) is in the rootfs. Run `qwen`
+  in the Linux terminal; the agent can also call `qwen_code` (plan mode by
+  default, write mode gated by the outer approval card).
+- **Bundled MCP filesystem**: `mcp-server-filesystem` is in `/usr/local/bin`;
+  configure `filesystem | mcp-server-filesystem | /workspace` without `npx`.
 - **Real self-test**: starts proot and checks `alpine-release`, uid, `apk`, `node`,
-  `python3`, `git`, `gcc`, `make` individually — no guessing.
+  `npm`, `python3`, `pip3`, `git`, `gcc`, `make`, `qwen` individually — no guessing.
 - **Git remote entry**: clone http(s)/`file://` repositories and pull `origin`
   from the Git panel, next to branches, commits, pre-merge, three-way conflict
   blocks and merge undo.
@@ -213,7 +218,7 @@ The APK runs the agent natively: install it, open it, pick a provider, enter
 your API key, chat. No Termux, no Python, no toolchain on the phone.
 
 ```bash
-bash scripts/fetch-dev-rootfs.sh     # optional: 123MB offline toolchain; fallback is minirootfs
+bash scripts/fetch-dev-rootfs.sh     # optional: 176MB offline toolchain; fallback is minirootfs
 bash scripts/build-apk.sh            # debug APK, verified and installable
 bash scripts/build-apk.sh --release  # unsigned unless keystore.properties is present
 ```

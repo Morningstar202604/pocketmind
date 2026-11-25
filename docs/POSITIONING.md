@@ -4,9 +4,9 @@ PocketMind 不是「聊天 App + 工具」，也不是云 IDE 的遥控器。它
 
 > **Android 上的本地 Agent 运行时 + 轻量代码工作站。**
 
-上半身是手机系统 Agent：39 个原生工具、服务端强制审批、定时任务、审批审计。
+上半身是手机系统 Agent：39 个原生工具 + 内置 `qwen_code` CLI、服务端强制审批、定时任务、审批审计。
 下半身是代码工作站：文件树、JGit（状态/分支/合并/三路冲突/撤销）、PTY、
-PRoot Alpine（`apk` 开发环境、自检）、Git 远程克隆/拉取、HTTP/stdio MCP、
+PRoot Alpine 3.21（Node 22/Python/Git/GCC、Qwen Code、MCP 文件系统、自检）、Git 远程克隆/拉取、HTTP/stdio MCP、
 只读子代理。数据默认留在设备，模型请求只发往用户配置的端点。
 
 ## 它和谁竞争
@@ -36,14 +36,14 @@ PRoot Alpine（`apk` 开发环境、自检）、Git 远程克隆/拉取、HTTP/s
   纯 coding agent 不具备。
 - **本地工作区 + JGit**：分支、提交、预合并、三路冲突块、合并撤销、远程克隆/拉取，
   手机上少见。
-- **单 APK 自带运行时**：1.8.0 为 131MB，内含 123MB Alpine 开发工具链（Node/Python/Git/gcc）与 PRoot；无 Termux/外部 Python/Node 依赖。
+- **单 APK 自带运行时**：1.9.0 为 183MB，内含 176MB Alpine 3.21 开发工具链（Node 22/Python/Git/GCC）与 PRoot，并内置 Qwen Code 0.28.4 与 MCP 文件系统；无 Termux/外部 Python/Node 依赖。
 
 **弱项**
 
-- **编程纵深**：1.8.0 已内置 Node 20/Python 3.12/Git/GCC 的 123MB 离线工具链，
+- **编程纵深**：1.9.0 已内置 Node 22/Python 3.12/Git/GCC 与 Qwen Code 的 176MB 离线工具链，
   但真机执行仍待验证；它仍是 musl Alpine，不是 AnyClaw 那种完整 glibc Linux。
-- **Agent 生态**：没有多 agent 编排、没有 stdio MCP 服务端；MCP 只有 HTTP + stdio 客户端。
-- **和 850MB 同行对比**：我们补的是运行时，不是三套 agent 运行时或本地模型；
+- **Agent 生态**：已内置单 agent CLI（Qwen Code）与文件系统 MCP server，但还没有多 agent 编排；MCP 服务端托管仍缺。
+- **和 850MB 同行对比**：我们补的是运行时 + 一个内置 agent CLI，不是三套 agent 运行时或本地模型；
   逐项拆解见 [`COMPETITOR-AUDIT.md`](COMPETITOR-AUDIT.md)。
 - **成熟度**：debug APK、未上架、真机全链路未验；PRoot/stdio 仍列在
   [DEVICE-TEST.md](DEVICE-TEST.md)。
@@ -62,7 +62,7 @@ PRoot Alpine（`apk` 开发环境、自检）、Git 远程克隆/拉取、HTTP/s
 ## 下一步优先级
 
 1. **P0** 真机跑通 PRoot + 安装启动 + 审批链路；没有这个，“AI 开发环境”是纸面能力。
-2. **P0** 把 PRoot 从“能开 Alpine shell”升级成“能装包、跑 Node/Python、跑测试”的一键环境。
+2. **P0（1.9 已补，待真机）** 把 PRoot 从“能开 Alpine shell”升级成“能跑 Node/Python、Qwen Code、MCP 文件系统、跑测试”的一键环境。
 3. **P1** Git 远程导入 + 依赖引导 + 任务模板；这是“工作站”和“玩具”的分水岭。
 4. **P1** 把审批/审计做成品牌功能（风险可视化、diff 预览、可回滚），填 AnyClaw 让出的空位。
 5. **P2** MCP stdio 服务端、子代理编排、会话恢复；先不要做云同步/多端。

@@ -5,7 +5,7 @@ Status legend: **shipped** · **in progress** · **planned** · **exploring**
 This roadmap states what is real today and what is deliberately not built yet.
 Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 
-## Now — 1.7.x (current)
+## Now — 1.9.x (current)
 
 | Item | Status | Notes |
 |---|---|---|
@@ -24,24 +24,25 @@ Items move into [CHANGELOG.md](CHANGELOG.md) when they ship.
 | Merge checkpoint (1.6.x) | shipped | `refs/pocketmind/premerge/*` pinned before `git merge`; committed merge can be reset, abort clears it; `/api/workspace/git/merge/checkpoint` + `/undo`. |
 | Native workspace REST + undo/tasks (1.6.x) | shipped | `info/tree/file/preview/search/mkdir/rename/delete/exec/changes/undo/tasks` on app-private `filesDir`; change log with backups, background tasks with cancel, persisted metadata and live output snapshots; config/db/checkpoint/audit/.git stay hidden; Git via JGit (status/branch/merge/conflict/undo); native PTY uses a small JNI `libpty.so` (arm64/x86_64) with 30s session takeover. |
 | Incremental task output (1.6.x) | shipped | Both task managers append stdout/stderr as the process runs; `/tasks/{id}/stream` adds SSE snapshots, and the task panel still polls every 1.5s. |
-| Native PRoot / Alpine (1.6.x, dev toolchain 1.8.0) | shipped (device test pending) | `libproot.so` + `libtalloc.so` + `libandroid-shmem.so` in `jniLibs/arm64-v8a`, and a 123MB Alpine dev rootfs (Node 20.15, npm 10.9, Python 3.12, pip 24, Git 2.45, GCC 13.2, make 4.4) in assets; first Linux terminal extracts ~372MB to `filesDir/proot`, then `proot -r rootfs -0 -w /workspace /bin/sh` with the current workspace bound to guest `/workspace` (or `-w /root` outside a project). Uses the same PTY transport, 30s takeover separated by shell/proot mode. Fallback to the 9MB minirootfs when the pack is absent. |
+| Native PRoot / Alpine (1.9.0) | shipped (device test pending) | `libproot.so` + `libtalloc.so` + `libandroid-shmem.so` in `jniLibs/arm64-v8a`, and a 176MB Alpine dev rootfs (Node 22.23, npm 11, Python 3.12, pip, Git 2.47, GCC 14.2, make 4.4, Qwen Code 0.28.4, MCP filesystem server) in assets; first Linux terminal extracts ~585MB to `filesDir/proot`, then `proot -r rootfs -0 -w /workspace /bin/sh` with the current workspace bound to guest `/workspace` (or `-w /root` outside a project). Uses the same PTY transport, 30s takeover separated by shell/proot mode. Fallback to the 9MB minirootfs when the pack is absent; Qwen/MCP report `capability_unavailable` there. |
 | Three-way block conflict resolution (1.6.x) | shipped | Python `git merge-file --diff3` and native JGit `HistogramDiff` both expose `GET/POST /api/workspace/git/conflicts/blocks*`; choose ours/base/theirs/manual per block, assemble and stage. |
 | Runtime permission flow (1.6.x) | shipped | Tool errors carry exact permission names; foreground Activity shows the system dialog; tool card has one-tap grant; background calls fail with `no_activity`. |
 | Backup export / import | shipped | `format_version` stamped on both runtimes; bundles are cross-compatible. |
 | MCP stdio server / Telegram gateway | Python only | 服务端 stdio 需要外部进程；原生 APK 现在同时支持 HTTP 与经 PRoot 的 stdio **客户端**。 |
 | Native MCP HTTP client | shipped | `mcp_client.servers` accepts an `http(s)://…/mcp` URL; initialize → tools/list → tools/call, tools registered as `mcp__server__tool` (danger). |
-| Native MCP stdio client (PRoot) | shipped (device test pending) | 非 http(s) 的 command/args 经 `proot -r alpine` 启动，JSON-RPC 按行读写；需要先安装 Linux 开发环境。 |
-| PRoot environment manager | shipped (device test pending) | 工作区「Linux 环境」面板：rootfs 状态、minimal/full `apk add`、逐步日志、真实 proot 自检（alpine-release/uid/apk/node/python3/git/gcc/make）。 |
+| Native MCP stdio client (PRoot) | shipped (device test pending) | 非 http(s) 的 command/args 经 `proot -r alpine` 启动，JSON-RPC 按行读写；内置 Node 22/Python 3.12 与 `mcp-server-filesystem`，无需 npx。 |
+| PRoot environment manager | shipped (device test pending) | 工作区「Linux 环境」面板：rootfs 状态、minimal/full `apk add`、逐步日志、真实 proot 自检（alpine-release/uid/apk/node/npm/python3/pip3/git/gcc/make/qwen）。 |
 | Native Git clone / pull | shipped | Git 面板直接克隆 http(s)/`file://` 仓库、目标目录校验、拉取 origin；冲突仍进现有三路块面板。 |
 | Approval audit view | shipped | `GET /api/approvals/audit` 已是只读 append-only；工作区新增「审计」面板显示最近 80 条。 |
+| Bundled Qwen Code CLI + MCP filesystem (1.9.0) | shipped (device test pending) | Rootfs includes Qwen Code 0.28.4, Node 22, and `mcp-server-filesystem`; `qwen_code` tool runs plan/write modes with outer approval; terminal `qwen` works offline from npm. |
 | Read-only native subagent | shipped | `subagent` 工具复用主循环但只允许 `list_dir`/`read_file`，headless 拒绝写/执行，子会话结束即删除。 |
 | First-run onboarding wizard | shipped | Provider preset → connectivity-tested API key → permission walkthrough. |
 | Session search across tool output | shipped | `matched` kinds on both runtimes (native: LIKE over tool rows). |
 | Structured tool result viewer | shipped | List-shaped results render as tables/cards. |
 | `mypy` gate | shipped | Zero errors, enforced by `tests/run_all.sh`. |
-| Full local gate in one command | shipped | `bash tests/run_all.sh` + `gradle testDebugUnitTest lintDebug assembleDebug` (107 Robolectric tests). |
+| Full local gate in one command | shipped | `bash tests/run_all.sh` + `gradle testDebugUnitTest lintDebug assembleDebug` (109 Robolectric tests). |
 
-## Next — 1.7.x
+## Next — 1.10.x
 
 | Item | Status | Notes |
 |---|---|---|
@@ -59,10 +60,10 @@ listing them as "pending" would be dishonest.
 | Item | Why not | What to do instead |
 |---|---|---|
 | `set_wifi` in the native engine | Android 10 (API 29) removed the ability for third-party apps to toggle WiFi; `WifiManager.setWifiEnabled` returns false and `NETWORK_SETTINGS` is a system permission. | Use the system quick-settings tile, or the Termux build (which shells out to `termux-wifi-enable`). |
-| `tts_offline` (local Chinese TTS model) | Needs a sherpa-onnx model of several hundred MB; the 1.8 APK is 131MB and already spends 123MB on the offline dev toolchain. | Native `tts_speak` uses the system TTS engine; the Termux build ships the offline model. |
+| `tts_offline` (local Chinese TTS model) | Needs a sherpa-onnx model of several hundred MB; the 1.9 APK is 183MB and already spends 176MB on the offline dev toolchain. | Native `tts_speak` uses the system TTS engine; the Termux build ships the offline model. |
 | Root-level shell | `run_shell` runs as the app uid by design; escalating would need a rooted device or a system app. | Use the `run_shell` you have, or a rooted Termux build. |
 
-## Later — beyond 1.7
+## Later — beyond 1.9
 
 | Item | Status | Notes |
 |---|---|---|

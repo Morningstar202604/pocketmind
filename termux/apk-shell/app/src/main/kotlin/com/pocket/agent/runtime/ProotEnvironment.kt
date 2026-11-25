@@ -73,7 +73,7 @@ object ProotEnvironment {
             File(rootfs, ".pocketmind-dev-env").takeIf { it.isFile }?.let { marker ->
                 this.profile = marker.readText().trim().ifBlank { "prebuilt-full" }
                 append("检测到预装开发工具链：$profile\n")
-                append("Node/Python/Git/gcc 已就绪，跳过联网安装。\n")
+                append("Node 22 / Python / Git / gcc / Qwen Code 已就绪，跳过联网安装。\n")
                 finish("done", null)
                 return@submit
             }
@@ -133,7 +133,7 @@ object ProotEnvironment {
         val script = """
             echo "alpine=$(cat /etc/alpine-release 2>/dev/null)"
             echo "uid=$(id -u 2>/dev/null)"
-            for c in apk node npm python3 pip3 git gcc make; do
+            for c in apk node npm python3 pip3 git gcc make qwen; do
               if command -v ${'$'}c >/dev/null 2>&1; then
                 echo "have_${'$'}c=$(${'$'}c --version 2>&1 | head -n 1)"
               else

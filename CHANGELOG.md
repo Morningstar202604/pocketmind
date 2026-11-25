@@ -9,6 +9,45 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 > Entries from 1.2.1 onward are written in English. Entries for 1.2.0 and earlier
 > are preserved verbatim in their original language as a historical record.
 
+## [1.9.0] - 2026-11-25
+
+### Added
+
+- **Bundled agents, not a runtime shell**: the 176MB Alpine 3.21.3 rootfs now
+  includes **Qwen Code CLI 0.28.4** (Apache-2.0, Node 22.23.5) and the
+  **MCP Filesystem Server 2025.8.21** with its npm dependency tree. The Linux
+  terminal can run `qwen` directly; the native agent gets a `qwen_code` tool
+  that runs Qwen headless in the workspace, using the same OpenAI-compatible
+  endpoint configured in Settings. `mcp-server-filesystem` is available as a
+  stdio MCP command without `npx` or a network fetch.
+- **Native tool**: `qwen_code` is a `danger`/`agent` tool. `mode=plan` (default)
+  runs read-only analysis; `mode=write` runs `--approval-mode=yolo` inside the
+  guest and is only reachable after the outer PocketMind approval card. Output,
+  exit code, stderr and timeout are returned structurally.
+- **Toolchain upgrade**: Alpine 3.21.3, Node 22.23.5, Python 3.12.16, Git
+  2.47.3, GCC 14.2 and 64 packages; the rootfs is 585MB extracted. The old
+  3.20/Node 20 rootfs is replaced by the same asset path, so no new extraction
+  logic is needed.
+- **UI**: MCP examples now use `mcp-server-filesystem | /workspace` instead of
+  `npx -y @modelcontextprotocol/server-filesystem`; hints state that Node/Python
+  and the filesystem server are already bundled.
+
+### Changed
+
+- Version single source moves to `1.9.0` / `190`; MCP clientInfo follows.
+- `ProotEnvironment` self-test now checks `qwen`; the prebuilt marker is
+  `prebuilt-full-qwen`.
+- Packaging docs/checksum now point at the 176MB pack; APK is 183MB.
+
+### Verification
+
+- Native suite **109/109**, lint and assemble pass; frontend 82/82 and build
+  pass; backend 58/58 and version check pass.
+- Qwen Code `--version` / `--help` and a headless failure path were executed
+  under qemu-aarch64; MCP Filesystem Server answered a real `initialize`
+  JSON-RPC request under qemu. Real-device PRoot, Qwen live model calls and
+  MCP tool calls still require the user's arm64 phone test.
+
 ## [1.8.0] - 2026-11-25
 
 ### Added

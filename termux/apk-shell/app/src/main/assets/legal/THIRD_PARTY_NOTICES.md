@@ -54,18 +54,37 @@ PocketMind 的 APK 分发包含以下第三方二进制/库。此文件不是法
 
 如需完全离线合规，可把 PRoot 源码与 Termux 包构建脚本一并附在 release assets。
 
-## 1.8.0 离线开发工具链（Alpine 包）
+## 1.9.0 离线开发工具链（Alpine 包 + Qwen Code）
 
-`assets/proot/alpine-dev-rootfs.tar.gzip` 内打包了 Alpine 3.20.3 aarch64 的 62 个包，
-包括 Node.js 20.15.1（MIT，含 ICU）、npm 10.9.1（Artistic-2.0）、Python 3.12.13
-（PSF-2.0）、pip 24.0（MIT）、Git 2.45.4（GPL-2.0）、GCC 13.2.1（GPL-3.0-or-later
+`assets/proot/alpine-dev-rootfs.tar.gzip` 内打包了 Alpine 3.21.3 aarch64 的 64 个包，
+包括 Node.js 22.23.5（MIT，含 ICU）、npm 11（Artistic-2.0）、Python 3.12.16
+（PSF-2.0）、pip（MIT）、Git 2.47.3（GPL-2.0）、GCC 14.2（GPL-3.0-or-later
 with GCC Runtime Library Exception）、make 4.4.1（GPL-3.0-or-later）、musl
 （MIT）、BusyBox（GPL-2.0）、OpenSSL（Apache-2.0）、ICU（Unicode License）等。
 
 逐包名称、版本、许可证与安装大小见 rootfs 内
 `/usr/share/doc/pocketmind-toolchain-packages.txt`；包内 `/usr/share/licenses` 与
 各包 `.PKGINFO` 保留原始许可信息。Alpine 包索引与源码：
-<https://dl-cdn.alpinelinux.org/alpine/v3.20/>、<https://git.alpinelinux.org/>。
+<https://dl-cdn.alpinelinux.org/alpine/v3.21/>、<https://git.alpinelinux.org/>。
+
+### Qwen Code CLI
+
+- 组件：`@qwen-code/qwen-code` 0.28.4，安装到 rootfs
+  `/usr/lib/node_modules/@qwen-code/qwen-code`，`/usr/bin/qwen` 为入口符号链接。
+- 许可：Apache-2.0；版权归 Qwen Code 项目贡献者所有。
+- 源码：<https://github.com/QwenLM/qwen-code>
+- npm：<https://www.npmjs.com/package/@qwen-code/qwen-code>
+- 分发说明：该 CLI 仅作为本机 coding agent 运行，不随 APK 预置任何 API Key；
+  模型请求由用户自己配置的 OpenAI-compatible 端点处理。包内 `LICENSE` 随 rootfs 保留。
+
+### MCP Filesystem Server
+
+- 组件：`@modelcontextprotocol/server-filesystem` 2025.8.21 及其 npm 依赖，
+  安装到 rootfs `/usr/lib/node_modules/mcp-filesystem`，
+  `/usr/local/bin/mcp-server-filesystem` 为启动包装。
+- 许可：MIT；依赖包许可证随各自 `node_modules/<pkg>/LICENSE` 保留。
+- 源码：<https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem>
+- npm：<https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem>
 
 分发时请保留本文件、包清单与上述源码入口。GPL 组件的源码可从 Alpine `aports`
 对应包目录获取（`main/<pkg>/APKBUILD`、`community/<pkg>/APKBUILD`）。
