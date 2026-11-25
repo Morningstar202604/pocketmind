@@ -9,6 +9,33 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 > Entries from 1.2.1 onward are written in English. Entries for 1.2.0 and earlier
 > are preserved verbatim in their original language as a historical record.
 
+## [1.9.2] - 2026-11-25
+
+### Fixed
+
+- **Qwen launcher on PRoot**: rootfs `/usr/bin/qwen` is now a plain shell
+  launcher that execs `/usr/bin/node .../cli-entry.js "$@"`, not an npm symlink
+  relying on `#!/usr/bin/env node`.
+- **PTY environment precedence**: `libpty` now replaces duplicate env keys, so
+  the guest `HOME=/root` and `PATH=/usr/local/bin:/usr/bin:...` from
+  `NativeProot.env` win over Android's host defaults. `qwen` is reachable from
+  the terminal.
+- **Rootfs validation and upgrade invalidation**: `NativeProot` checks
+  `busybox`, Node, Python, Git, Qwen, MCP and the `bin/sh`/`python3` symlinks
+  after extraction; a `pocketmind toolchain r2` stamp forces 1.9.1 users to
+  replace the old rootfs once.
+- **Qwen workspace masking**: `qwen_code` binds empty files/dirs over
+  `config.json`, `pocketmind.db`, `rules.json`, `checkpoints`, `audit`,
+  `proot`, etc., so the model cannot read host API keys or the rootfs.
+- Old rootfs is deleted before re-extraction to avoid double 585MB usage.
+
+### Verification
+
+- Native suite **109/109**, lint and assemble pass; frontend **83/83** and build
+  pass; backend **58/58**; APK 183MB, rootfs SHA
+  `f4618eedfbe1d597f6a131636e0c3a7cf4af5a2a1966759c09ef8d531c1bb5c9`.
+  Real-device checks remain in `docs/DEVICE-TEST.md`.
+
 ## [1.9.1] - 2026-11-25
 
 ### Added

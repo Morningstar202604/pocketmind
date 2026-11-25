@@ -275,7 +275,9 @@ class NativeEngine(
         try {
             while (!socket.isClosed) {
                 val client = socket.accept()
-                val deadlineAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                // 手机冷启动/首次建库/慢存储时，2 秒会把正常请求直接掐断；
+                // 300 秒只是兜底，SSE/WebSocket 会在 startSse/upgrade 时取消它。
+                val deadlineAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(300)
                 synchronized(this) {
                     if (server !== socket) {
                         client.close()
@@ -321,7 +323,7 @@ class NativeEngine(
 
     private fun handle(client: Socket, deadline: DeadlineHandle) {
         try {
-            client.soTimeout = 1500
+            client.soTimeout = 5_000
             if (!client.inetAddress.isLoopbackAddress) return
             val input = BufferedInputStream(client.getInputStream())
             fun line(): String? {

@@ -1,4 +1,4 @@
-# 离线开发工具链包（1.9.0）
+# 离线开发工具链包（1.9.2）
 
 APK 内的 `assets/proot/alpine-dev-rootfs.tar.gzip` 是 176MB 的 Alpine 3.21.3
 aarch64 开发 rootfs，含 Node 22.23.5、npm 11、Python 3.12.16、pip、Git 2.47.3、
@@ -6,7 +6,7 @@ GCC 14.2、make 4.4.1 及 64 个依赖包。解压后约 585MB。
 
 它不是“只装运行时”：rootfs 里还有两个会直接执行的程序：
 
-- **Qwen Code CLI 0.28.4**（`/usr/bin/qwen`，Apache-2.0）
+- **Qwen Code CLI 0.28.4**（`/usr/bin/qwen`，普通 shell 启动器，直接 exec guest Node；不依赖 npm 符号链接，Apache-2.0）
 - **MCP Filesystem Server 2025.8.21**（`/usr/local/bin/mcp-server-filesystem`，MIT）
 
 所以用户在终端里能直接 `qwen`，在 MCP 配置里能直接写
@@ -26,8 +26,8 @@ bash scripts/fetch-dev-rootfs.sh
 ```
 
 可用 `POCKETMIND_DEV_ROOTFS_URL` / `POCKETMIND_DEV_ROOTFS_SHA256` 覆盖默认源与校验。
-默认源：<https://aka.doubaocdn.com/s/XHqYyWP37u>
-SHA-256：`04bb8f838cc7b3a2797e017eebdd915ce7efbd524fce808f69449805fe42c9b2`
+默认源：<https://aka.doubaocdn.com/s/OULckASXOI>
+SHA-256：`f4618eedfbe1d597f6a131636e0c3a7cf4af5a2a1966759c09ef8d531c1bb5c9`
 
 ## 包内容校验
 

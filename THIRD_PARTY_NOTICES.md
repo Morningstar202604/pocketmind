@@ -70,7 +70,7 @@ with GCC Runtime Library Exception）、make 4.4.1（GPL-3.0-or-later）、musl
 ### Qwen Code CLI
 
 - 组件：`@qwen-code/qwen-code` 0.28.4，安装到 rootfs
-  `/usr/lib/node_modules/@qwen-code/qwen-code`，`/usr/bin/qwen` 为入口符号链接。
+  `/usr/lib/node_modules/@qwen-code/qwen-code`，`/usr/bin/qwen` 为直接调用 node 的启动器。
 - 许可：Apache-2.0；版权归 Qwen Code 项目贡献者所有。
 - 源码：<https://github.com/QwenLM/qwen-code>
 - npm：<https://www.npmjs.com/package/@qwen-code/qwen-code>

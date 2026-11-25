@@ -1,4 +1,4 @@
-# 真机测试清单（v1.9.0）
+# 真机测试清单（v1.9.2）
 
 本地门禁只能证明 JVM/Robolectric 与构建；PRoot、PTY、stdio MCP、真机权限
 必须在物理 Android 设备上跑。以下按顺序执行，任一步失败都先停下来记录现象。
@@ -21,7 +21,9 @@
 
 进入工作区 → 顶部「Linux 环境」：
 
-- [ ] 准备至少 1.2GB 空闲空间；首次进入会解压 176MB 包成约 585MB，通常 60–180 秒
+- [ ] 准备至少 1.2GB 空闲空间；首次进入会解压 176MB 包成约 585MB，低端机可能要 2–6 分钟。
+      从 1.9.1 升级时旧 rootfs 会被 `pocketmind toolchain r2` 标记判为过期并重解一次，
+      这是预期行为，不是重复下载。
 - [ ] 状态显示 `Alpine rootfs 已就绪`，`bootstrap=done`，profile 为 `prebuilt-full-qwen`
   （若显示未安装，点「安装开发环境」也应直接命中预装标记、不联网）
 - [ ] 点「环境自检」，逐项应显示：
@@ -30,6 +32,7 @@
   - `apk` 可用
   - `node`（应为 22.x）/ `npm` / `python3` / `pip3` / `git` / `qwen` 可用
   - 若装了 full，`gcc` / `make` 可用
+- [ ] `usr/bin/qwen` 是普通可执行文件，不是符号链接；`bin/sh` 与 `usr/bin/python3` 是符号链接
 - [ ] 终端切到「Linux · PRoot」，执行：
   ```sh
   cat /etc/alpine-release
@@ -78,12 +81,13 @@
 
 ## 5. 内置 Qwen Code
 
-- [ ] 终端执行 `qwen --version`，应输出 `0.28.4`
+- [ ] 终端执行 `qwen --version`，应输出 `0.28.4`（若 `command not found`，先检查自检里的 `qwen` 项与 `PATH`）
 - [ ] 设置好 OpenAI-compatible 端点后，终端执行
   `qwen -p "用一句话说明当前目录" --approval-mode=plan`，应有回复且不改文件
 - [ ] 对话里让 Agent 调用 `qwen_code`（plan 模式），审批卡出现；批准后返回结构化 `output/exit_code`
 - [ ] 让 Agent 用 `qwen_code` 的 write 模式改一个小文件；外层审批必须先出现，Qwen 启动后文件才变
 - [ ] 拒绝审批时 Qwen 不应启动，文件不变
+- [ ] 在 Qwen 里让它读 `/workspace/config.json`，应读不到（文件被空文件遮罩）；项目文件仍可读写
 
 ## 6. 子代理与审计
 

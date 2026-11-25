@@ -70,7 +70,9 @@ object McpManager {
                         command.startsWith("http://") || command.startsWith("https://") ->
                             HttpMcpClient(name, command, timeout)
                         context != null && command.isNotBlank() -> {
-                            val proc = NativeProot.startProcess(context, command, context.filesDir, mergeStderr = false)
+                            val proc = NativeProot.startProcess(
+                                context, command, context.filesDir, mergeStderr = false, maskSensitive = true
+                            )
                                 ?: throw IllegalStateException(
                                     NativeProot.lastError ?: "PRoot 不可用；stdio MCP 需要先安装 Linux 环境")
                             StdioMcpClient(name, proc, timeout)
@@ -179,7 +181,7 @@ private class HttpMcpClient(
         val init = rpc("initialize", JSONObject()
             .put("protocolVersion", protocolVersion)
             .put("capabilities", JSONObject())
-            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.9.1")))
+            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.9.2")))
         protocolVersion = init.optJSONObject("result")?.optString("protocolVersion")
             ?.takeIf { it.isNotBlank() } ?: protocolVersion
         notify("notifications/initialized", JSONObject())
@@ -315,7 +317,7 @@ internal class StdioMcpClient(
         val init = rpc("initialize", JSONObject()
             .put("protocolVersion", protocolVersion)
             .put("capabilities", JSONObject())
-            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.9.1")))
+            .put("clientInfo", JSONObject().put("name", "PocketMind").put("version", "1.9.2")))
         protocolVersion = init.optJSONObject("result")?.optString("protocolVersion")
             ?.takeIf { it.isNotBlank() } ?: protocolVersion
         notify("notifications/initialized", JSONObject())

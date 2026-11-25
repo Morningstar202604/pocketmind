@@ -71,6 +71,7 @@ object QwenCodeRunner {
             command,
             context.filesDir,
             mergeStderr = false,
+            maskSensitive = true,
             extraEnv = mapOf(
                 "OPENAI_API_KEY" to llm.apiKey,
                 "OPENAI_BASE_URL" to llm.baseUrl,

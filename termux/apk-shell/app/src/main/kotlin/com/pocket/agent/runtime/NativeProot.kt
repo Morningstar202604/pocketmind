@@ -23,7 +23,15 @@ import java.util.zip.GZIPInputStream
  * 仍然不是 root：proot 用 ptrace 模拟 chroot/bind，权限仍是 app uid。
  */
 object NativeProot {
+    /**
+     * rootfs 内容标记。改这个字符串 = 强制重新解压，用来把旧 APK 下载的
+     * rootfs 替换成新包；只有工具链内容真的变了才改，不要跟着 App 版本号走，
+     * 否则每次升级都要重解 585MB。
+     */
+    private const val ROOTFS_STAMP = "alpine 3.21.3\npocketmind toolchain r2"
     @Volatile private var rootfsReady = false
+    @Volatile private var bytesCacheRoot: String? = null
+    @Volatile private var bytesCache = 0L
     @Volatile var lastError: String? = null
         private set
 
@@ -37,23 +45,38 @@ object NativeProot {
     fun rootfsIfReady(context: Context): File? {
         if (!available(context)) return null
         val root = File(File(context.filesDir, "proot"), "rootfs")
-        return root.takeIf { File(it, ".pocketmind-rootfs").isFile }
+        return root.takeIf { isCurrentRootfs(it) }
     }
 
-    fun rootfsBytes(context: Context): Long = rootfsIfReady(context)?.walkTopDown()
-        ?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+    private fun isCurrentRootfs(root: File): Boolean {
+        val stamp = File(root, ".pocketmind-rootfs")
+        return stamp.isFile && runCatching { stamp.readText().trim() }.getOrDefault("") == ROOTFS_STAMP
+    }
+
+    /** 状态接口每几秒轮询一次；585MB/数万文件的 walk 只做一次，避免 UI 卡顿。 */
+    fun rootfsBytes(context: Context): Long {
+        val root = rootfsIfReady(context) ?: return 0L
+        if (bytesCacheRoot == root.absolutePath) return bytesCache
+        val bytes = root.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        bytesCacheRoot = root.absolutePath
+        bytesCache = bytes
+        return bytes
+    }
 
     @Synchronized
     fun rootfs(context: Context): File? {
         val base = File(context.filesDir, "proot")
         val root = File(base, "rootfs")
-        val stamp = File(root, ".pocketmind-rootfs")
-        if (rootfsReady && stamp.isFile) return root
+        if (rootfsReady && isCurrentRootfs(root)) return root
         base.mkdirs()
-        if (stamp.isFile) {
+        if (isCurrentRootfs(root)) {
             rootfsReady = true
             return root
         }
+        // 旧版 rootfs（qwen 符号链接 / 旧工具链）不能继续复用，先释放空间再解压。
+        if (root.exists()) root.deleteRecursively()
+        bytesCacheRoot = null
+        bytesCache = 0L
         val tmp = File(base, "rootfs.tmp-${System.nanoTime()}")
         tmp.deleteRecursively()
         tmp.mkdirs()
@@ -68,6 +91,7 @@ object NativeProot {
             if (devAsset != null) {
                 try {
                     devAsset.use { raw -> GZIPInputStream(raw).use { gz -> extractTar(gz, tmp) } }
+                    validateRootfs(tmp)
                     prebuilt = true
                 } catch (e: Exception) {
                     // 大包损坏不应让 Linux 终端彻底不可用；清空后回退 minirootfs。
@@ -94,7 +118,7 @@ object NativeProot {
                 parentFile?.mkdirs()
                 writeText("nameserver 223.5.5.5\nnameserver 8.8.8.8\n", StandardCharsets.UTF_8)
             }
-            File(tmp, ".pocketmind-rootfs").writeText("alpine 3.21.3\n")
+            File(tmp, ".pocketmind-rootfs").writeText(ROOTFS_STAMP + "\n")
             if (prebuilt) {
                 val marker = File(tmp, ".pocketmind-dev-env")
                 if (!marker.isFile || marker.readText().isBlank()) marker.writeText("prebuilt-full")
@@ -105,6 +129,8 @@ object NativeProot {
                 tmp.deleteRecursively()
             }
             rootfsReady = true
+            bytesCacheRoot = null
+            bytesCache = 0L
             return root
         } catch (e: Exception) {
             lastError = e.message ?: e.javaClass.simpleName
@@ -120,7 +146,12 @@ object NativeProot {
      * 并把初始 cwd 设成 /workspace——否则 Linux 终端是一个与代码仓库无关的空 Alpine，
      * 用户在 guest 里看不到自己的项目。终端、bootstrap、stdio MCP 共用这个入口。
      */
-    fun argv(context: Context, workspace: File? = null, command: String? = null): List<String>? {
+    fun argv(
+        context: Context,
+        workspace: File? = null,
+        command: String? = null,
+        maskSensitive: Boolean = false,
+    ): List<String>? {
         if (!available(context)) return null
         val root = rootfs(context) ?: return null
         val libDir = File(context.applicationInfo.nativeLibraryDir)
@@ -129,6 +160,7 @@ object NativeProot {
         if (workspace != null) {
             workspace.mkdirs()
             args += listOf("-b", "${workspace.absolutePath}:/workspace", "-w", "/workspace")
+            if (maskSensitive) addSensitiveMasks(context, workspace, args)
         } else {
             args += listOf("-w", "/root")
         }
@@ -140,15 +172,21 @@ object NativeProot {
         return args
     }
 
-    /** 启动一个非 PTY 的 guest 命令（bootstrap / 自检 / stdio MCP）。 */
+    /**
+     * 启动一个非 PTY 的 guest 命令（bootstrap / 自检 / stdio MCP）。
+     *
+     * maskSensitive=true 时把 app 私有目录里的配置/数据库/rootfs 从 /workspace
+     * 遮掉。Qwen Code 是模型驱动的写权限进程，不能让它读到 config.json 里的 API Key。
+     */
     fun startProcess(
         context: Context,
         command: String,
         workspace: File? = null,
         mergeStderr: Boolean = true,
         extraEnv: Map<String, String> = emptyMap(),
+        maskSensitive: Boolean = false,
     ): Process? {
-        val argv = argv(context, workspace, command) ?: return null
+        val argv = argv(context, workspace, command, maskSensitive) ?: return null
         val pb = ProcessBuilder(argv).directory(context.filesDir).redirectErrorStream(mergeStderr)
         for (pair in env(context)) {
             val i = pair.indexOf('=')
@@ -164,16 +202,58 @@ object NativeProot {
         }
     }
 
+    /** 用空文件/空目录覆盖工作区里的敏感项；只在 Qwen 等模型驱动进程使用。 */
+    private fun addSensitiveMasks(context: Context, workspace: File, args: MutableList<String>) {
+        val denyFile = File(context.cacheDir, "proot-deny-file").apply { writeText("") }
+        val denyDir = File(context.cacheDir, "proot-deny-dir").apply { mkdirs() }
+        val names = listOf(
+            "config.json", "pocketmind.db", "rules.json", "workspace_changes.json",
+            "checkpoints", "audit", "workspace_tasks", ".workspace-backups", "proot",
+        )
+        for (name in names) {
+            val target = File(workspace, name)
+            if (!target.exists()) continue
+            val src = if (target.isDirectory) denyDir else denyFile
+            args += listOf("-b", "${src.absolutePath}:/workspace/$name")
+        }
+    }
+
     fun env(context: Context): List<String> {
         val libDir = File(context.applicationInfo.nativeLibraryDir).absolutePath
         val tmp = File(context.cacheDir, "proot-tmp").apply { mkdirs() }
         val loader = File(context.applicationInfo.nativeLibraryDir, "libproot-loader.so").absolutePath
         return listOf(
+            "HOME=/root",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LD_LIBRARY_PATH=$libDir",
             "PROOT_TMP_DIR=${tmp.absolutePath}",
             "PROOT_LOADER=$loader",
             "PROOT_NO_SECCOMP=1",
         )
+    }
+
+    /**
+     * 解压后的最低可用性检查。tar 里的符号链接在 Android 上可能因 SELinux/文件系统
+     * 差异创建失败；若不检查，用户会得到“解压成功但 /bin/sh 不存在”的黑屏/127。
+     * 失败就回退 minirootfs，并保留明确原因。
+     */
+    private fun validateRootfs(root: File) {
+        val files = listOf(
+            "bin/busybox",
+            "usr/bin/node",
+            "usr/bin/python3.12",
+            "usr/bin/git",
+            "usr/bin/qwen",
+            "usr/local/bin/mcp-server-filesystem",
+        )
+        for (rel in files) {
+            if (!File(root, rel).isFile) throw IllegalStateException("rootfs 缺少 $rel")
+        }
+        for (rel in listOf("bin/sh", "usr/bin/python3")) {
+            if (!Files.isSymbolicLink(File(root, rel).toPath())) {
+                throw IllegalStateException("rootfs 符号链接创建失败：$rel")
+            }
+        }
     }
 
     private fun extractTar(gz: InputStream, target: File) {

@@ -25,6 +25,19 @@
 #include <unistd.h>
 
 static void put_env(char **envp, int *n, const char *key, const char *value) {
+    size_t klen = strlen(key);
+    // 同名环境变量以最后一次设置为准：NativeProot.env 要把 guest PATH/HOME
+    // 覆盖掉这里的 Android 默认值，否则终端里找不到 /usr/bin/qwen。
+    for (int i = 0; i < *n; i++) {
+        if (envp[i] && strncmp(envp[i], key, klen) == 0 && envp[i][klen] == '=') {
+            char *item = (char *) malloc(strlen(key) + strlen(value) + 2);
+            if (!item) return;
+            sprintf(item, "%s=%s", key, value);
+            free(envp[i]);
+            envp[i] = item;
+            return;
+        }
+    }
     if (*n >= 30) return;
     char *item = (char *) malloc(strlen(key) + strlen(value) + 2);
     if (!item) return;
@@ -62,7 +75,13 @@ Java_com_pocket_agent_runtime_NativePty_start(
         for (int i = 0; i < n && envc < 35; i++) {
             jstring js = (jstring) (*env)->GetObjectArrayElement(env, extra_env_, i);
             const char *s = (*env)->GetStringUTFChars(env, js, NULL);
-            envp[envc++] = strdup(s);
+            char *copy = strdup(s);
+            char *eq = copy ? strchr(copy, '=') : NULL;
+            if (eq) {
+                *eq = '\0';
+                put_env(envp, &envc, copy, eq + 1);
+            }
+            free(copy);
             (*env)->ReleaseStringUTFChars(env, js, s);
             (*env)->DeleteLocalRef(env, js);
         }

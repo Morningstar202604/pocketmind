@@ -4,8 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-URL="${POCKETMIND_DEV_ROOTFS_URL:-https://aka.doubaocdn.com/s/XHqYyWP37u}"
-SHA256="${POCKETMIND_DEV_ROOTFS_SHA256:-04bb8f838cc7b3a2797e017eebdd915ce7efbd524fce808f69449805fe42c9b2}"
+URL="${POCKETMIND_DEV_ROOTFS_URL:-https://aka.doubaocdn.com/s/OULckASXOI}"
+SHA256="${POCKETMIND_DEV_ROOTFS_SHA256:-f4618eedfbe1d597f6a131636e0c3a7cf4af5a2a1966759c09ef8d531c1bb5c9}"
 OUT="termux/apk-shell/app/src/main/assets/proot/alpine-dev-rootfs.tar.gzip"
 TMP="${OUT}.part"
 
