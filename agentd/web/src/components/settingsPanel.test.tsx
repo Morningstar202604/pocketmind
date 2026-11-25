@@ -112,6 +112,21 @@ describe("SettingsPanel 保存契约", () => {
     ]);
   });
 
+  it("一键填入内置文件系统 MCP 并保存", async () => {
+    renderPanel();
+    await openGroup(/MCP Client/);
+    fireEvent.click(await screen.findByRole("button", { name: "填入内置文件系统 MCP" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    const body = put.mock.calls[0][1] as {
+      mcp_client?: { enabled?: boolean; servers?: Array<{ name: string; command: string; args: string[] }> };
+    };
+    expect(body.mcp_client?.enabled).toBe(true);
+    expect(body.mcp_client?.servers).toEqual([
+      { name: "filesystem", command: "mcp-server-filesystem", args: ["/workspace"], auto_connect: true },
+    ]);
+  });
+
   it("未编辑 MCP 时保存，原有的 mcp 不能被丢掉", async () => {
     renderPanel();
     await openGroup(/MCP 服务器/);

@@ -43,10 +43,24 @@ object ProotEnvironment {
             .put("rootfs_bytes", NativeProot.rootfsBytes(context))
             .put("bootstrap", state)
             .put("profile", shownProfile)
+            .put("toolchain", toolchain(rootfs))
             .put("log", synchronized(lock) { log.toString() })
             .put("last_test", lastTest ?: JSONObject.NULL)
             .put("last_error", lastError ?: "")
             .put("updated_at", updatedAt)
+    }
+
+    /** rootfs 里实际装了什么；不启动进程，只读 package.json，供工作区面板展示。 */
+    private fun toolchain(rootfs: File?): JSONObject {
+        if (rootfs == null) return JSONObject()
+        fun version(path: String): String = runCatching {
+            val json = JSONObject(File(rootfs, path).readText())
+            json.optString("version")
+        }.getOrDefault("")
+        return JSONObject()
+            .put("qwen", version("usr/lib/node_modules/@qwen-code/qwen-code/package.json"))
+            .put("mcp_filesystem", version("usr/lib/node_modules/mcp-filesystem/node_modules/@modelcontextprotocol/server-filesystem/package.json"))
+            .put("node22", File(rootfs, "usr/bin/node").isFile)
     }
 
     /** profile=minimal|full；full 多装 build-base（gcc/make/headers）。 */

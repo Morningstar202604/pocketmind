@@ -36,11 +36,11 @@ PRoot Alpine 3.21（Node 22/Python/Git/GCC、Qwen Code、MCP 文件系统、自�
   纯 coding agent 不具备。
 - **本地工作区 + JGit**：分支、提交、预合并、三路冲突块、合并撤销、远程克隆/拉取，
   手机上少见。
-- **单 APK 自带运行时**：1.9.0 为 183MB，内含 176MB Alpine 3.21 开发工具链（Node 22/Python/Git/GCC）与 PRoot，并内置 Qwen Code 0.28.4 与 MCP 文件系统；无 Termux/外部 Python/Node 依赖。
+- **单 APK 自带运行时**：1.9.1 为 183MB，内含 176MB Alpine 3.21 开发工具链（Node 22/Python/Git/GCC）与 PRoot，并内置 Qwen Code 0.28.4 与 MCP 文件系统；无 Termux/外部 Python/Node 依赖。
 
 **弱项**
 
-- **编程纵深**：1.9.0 已内置 Node 22/Python 3.12/Git/GCC 与 Qwen Code 的 176MB 离线工具链，
+- **编程纵深**：1.9.1 已内置 Node 22/Python 3.12/Git/GCC 与 Qwen Code 的 176MB 离线工具链，
   但真机执行仍待验证；它仍是 musl Alpine，不是 AnyClaw 那种完整 glibc Linux。
 - **Agent 生态**：已内置单 agent CLI（Qwen Code）与文件系统 MCP server，但还没有多 agent 编排；MCP 服务端托管仍缺。
 - **和 850MB 同行对比**：我们补的是运行时 + 一个内置 agent CLI，不是三套 agent 运行时或本地模型；

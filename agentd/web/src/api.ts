@@ -373,6 +373,11 @@ export interface WorkspaceProotStatus {
   rootfs_bytes: number;
   bootstrap: "idle" | "running" | "done" | "failed" | string;
   profile: string;
+  toolchain?: {
+    qwen?: string;
+    mcp_filesystem?: string;
+    node22?: boolean;
+  };
   log: string;
   last_test?: {
     ok: boolean;

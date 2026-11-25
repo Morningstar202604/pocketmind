@@ -83,6 +83,7 @@ function formatTime(ts?: number): string {
 // 留英文名会让非技术用户看不懂自己正在批准什么（截图巡检发现 run_shell 裸露）。
 const TOOL_LABEL: Record<string, string> = {
   // agent / 编排
+  qwen_code: "运行 Qwen Code",
   subagent: "子代理",
   todo_write: "任务清单",
   todo_read: "读取任务清单",

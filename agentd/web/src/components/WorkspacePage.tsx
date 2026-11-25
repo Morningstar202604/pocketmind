@@ -1479,8 +1479,22 @@ export function WorkspacePage() {
                           : "开发依赖未安装"}
                       </span>
                     </div>
+                    {(prootStatus.toolchain?.qwen || prootStatus.toolchain?.mcp_filesystem) && (
+                      <div className="ws-merge-box">
+                        <p><strong>内置 CLI</strong></p>
+                        <p className="ws-muted">
+                          Qwen Code {prootStatus.toolchain?.qwen || "未检测到"}
+                          {prootStatus.toolchain?.mcp_filesystem
+                            ? ` · MCP Filesystem ${prootStatus.toolchain.mcp_filesystem}` : ""}
+                        </p>
+                        <p className="ws-muted">
+                          终端直接 <code>qwen</code>；MCP 配置 <code>mcp-server-filesystem | /workspace</code>。
+                          不用 npx，也不用再装 Node/Python。
+                        </p>
+                      </div>
+                    )}
                     <div className="ws-merge-box">
-                      <p>在 Alpine guest 内安装 Node、Python、Git 与基础编译链。首次需要网络，rootfs 会增大。</p>
+                      <p>APK 已预装 Node 22、Python、Git 与 GCC；这里只在需要额外 Alpine 包时联网补装。</p>
                       <div className="ws-merge-commit">
                         <select
                           value={prootProfile}

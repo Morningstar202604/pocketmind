@@ -7,7 +7,7 @@
 | 产品 | 分发体积 | 体积里装了什么 | 是否要 Termux/服务器 |
 |---|---|---|---|
 | **PocketMind 1.8.0** | **131MB APK**；首次解压 123MB rootfs，占 ~372MB | Kotlin 引擎、JGit、PRoot、Alpine、Node 20.15、npm 10.9、Python 3.12、pip 24、Git 2.45、GCC 13.2、make 4.4、39 个原生工具 | 不要 |
-| **PocketMind 1.9.0（当前）** | **183MB APK**；首次解压 176MB rootfs，占 ~585MB | 在 1.8 基础上换 Alpine 3.21/Node 22.23/Python 3.12.16/Git 2.47/GCC 14.2；内置 **Qwen Code 0.28.4** 与 **MCP 文件系统 server**；39 个原生工具 + `qwen_code` | 不要 |
+| **PocketMind 1.9.1（当前）** | **183MB APK**；首次解压 176MB rootfs，占 ~585MB | 在 1.8 基础上换 Alpine 3.21/Node 22.23/Python 3.12.16/Git 2.47/GCC 14.2；内置 **Qwen Code 0.28.4** 与 **MCP 文件系统 server**；39 个原生工具 + `qwen_code` | 不要 |
 | **AnyClaw** | **850.53MB**（Google Play，2026-11-04） | OpenClaw + Codex CLI + Claw Code/OpenClaude 三套 agent、内嵌完整 Linux、Node/SSL/ARM64 运行时 | 不要 |
 | **OpenClaw Android（standalone）** | **27.7MB APK + ~300MB 首次下载** | Node 22、Python 3.13、Go 1.26、OpenClaw 688 个包；是 Gateway/助手，不是 coding IDE | 不要，但首次要联网 |
 | **OpenClaw 官方 Android** | 商店 APK（未公开体积） | 只是 Gateway 的配套节点；Gateway 跑在电脑/WSL2 | 要 Gateway |
@@ -30,7 +30,7 @@ OpenClaw standalone 的 27.7MB 也只装了壳，真正能力在 300MB 首次下
 7. **没有 deep research / artifacts / 多代理并行**：Nexon 这批产品的差异项。
 8. **没有本地离线 TTS/语音模型**：仍是系统 TTS。
 
-## 1.9.0 补完后，哪些差距还在
+## 1.9.1 补完后，哪些差距还在
 
 | 能力 | 状态 |
 |---|---|
@@ -55,7 +55,7 @@ OpenClaw standalone 的 27.7MB 也只装了壳，真正能力在 300MB 首次下
 5. **P4：完整 glibc 发行版**。Ubuntu/Debian rootfs + apt，解决 wheel/原生模块兼容，代价 +100MB 起。
 
 不建议为了“看起来像同行”把 850MB 全塞进来；PocketMind 的差异仍是**单 APK、本地、审批、手机系统工具**。
-但“9MB 空壳”这个短板，1.9.0 已经补到“有运行时、也有能直接跑的 agent CLI”。
+但“9MB 空壳”这个短板，1.9.1 已经补到“有运行时、也有能直接跑的 agent CLI”。
 
 ## 来源
 

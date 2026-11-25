@@ -16,7 +16,7 @@ import { api, type ToolInfo } from "../api";
 const GROUP_META: Array<{ id: string; label: string; hint: string }> = [
   { id: "phone", label: "手机能力", hint: "短信 / 电话 / 定位 / 传感器 / 通知 / 拍照" },
   { id: "files", label: "文件", hint: "读写本机文件与目录" },
-  { id: "agent", label: "任务与编排", hint: "子任务、待办清单" },
+  { id: "agent", label: "任务与编排", hint: "Qwen Code、子任务、待办清单" },
   { id: "knowledge", label: "知识库", hint: "长期保存与检索资料" },
   { id: "memory", label: "长期记忆", hint: "跨会话记住你的事" },
   { id: "skills", label: "技能", hint: "可复用的既定流程" },

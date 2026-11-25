@@ -9,6 +9,34 @@ Release mechanics are documented in [docs/VERSIONING.md](docs/VERSIONING.md).
 > Entries from 1.2.1 onward are written in English. Entries for 1.2.0 and earlier
 > are preserved verbatim in their original language as a historical record.
 
+## [1.9.1] - 2026-11-25
+
+### Added
+
+- **Toolchain discoverability**: the workspace “Linux environment” panel now
+  reads Qwen Code and MCP Filesystem versions from the rootfs package metadata
+  (`GET /api/workspace/proot` gains a `toolchain` object) and shows the exact
+  terminal/MCP commands.
+- **One-click built-in MCP**: Settings → MCP Client has a
+  “填入内置文件系统 MCP” button that enables the client and appends
+  `filesystem | mcp-server-filesystem | /workspace` without dropping existing
+  servers.
+- **Approval label**: `qwen_code` renders as “运行 Qwen Code” in tool cards;
+  the capability page’s task group mentions Qwen Code.
+
+### Changed
+
+- `qwen_code` now preflights the rootfs for `usr/bin/qwen` and returns
+  `capability_unavailable` on the 9MB minirootfs; it checks the LLM config before
+  extracting the 585MB rootfs.
+- Version single source moves to `1.9.1` / `191`.
+
+### Verification
+
+- Native suite **109/109**, lint and assemble pass; frontend **83/83** and build
+  pass; APK 183MB. The Qwen/MCP real-device checks remain in
+  `docs/DEVICE-TEST.md`.
+
 ## [1.9.0] - 2026-11-25
 
 ### Added

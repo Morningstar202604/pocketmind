@@ -871,6 +871,35 @@ export function SettingsPanel({
             <p className="hint">
               服务器列表每行一个：名称 | 命令或 URL | 参数。原生 APK 支持 Streamable HTTP 的 `https://…/mcp` URL；stdio 命令会经 PRoot 的 Linux 环境启动；APK 已内置 Node 22/Python 3.12，`mcp-server-filesystem` 可直接用。保存后重启服务生效，工具会出现在「MCP 扩展」分组（默认需审批）。
             </p>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() =>
+                setForm((f) => {
+                  if (!f) return f;
+                  const servers = f.mcp_client?.servers ?? [];
+                  if (servers.some((s) => s.command === "mcp-server-filesystem")) return f;
+                  return {
+                    ...f,
+                    mcp_client: {
+                      ...(f.mcp_client || {}),
+                      enabled: true,
+                      servers: [
+                        ...servers,
+                        {
+                          name: "filesystem",
+                          command: "mcp-server-filesystem",
+                          args: ["/workspace"],
+                          auto_connect: true,
+                        },
+                      ],
+                    },
+                  };
+                })
+              }
+            >
+              填入内置文件系统 MCP
+            </button>
             <textarea
               rows={3}
               value={(form.mcp_client?.servers ?? [])

@@ -23,6 +23,7 @@ class ProotEnvironmentTest {
         assertFalse(st.getBoolean("rootfs_ready"))
         assertEquals(0L, st.getLong("rootfs_bytes"))
         assertEquals("idle", st.getString("bootstrap"))
+        assertTrue(st.has("toolchain"))
     }
 
     @Test

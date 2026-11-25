@@ -184,7 +184,7 @@ APK 里是 `AlarmManager`，Termux 里是 APScheduler，两条路都把任务落
   可以 `apk add`、跑 Node/Python/Git；它仍然是 app uid，不是 root。
 - **有两件事做不到，且不打算做。** 应用内开关 WiFi（Android 10+ 禁止）、
   离线 TTS 模型（数百 MB）。见 [ROADMAP.md](ROADMAP.md) 的「Not planned — platform limits」。
-- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell，1.7.0 补齐 Linux 工作站，1.8.0 内置离线开发工具链，1.9.0 内置 Qwen Code 与 MCP 文件系统）。**
+- **APK 自带原生 Kotlin 引擎（1.4.0 起，1.5.0 补齐调度与 shell，1.7.0 补齐 Linux 工作站，1.8.0 内置离线开发工具链，1.9.0 内置 Qwen Code 与 MCP 文件系统；1.9.1 补内置 CLI 入口）。**
   核心功能不装 Termux 即可用；stdio MCP 服务端与 Telegram 网关仍是 Termux 专属，
   原生 APK 支持 HTTP MCP 与经 PRoot 的 stdio MCP 客户端——见 [ROADMAP.md](ROADMAP.md)。
 
